@@ -48,7 +48,7 @@ jobs:
             --document-name "AWS-RunShellScript" \
             --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
             --region "${{ env.AWS_REGION }}" \
-            --parameters commands='["cd /home/ec2-user/trading-humming-bot && git pull origin main 2>&1","chmod 777 /home/ec2-user/trading-humming-bot/data /home/ec2-user/trading-humming-bot/logs","cd /home/ec2-user/trading-humming-bot && docker compose down 2>&1","cd /home/ec2-user/trading-humming-bot && docker compose up -d 2>&1"]' \
+            --parameters commands='["cd /home/ec2-user/trading-humming-bot && git pull origin main 2>&1","chmod 777 /home/ec2-user/trading-humming-bot/data /home/ec2-user/trading-humming-bot/logs","cd /home/ec2-user/trading-humming-bot && docker compose down 2>&1","cd /home/ec2-user/trading-humming-bot && docker compose up -d --build 2>&1"]' \
             --timeout-seconds 600 \
             --comment "Deploying via GitHub Actions" \
             --query "Command.CommandId" \
