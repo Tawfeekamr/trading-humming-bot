@@ -74,7 +74,9 @@ class TradeJournal:
             """)
 
     def _conn(self):
-        return sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        conn.execute("PRAGMA journal_mode=WAL")
+        return conn
 
     # ── Write ──────────────────────────────────────────────────────
 
