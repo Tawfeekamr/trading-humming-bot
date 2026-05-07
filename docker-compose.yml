@@ -8,8 +8,6 @@ services:
     volumes:
       - ./data:/home/hummingbot/data
       - ./logs:/home/hummingbot/logs
-      - ./config:/home/hummingbot/config
-      - ./hummingbot_files:/home/hummingbot/hummingbot_files
       - ./.env:/home/hummingbot/.env
 
   dashboard:
