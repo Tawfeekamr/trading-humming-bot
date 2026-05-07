@@ -217,7 +217,7 @@ class TAGridBTCUSDT(StrategyV2Base):
             spacing_multiplier=self.atr_multiplier,
         )
         self.state_machine = GridStateMachine()
-        self.order_tracker = OrderTracker()
+        self._grid_order_tracker = OrderTracker()
         self.circuit_breaker = CircuitBreaker(self.max_drawdown_pct, self.daily_loss_limit_pct)
         self.position_guard = PositionGuard(
             self.max_btc_exposure_pct, self.min_reserve, self.capital_usdt
@@ -772,7 +772,7 @@ class TAGridBTCUSDT(StrategyV2Base):
 
             # Send rich Telegram alert on round-trip close
             spacing = atr_val * self.atr_multiplier if atr_val else 0
-            pending = self.order_tracker.total_pending
+            pending = self._grid_order_tracker.total_pending
             pnl_sign = "+" if net_pnl >= 0 else ""
             side_em = "📈 BUY" if trade.side == "BUY" else "📉 SELL"
 
