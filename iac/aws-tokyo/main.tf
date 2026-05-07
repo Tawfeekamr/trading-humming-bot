@@ -69,7 +69,23 @@ resource "aws_security_group" "bot_sg" {
   vpc_id      = aws_vpc.trading_vpc.id
 
   # No SSH ingress — Session Manager handles access
-  # No dashboard ingress — use port forwarding via Session Manager
+  # Dashboard served via HTTPS through nginx reverse proxy
+
+  # HTTPS for dashboard
+  ingress {
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  # HTTP -> redirect to HTTPS (for certbot + redirect)
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
 
   # Outbound: Exchange APIs, Docker pulls, Binance WebSocket
   egress {
@@ -114,11 +130,16 @@ resource "aws_instance" "bot_server" {
               systemctl enable docker
               usermod -a -G docker ec2-user
 
-              # Docker Compose
-              curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-              chmod +x /usr/local/bin/docker-compose
+              # Docker Compose v2 plugin
+              mkdir -p /usr/local/lib/docker/cli-plugins
+              curl -SL https://github.com/docker/compose/releases/download/v2.36.2/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
+              chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
 
-              # Install Session Manager plugin helper
+              # Docker Buildx plugin
+              curl -SL https://github.com/docker/buildx/releases/download/v0.22.0/docker-buildx-v0.22.0.linux-amd64 -o /usr/local/lib/docker/cli-plugins/docker-buildx
+              chmod +x /usr/local/lib/docker/cli-plugins/docker-buildx
+
+              # Install Session Manager plugin
               yum install -y https://s3.amazonaws.com/session-manager-downloads/plugin/latest/linux_64bit/session-manager-plugin.rpm
               EOF
 

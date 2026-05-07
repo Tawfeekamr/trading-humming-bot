@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   bot:
     build: .
@@ -9,16 +7,20 @@ services:
       - ./data:/app/data
       - ./logs:/app/logs
       - ./config:/app/config
-    ports:
-      - "8501:8501"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
 
   dashboard:
     build: .
-    command: streamlit run app.py --server.port 8501 --server.address 0.0.0.0
+    command: streamlit run app.py --server.port 8502 --server.address 0.0.0.0
     env_file: .env
+    restart: unless-stopped
     ports:
-      - "8502:8501"
+      - "8502:8502"
     volumes:
-      - ./data:/app/data
+      - ./data:/app/data:ro
     depends_on:
       - bot
