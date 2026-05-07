@@ -29,10 +29,14 @@ class GridManager:
         for i in range(1, self.levels + 1):
             buy_price = bb.mid - spacing * i
             buy_price = max(buy_price, bb.lower)
+            if buy_price == bb.lower and i > 1:
+                break
             buy_qty = order_value / buy_price
 
             sell_price = bb.mid + spacing * i
             sell_price = min(sell_price, bb.upper)
+            if sell_price == bb.upper and i > 1:
+                break
             sell_qty = order_value / sell_price
 
             buy_levels.append({
