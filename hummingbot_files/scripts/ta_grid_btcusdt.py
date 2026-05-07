@@ -48,6 +48,8 @@ from src.risk.position_guard import PositionGuard
 from src.data.candle_feed import CandleFeed
 from src.notifications.telegram_bot import TelegramBot
 from src.journal.trade_journal import TradeJournal, Trade
+from src.health import update_health, set_halted, start_health_server
+from src.logging_config import setup_logging
 
 try:
     from hummingbot.strategy.script_strategy_base import ScriptStrategyBase
@@ -109,6 +111,9 @@ class TAGridBTCUSDT(ScriptStrategyBase):
         return {}
 
     def __init__(self, connectors: Dict):
+        # Setup structured logging
+        setup_logging()
+
         cfg = self._load_config()
         # Override class attributes from config file
         grid_cfg = cfg.get("grid", {})
@@ -141,6 +146,9 @@ class TAGridBTCUSDT(ScriptStrategyBase):
         self.max_btc_exposure_pct = float(os.environ.get("MAX_BTC_EXPOSURE_PCT", risk_cfg.get("max_btc_exposure_pct", self.max_btc_exposure_pct)))
 
         super().__init__(connectors)
+
+        # Start health check server
+        start_health_server(port=8080)
 
         self.bb = BollingerBands(self.bb_period, self.bb_std)
         self.rsi = RSI(self.rsi_period)
@@ -216,6 +224,9 @@ class TAGridBTCUSDT(ScriptStrategyBase):
             self._cached_indicators = (bb_result, rsi_value, ema_value, atr_value, current_price)
             self._last_candle_time = now
             self._grid_dirty = True
+
+            # Update health check
+            update_health(self.state_machine.state.value)
         else:
             if self._cached_indicators is None:
                 return
@@ -249,6 +260,7 @@ class TAGridBTCUSDT(ScriptStrategyBase):
         if self.circuit_breaker.check(equity):
             self._cancel_all_orders()
             logger.critical("Circuit breaker triggered!")
+            set_halted("circuit_breaker")
             return
 
         if self._grid_dirty:
