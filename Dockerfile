@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.12-slim
 
 WORKDIR /app
 
@@ -12,5 +12,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 RUN mkdir -p data logs
+
+# Run as non-root user for security
+RUN groupadd -r botuser && useradd -r -g botuser -s /sbin/nologin botuser \
+    && chown -R botuser:botuser /app
+USER botuser
 
 CMD ["python", "-m", "hummingbot", "start", "--script", "hummingbot_files/scripts/ta_grid_btcusdt.py"]

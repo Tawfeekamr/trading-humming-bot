@@ -36,15 +36,12 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
-    permissions:
-      id-token: write
-      contents: read
-
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Deploy via SSM
@@ -63,17 +60,17 @@ jobs:
             git pull origin main
 
             echo "Rebuilding containers..."
-            docker-compose down
-            docker-compose up -d --build
+            docker compose down
+            docker compose up -d --build
 
             echo "Waiting for health check..."
             sleep 10
 
-            if docker-compose ps | grep -q "Up"; then
+            if docker compose ps | grep -q "Up"; then
               echo "Deploy successful at $(date)"
             else
               echo "Deploy failed - containers not running"
-              docker-compose logs --tail=50
+              docker compose logs --tail=50
               exit 1
             fi
 
