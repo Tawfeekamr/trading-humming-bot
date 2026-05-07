@@ -8,6 +8,7 @@ Start: start --script ta_grid_btcusdt.py
 import os
 import asyncio
 import logging
+import traceback as traceback_mod
 from decimal import Decimal
 from dotenv import load_dotenv
 from pathlib import Path
@@ -17,6 +18,25 @@ for _env_path in [Path("/home/hummingbot/.env"), Path(__file__).parent.parent / 
     if _env_path.exists():
         load_dotenv(_env_path)
         break
+
+# Global uncaught exception handler — logs + Telegram alert
+def _global_exception_handler(exc_type, exc_value, exc_tb):
+    tb_str = "".join(traceback_mod.format_exception(exc_type, exc_value, exc_tb))
+    logging.critical(f"UNCAUGHT EXCEPTION: {exc_value}\n{tb_str}")
+    # Attempt Telegram alert
+    try:
+        token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+        chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
+        if token and chat_id:
+            import urllib.request
+            msg = f"🚨 <b>UNCAUGHT EXCEPTION</b>\n{exc_type.__name__}: {exc_value}\n\n<pre>{tb_str[:600]}</pre>"
+            url = f"https://api.telegram.org/bot{token}/sendMessage?chat_id={chat_id}&parse_mode=HTML&text="
+            urllib.request.urlopen(url + urllib.request.quote(msg), timeout=5)
+    except Exception:
+        pass
+
+import sys
+sys.excepthook = _global_exception_handler
 from typing import Dict, Optional
 from dataclasses import dataclass as dataclass_fills
 from typing import Optional as Optional_fills
@@ -287,6 +307,15 @@ class TAGridBTCUSDT(StrategyV2Base):
     # ── Main Tick Loop ───────────────────────────────────────────────
 
     def on_tick(self):
+        try:
+            self._on_tick_inner()
+        except Exception as e:
+            import traceback
+            tb = traceback.format_exc()
+            logger.error(f"CRASH in on_tick: {e}\n{tb}")
+            self._safe_telegram_crash("on_tick", str(e), tb)
+
+    def _on_tick_inner(self):
         if self.circuit_breaker.halted:
             return
 
@@ -319,6 +348,7 @@ class TAGridBTCUSDT(StrategyV2Base):
                 df = self.candle_feed.fetch_candles(limit=250)
             except Exception as e:
                 logger.error(f"Candle fetch failed: {e}")
+                self._safe_telegram_error("candle_fetch", str(e))
                 return
 
             closes = df["close"]
@@ -617,6 +647,15 @@ class TAGridBTCUSDT(StrategyV2Base):
     # ── Trade Filled Hook ────────────────────────────────────────────
 
     def did_fill_order(self, event):
+        try:
+            self._did_fill_order_inner(event)
+        except Exception as e:
+            import traceback
+            tb = traceback.format_exc()
+            logger.error(f"CRASH in did_fill_order: {e}\n{tb}")
+            self._safe_telegram_crash("did_fill_order", str(e), tb)
+
+    def _did_fill_order_inner(self, event):
         order = event.order
         side = "BUY" if str(order.trade_type) == "BUY" else "SELL"
         price = float(order.price)
@@ -820,12 +859,35 @@ class TAGridBTCUSDT(StrategyV2Base):
                 f"PnL: ${net_pnl:+.2f} | Level {grid_level}"
             )
 
+    # ── Safe Telegram Error Helpers ────────────────────────────────────
+
+    def _safe_telegram_error(self, source: str, error: str, details: str = ""):
+        self.event_log.log("error", source=source, error=error, details=details[:300])
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.create_task(self.telegram.alert_error(source, error, details))
+        except Exception:
+            pass
+
+    def _safe_telegram_crash(self, source: str, error: str, traceback_str: str = ""):
+        self.event_log.log("crash", source=source, error=error, traceback=traceback_str[:500])
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.create_task(self.telegram.alert_crash(source, error, traceback_str))
+        except Exception:
+            pass
+
     # ── Graceful Shutdown ────────────────────────────────────────────
 
     def on_stop(self):
         if hasattr(self, "_telegram_commands"):
             self._telegram_commands.stop()
-        self._cancel_all_orders("graceful_shutdown")
+        try:
+            self._cancel_all_orders("graceful_shutdown")
+        except Exception as e:
+            logger.error(f"Error cancelling orders on stop: {e}")
         self.event_log.log("bot_stopped", reason="graceful stop")
         self.event_log.close()
         try:

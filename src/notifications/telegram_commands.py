@@ -86,64 +86,83 @@ class TelegramCommandHandler:
             await update.message.reply_text(f"⚠️ Error getting status: {e}")
 
     async def _cmd_pnl(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        today = self.journal.summary_today()
-        week = self.journal.summary_this_week()
-        month = self.journal.summary_this_month()
-        alltime = self.journal.summary_all_time()
+        try:
+            today = self.journal.summary_today()
+            week = self.journal.summary_this_week()
+            month = self.journal.summary_this_month()
+            alltime = self.journal.summary_all_time()
 
-        await update.message.reply_text(
-            f"💰 <b>P&L Report</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"📅 Today: {self._fmt_pnl(today['net_pnl'])}  ({today['total_trades']} trades, {today['win_rate']}%)\n"
-            f"📆 Week:  {self._fmt_pnl(week['net_pnl'])}\n"
-            f"🗓 Month: {self._fmt_pnl(month['net_pnl'])}\n"
-            f"🏦 All:   {self._fmt_pnl(alltime['net_pnl'])}  ({alltime['total_trades']} trades)"
-        )
+            await update.message.reply_text(
+                f"💰 <b>P&L Report</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"📅 Today: {self._fmt_pnl(today['net_pnl'])}  ({today['total_trades']} trades, {today['win_rate']}%)\n"
+                f"📆 Week:  {self._fmt_pnl(week['net_pnl'])}\n"
+                f"🗓 Month: {self._fmt_pnl(month['net_pnl'])}\n"
+                f"🏦 All:   {self._fmt_pnl(alltime['net_pnl'])}  ({alltime['total_trades']} trades)"
+            )
+        except Exception as e:
+            logger.error(f"Error in /pnl: {e}")
+            await update.message.reply_text(f"⚠️ Error getting P&L: {e}")
 
     async def _cmd_pause(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        self.strategy._manual_pause = True
-        self.event_log.log("manual_pause", source="telegram")
-        await update.message.reply_text(
-            "⏸️ Grid manually paused. Use /resume to restart."
-        )
+        try:
+            self.strategy._manual_pause = True
+            self.event_log.log("manual_pause", source="telegram")
+            await update.message.reply_text(
+                "⏸️ Grid manually paused. Use /resume to restart."
+            )
+        except Exception as e:
+            logger.error(f"Error in /pause: {e}")
+            await update.message.reply_text(f"⚠️ Error pausing: {e}")
 
     async def _cmd_resume(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        self.strategy._manual_pause = False
-        self.event_log.log("manual_resume", source="telegram")
-        await update.message.reply_text(
-            "🟢 Grid resumed. Will activate on next valid signal."
-        )
+        try:
+            self.strategy._manual_pause = False
+            self.event_log.log("manual_resume", source="telegram")
+            await update.message.reply_text(
+                "🟢 Grid resumed. Will activate on next valid signal."
+            )
+        except Exception as e:
+            logger.error(f"Error in /resume: {e}")
+            await update.message.reply_text(f"⚠️ Error resuming: {e}")
 
     async def _cmd_reset(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        self.circuit_breaker.halted = False
-        equity = self.strategy._estimate_equity(
-            self.strategy._cached_indicators[4] if self.strategy._cached_indicators else 0
-        )
-        self.circuit_breaker.set_peak_equity(max(equity, 0))
-        self.circuit_breaker.set_start_of_day_equity(max(equity, 0))
-        self.event_log.log("circuit_breaker_reset", source="telegram", equity=round(equity, 2))
-        await update.message.reply_text(
-            "🔄 Circuit breaker reset. Bot will resume on next tick."
-        )
+        try:
+            self.circuit_breaker.halted = False
+            equity = self.strategy._estimate_equity(
+                self.strategy._cached_indicators[4] if self.strategy._cached_indicators else 0
+            )
+            self.circuit_breaker.set_peak_equity(max(equity, 0))
+            self.circuit_breaker.set_start_of_day_equity(max(equity, 0))
+            self.event_log.log("circuit_breaker_reset", source="telegram", equity=round(equity, 2))
+            await update.message.reply_text(
+                "🔄 Circuit breaker reset. Bot will resume on next tick."
+            )
+        except Exception as e:
+            logger.error(f"Error in /reset: {e}")
+            await update.message.reply_text(f"⚠️ Error resetting: {e}")
 
     async def _cmd_trades(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        trades = self.journal.get_trades()
-        if not trades:
-            await update.message.reply_text("No trades recorded yet.")
-            return
+        try:
+            trades = self.journal.get_trades()
+            if not trades:
+                await update.message.reply_text("No trades recorded yet.")
+                return
 
-        lines = ["📜 <b>Last 5 Trades</b>", "━━━━━━━━━━━━━━━━━━━━━━"]
-        now = time.time()
-        for t in trades[:5]:
-            pnl = t.get("net_pnl", 0)
-            sign = "+" if pnl >= 0 else ""
-            emoji = "✅" if pnl >= 0 else "❌"
-            ts = t.get("timestamp", "")
-            price = t.get("exit_price", 0)
-            side = t.get("side", "?")
-            lines.append(f"{emoji} {side} @ ${price:,.0f}  {sign}${pnl:.2f}  {ts[:16]}")
+            lines = ["📜 <b>Last 5 Trades</b>", "━━━━━━━━━━━━━━━━━━━━━━"]
+            for t in trades[:5]:
+                pnl = t.get("net_pnl", 0)
+                sign = "+" if pnl >= 0 else ""
+                emoji = "✅" if pnl >= 0 else "❌"
+                ts = t.get("timestamp", "")
+                price = t.get("exit_price", 0)
+                side = t.get("side", "?")
+                lines.append(f"{emoji} {side} @ ${price:,.0f}  {sign}${pnl:.2f}  {ts[:16]}")
 
-        await update.message.reply_text("\n".join(lines))
+            await update.message.reply_text("\n".join(lines))
+        except Exception as e:
+            logger.error(f"Error in /trades: {e}")
+            await update.message.reply_text(f"⚠️ Error getting trades: {e}")
 
     async def _cmd_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(

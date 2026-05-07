@@ -56,6 +56,29 @@ class TelegramBot:
             f"⏰ Time: {self._now()} UTC"
         )
 
+    async def alert_error(self, source: str, error: str, details: str = "") -> None:
+        msg = (
+            f"⚠️ <b>Error in {source}</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"❌ {error}\n"
+            f"⏰ Time: {self._now()} UTC"
+        )
+        if details:
+            msg += f"\n📝 {details[:500]}"
+        await self.send(msg)
+
+    async def alert_crash(self, source: str, error: str, traceback_str: str = "") -> None:
+        msg = (
+            f"🚨 <b>CRASH in {source}</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"❌ {error}\n"
+            f"⏰ Time: {self._now()} UTC"
+        )
+        if traceback_str:
+            tb = traceback_str[:600]
+            msg += f"\n\n<pre>{tb}</pre>"
+        await self.send(msg)
+
     @staticmethod
     def _now() -> str:
         from datetime import datetime
