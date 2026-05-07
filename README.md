@@ -91,8 +91,7 @@ ta-grid-bot/
 │   │   └── ws_feed.py            # Real-time price via WebSocket
 │   │
 │   ├── journal/
-│   │   ├── trade_journal.py      # SQLite logger — every trade stored
-│   │   └── sheets_sync.py        # Auto-sync trades to Google Sheets
+│   │   └── trade_journal.py      # SQLite logger — every trade stored
 │   │
 │   ├── dashboard/
 │   │   └── app.py                # Streamlit P&L dashboard (web UI)
@@ -315,9 +314,9 @@ Lower BB ──── 🟢 BUY  order 1   ($95,000)
 
 ---
 
-## 📊 P&L Tracking — 3 Systems
+## 📊 P&L Tracking — 2 Systems
 
-All three run simultaneously. They serve different purposes and complement each other.
+Both systems run simultaneously. They serve different purposes and complement each other.
 
 ---
 
@@ -390,34 +389,6 @@ streamlit run src/dashboard/app.py
 # Add second service in Railway pointing to:
 streamlit run src/dashboard/app.py --server.port $PORT --server.address 0.0.0.0
 # Railway gives it a public URL you can bookmark
-```
-
----
-
-### 3. 📂 Google Sheets Auto-Sync
-
-Every trade is written to a Google Sheet in real time. Three tabs auto-update:
-
-| Tab | Contents |
-|-----|----------|
-| 📋 Trades | One row per trade — all fields, green/red rows |
-| 📅 Daily PnL | Aggregated by day — trades, win rate, PnL, fees |
-| 📊 Summary | Live totals: hour / day / week / month / all-time |
-
-**One-time Google Sheets setup:**
-```
-1. Go to console.cloud.google.com
-2. Create project → Enable: Google Sheets API + Google Drive API
-3. Create Service Account → download JSON key
-4. Save key as: keys/google_service_account.json
-5. Create a new Google Sheet → share it with the service account email
-6. Copy the Sheet ID from the URL → add to .env as GOOGLE_SHEET_ID
-```
-
-**Then add to `.env`:**
-```env
-GOOGLE_SHEET_ID=your_google_sheet_id_here
-GOOGLE_SERVICE_ACCOUNT_PATH=keys/google_service_account.json
 ```
 
 ---

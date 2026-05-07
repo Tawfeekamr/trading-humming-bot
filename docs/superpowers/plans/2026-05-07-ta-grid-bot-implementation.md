@@ -6,7 +6,7 @@
 
 **Architecture:** Hummingbot v2 ScriptStrategyBase drives order execution. A modular `src/` package provides indicators (BB, RSI, EMA, ATR), grid management (placement, state machine, order tracking), risk controls (circuit breaker, position guard), and data feeds (REST candles + WebSocket). SQLite journal + Telegram alerts + Streamlit dashboard already exist and will be wired into the new modules.
 
-**Tech Stack:** Python 3.11, Hummingbot v2, pandas_ta, python-telegram-bot, Streamlit, SQLite, Google Sheets API, Docker, Binance REST/WebSocket APIs.
+**Tech Stack:** Python 3.11, Hummingbot v2, pandas_ta, python-telegram-bot, Streamlit, SQLite, Docker, Binance REST/WebSocket APIs.
 
 ---
 
@@ -47,8 +47,7 @@ ta-grid-bot/
 │   │   └── telegram_bot.py         # CREATE
 │   ├── journal/
 │   │   ├── __init__.py             # CREATE
-│   │   ├── trade_journal.py        # MOVE (from root)
-│   │   └── sheets_sync.py          # MOVE (from root)
+│   │   └── trade_journal.py        # MOVE (from root)
 │   └── dashboard/
 │       └── app.py                  # MOVE (from root)
 ├── hummingbot_files/
@@ -66,7 +65,6 @@ ta-grid-bot/
 │   └── test_candle_feed.py         # CREATE
 ├── app.py                          # EXISTS (root-level, will update import)
 ├── pnl_reporter.py                 # EXISTS (root-level, will update import)
-├── sheets_sync.py                  # EXISTS (root-level, will refactor)
 └── trade_journal.py                # EXISTS (root-level, will refactor)
 ```
 
@@ -139,10 +137,6 @@ APScheduler>=3.10
 # Dashboard
 streamlit>=1.30
 plotly>=5.18
-
-# Google Sheets
-gspread>=5.12
-google-auth>=2.28
 
 # Backtesting
 vectorbt>=0.26
@@ -1325,7 +1319,6 @@ git commit -m "feat: add Telegram notification bot wrapper"
 
 **Files:**
 - Create: `src/journal/trade_journal.py` (copy from root)
-- Create: `src/journal/sheets_sync.py` (copy from root, fix imports)
 - Update: `app.py` (fix imports)
 - Update: `pnl_reporter.py` (fix imports)
 
@@ -1337,20 +1330,7 @@ The file at root `trade_journal.py` is already self-contained (no imports from s
 cp trade_journal.py src/journal/trade_journal.py
 ```
 
-- [ ] **Step 2: Copy sheets_sync.py to src/journal/ with updated imports**
-
-Change `from src.journal.trade_journal import ...` to relative import.
-
-In `src/journal/sheets_sync.py`, the import line:
-```python
-from src.journal.trade_journal import Trade, TradeJournal
-```
-becomes:
-```python
-from .trade_journal import Trade, TradeJournal
-```
-
-- [ ] **Step 3: Update root app.py import**
+- [ ] **Step 2: Update root app.py import**
 
 Change:
 ```python
@@ -1366,16 +1346,16 @@ from src.journal.trade_journal import TradeJournal, Trade
 ```
 (This already works — no change needed)
 
-- [ ] **Step 5: Run all existing tests to verify nothing broke**
+- [ ] **Step 3: Run all existing tests to verify nothing broke**
 
 Run: `python -m pytest tests/ -v`
 Expected: All indicator + grid + risk tests pass
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
-git add src/journal/trade_journal.py src/journal/sheets_sync.py
-git commit -m "refactor: move journal modules into src/journal/ package"
+git add src/journal/trade_journal.py
+git commit -m "refactor: move trade journal into src/journal/ package"
 ```
 
 ---
