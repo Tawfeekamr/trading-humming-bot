@@ -4,8 +4,7 @@ USER root
 
 # Install our requirements into the conda hummingbot environment
 COPY requirements.txt /tmp/requirements.txt
-RUN /opt/conda/envs/hummingbot/bin/pip install --no-cache-dir -r /tmp/requirements.txt \
-    && rm /tmp/requirements.txt
+RUN /opt/conda/envs/hummingbot/bin/pip install --no-cache-dir -r /tmp/requirements.txt && rm /tmp/requirements.txt
 
 # Copy our custom source modules
 COPY src/ /home/hummingbot/src/
@@ -17,15 +16,8 @@ COPY hummingbot_files/scripts/ta_grid_btcusdt.py /home/hummingbot/scripts/ta_gri
 RUN mkdir -p /home/hummingbot/conf/scripts
 COPY config/ta_grid_btcusdt_conf.yml /home/hummingbot/conf/scripts/ta_grid_btcusdt.yml
 
-# Ensure data/logs dirs exist
-RUN mkdir -p /home/hummingbot/data /home/hummingbot/logs
-
-# Fix ownership
-RUN chown -R hummingbot:hummingbot /home/hummingbot/src \
-    /home/hummingbot/scripts/ta_grid_btcusdt.py \
-    /home/hummingbot/conf/scripts \
-    /home/hummingbot/data \
-    /home/hummingbot/logs
+# Ensure data/logs dirs exist and fix ownership
+RUN mkdir -p /home/hummingbot/data /home/hummingbot/logs && chown -R hummingbot:hummingbot /home/hummingbot/src /home/hummingbot/scripts/ta_grid_btcusdt.py /home/hummingbot/conf/scripts /home/hummingbot/data /home/hummingbot/logs
 
 USER hummingbot
 
