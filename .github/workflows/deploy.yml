@@ -45,34 +45,32 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Deploy via SSM
-        uses: peterkimzz/aws-ssm-send-command@master
-        id: ssm
-        with:
-          aws-region: ${{ env.AWS_REGION }}
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          instance-ids: ${{ secrets.EC2_INSTANCE_ID }}
-          working-directory: /home/ec2-user/trading-humming-bot
-          command: |
-            set -e
+        run: |
+          COMMAND="set -e
+          cd /home/ec2-user/trading-humming-bot
+          echo 'Pulling latest code...'
+          git pull origin main
+          echo 'Rebuilding containers...'
+          docker-compose down
+          docker-compose up -d --build
+          echo 'Waiting for health check...'
+          sleep 10
+          if docker-compose ps | grep -q 'Up'; then
+            echo 'Deploy successful'
+          else
+            echo 'Deploy failed - containers not running'
+            docker-compose logs --tail=50
+            exit 1
+          fi"
 
-            echo "Pulling latest code..."
-            git pull origin main
+          aws ssm send-command \
+            --document-name "AWS-RunShellScript" \
+            --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
+            --region "${{ env.AWS_REGION }}" \
+            --parameters "commands=[$COMMAND]" \
+            --working-directory "/home/ec2-user/trading-humming-bot" \
+            --comment "Deploying via GitHub Actions"
 
-            echo "Rebuilding containers..."
-            docker compose down
-            docker compose up -d --build
-
-            echo "Waiting for health check..."
-            sleep 10
-
-            if docker compose ps | grep -q "Up"; then
-              echo "Deploy successful at $(date)"
-            else
-              echo "Deploy failed - containers not running"
-              docker compose logs --tail=50
-              exit 1
-            fi
 
       - name: Notify Telegram on success
         if: success()
