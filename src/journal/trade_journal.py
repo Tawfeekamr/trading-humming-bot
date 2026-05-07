@@ -7,6 +7,7 @@ Provides P&L queries by hour / day / week / month / all-time.
 
 import sqlite3
 import json
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from dataclasses import dataclass, asdict
@@ -41,6 +42,7 @@ class TradeJournal:
     def __init__(self, db_path: Path = DB_PATH):
         self.db_path = db_path
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.Lock()
         self._init_db()
 
     # ── Setup ──────────────────────────────────────────────────────
@@ -82,29 +84,31 @@ class TradeJournal:
 
     def log_trade(self, trade: Trade) -> int:
         """Insert a trade. Returns the new row ID."""
-        with self._conn() as conn:
-            cursor = conn.execute("""
-                INSERT INTO trades (
-                    timestamp, pair, side, entry_price, exit_price,
-                    quantity, gross_pnl, fee, net_pnl, grid_level,
-                    duration_min, rsi, bb_upper, bb_lower, ema_200,
-                    atr, grid_state
-                ) VALUES (
-                    :timestamp, :pair, :side, :entry_price, :exit_price,
-                    :quantity, :gross_pnl, :fee, :net_pnl, :grid_level,
-                    :duration_min, :rsi, :bb_upper, :bb_lower, :ema_200,
-                    :atr, :grid_state
-                )
-            """, asdict(trade))
-            return cursor.lastrowid
+        with self._lock:
+            with self._conn() as conn:
+                cursor = conn.execute("""
+                    INSERT INTO trades (
+                        timestamp, pair, side, entry_price, exit_price,
+                        quantity, gross_pnl, fee, net_pnl, grid_level,
+                        duration_min, rsi, bb_upper, bb_lower, ema_200,
+                        atr, grid_state
+                    ) VALUES (
+                        :timestamp, :pair, :side, :entry_price, :exit_price,
+                        :quantity, :gross_pnl, :fee, :net_pnl, :grid_level,
+                        :duration_min, :rsi, :bb_upper, :bb_lower, :ema_200,
+                        :atr, :grid_state
+                    )
+                """, asdict(trade))
+                return cursor.lastrowid
 
     # ── Read ───────────────────────────────────────────────────────
 
     def _query(self, sql: str, params: tuple = ()) -> list[dict]:
-        with self._conn() as conn:
-            conn.row_factory = sqlite3.Row
-            rows = conn.execute(sql, params).fetchall()
-            return [dict(r) for r in rows]
+        with self._lock:
+            with self._conn() as conn:
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute(sql, params).fetchall()
+                return [dict(r) for r in rows]
 
     def get_trades(self, since: Optional[str] = None, until: Optional[str] = None) -> list[dict]:
         """Return trades in a time range. Dates are ISO strings."""

@@ -5,6 +5,7 @@ Writes one JSON object per line to daily-rotated files in logs/.
 
 import json
 import logging
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,7 @@ class EventLogger:
         self._log_dir.mkdir(parents=True, exist_ok=True)
         self._current_date: str = ""
         self._file = None
+        self._lock = threading.Lock()
 
     def _get_file(self) -> Any:
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -35,15 +37,17 @@ class EventLogger:
             "event": event_type,
             **kwargs,
         }
-        try:
-            f = self._get_file()
-            f.write(json.dumps(event, default=str) + "\n")
-            f.flush()
-        except Exception as e:
-            logger.error(f"Event log write failed: {e}")
+        with self._lock:
+            try:
+                f = self._get_file()
+                f.write(json.dumps(event, default=str) + "\n")
+                f.flush()
+            except Exception as e:
+                logger.error(f"Event log write failed: {e}")
 
     def close(self) -> None:
-        if self._file:
-            self._file.close()
-            self._file = None
-            self._current_date = ""
+        with self._lock:
+            if self._file:
+                self._file.close()
+                self._file = None
+                self._current_date = ""

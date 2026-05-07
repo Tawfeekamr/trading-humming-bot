@@ -77,7 +77,7 @@ class TelegramCommandHandler:
             state = self.state_machine.state.value
             mode = self.strategy.env.upper()
             cb_status = "🛑 HALTED" if self.circuit_breaker.halted else "✅ OK"
-            pending = self.strategy._grid_order_tracker.total_pending
+            pending = self.strategy.order_tracker.total_pending
 
             await update.message.reply_text(
                 f"📊 <b>Bot Status</b>\n"
@@ -113,7 +113,7 @@ class TelegramCommandHandler:
 
     async def _cmd_pause(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
-            self.strategy._manual_pause = True
+            self.strategy.manual_pause = True
             self.event_log.log("manual_pause", source="telegram")
             await update.message.reply_text(
                 "⏸️ Grid manually paused. Use /resume to restart."
@@ -124,7 +124,7 @@ class TelegramCommandHandler:
 
     async def _cmd_resume(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
-            self.strategy._manual_pause = False
+            self.strategy.manual_pause = False
             self.event_log.log("manual_resume", source="telegram")
             await update.message.reply_text(
                 "🟢 Grid resumed. Will activate on next valid signal."
@@ -135,12 +135,11 @@ class TelegramCommandHandler:
 
     async def _cmd_reset(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
-            self.circuit_breaker.halted = False
+            indicators = self.strategy.get_indicators_snapshot()
             equity = self.strategy._estimate_equity(
-                self.strategy._cached_indicators[4] if self.strategy._cached_indicators else 0
+                indicators[4] if indicators else 0
             )
-            self.circuit_breaker.set_peak_equity(max(equity, 0))
-            self.circuit_breaker.set_start_of_day_equity(max(equity, 0))
+            self.circuit_breaker.reset(equity)
             self.event_log.log("circuit_breaker_reset", source="telegram", equity=round(equity, 2))
             await update.message.reply_text(
                 "🔄 Circuit breaker reset. Bot will resume on next tick."

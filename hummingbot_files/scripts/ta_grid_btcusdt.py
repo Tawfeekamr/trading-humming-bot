@@ -8,6 +8,7 @@ Start: start --script ta_grid_btcusdt.py
 import os
 import asyncio
 import logging
+import threading
 import traceback as traceback_mod
 from decimal import Decimal
 from dotenv import load_dotenv
@@ -282,6 +283,7 @@ class TAGridBTCUSDT(StrategyV2Base):
         self._manual_pause = False
         self._last_sod_reset: Optional[str] = None
         self._fee_rate: float = 0.00075  # default 0.075% standard tier
+        self._state_lock = threading.Lock()  # protects _manual_pause, _cached_indicators, _open_buys
 
         self.event_log.log("bot_started", mode=self.env, capital=self.capital_usdt,
                            levels=self.levels, testnet=self.is_testnet)
@@ -872,6 +874,25 @@ class TAGridBTCUSDT(StrategyV2Base):
             )
 
     # ── Safe Telegram Error Helpers ────────────────────────────────────
+
+    # Thread-safe accessors for Telegram commands
+    @property
+    def manual_pause(self) -> bool:
+        with self._state_lock:
+            return self._manual_pause
+
+    @manual_pause.setter
+    def manual_pause(self, value: bool) -> None:
+        with self._state_lock:
+            self._manual_pause = value
+
+    def get_indicators_snapshot(self):
+        with self._state_lock:
+            return self._cached_indicators
+
+    @property
+    def order_tracker(self):
+        return self._grid_order_tracker
 
     def _safe_telegram_error(self, source: str, error: str, details: str = ""):
         self.event_log.log("error", source=source, error=error, details=details[:300])
