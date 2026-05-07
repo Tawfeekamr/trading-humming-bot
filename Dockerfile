@@ -33,4 +33,4 @@ ENV SCRIPT_CONFIG=ta_grid_btcusdt.yml
 ENV HEADLESS_MODE=true
 ENV CONFIG_PASSWORD=
 
-CMD ["/bin/bash", "-lc", "conda activate hummingbot && python ./bin/hummingbot_quickstart.py"]
+CMD ["/bin/bash", "-c", "source /opt/conda/etc/profile.d/conda.sh && conda activate hummingbot && python ./bin/hummingbot_quickstart.py"]
