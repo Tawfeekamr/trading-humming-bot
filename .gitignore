@@ -1,0 +1,30 @@
+# Environment
+.env
+keys/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Data & Logs
+data/
+logs/
+reports/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Terraform state
+iac/**/*.tfstate*
+iac/**/.terraform/
