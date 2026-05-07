@@ -539,14 +539,18 @@ class TAGridBTCUSDT(StrategyV2Base):
         if not connector:
             return 0.0
         balance = getattr(connector, "get_balance", lambda x: None)("USDT")
-        return float(balance.available) if balance else 0.0
+        if balance is None:
+            return 0.0
+        return float(balance.available if hasattr(balance, 'available') else balance)
 
     def _get_btc_balance(self) -> float:
         connector = self.connectors.get(self.exchange)
         if not connector:
             return 0.0
         balance = getattr(connector, "get_balance", lambda x: None)("BTC")
-        return float(balance.available) if balance else 0.0
+        if balance is None:
+            return 0.0
+        return float(balance.available if hasattr(balance, 'available') else balance)
 
     def _estimate_equity(self, btc_price: float) -> float:
         return self._get_usdt_balance() + (self._get_btc_balance() * btc_price)
