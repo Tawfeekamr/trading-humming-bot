@@ -1,6 +1,6 @@
 """
 ta_grid_btcusdt.py — TA-Enhanced BTC/USDT Grid Bot
-Hummingbot v2 ScriptStrategyBase implementation.
+Hummingbot v2 StrategyV2Base implementation.
 
 Start: start --script ta_grid_btcusdt.py
 """
@@ -9,7 +9,7 @@ import os
 import asyncio
 import logging
 from decimal import Decimal
-from typing import Dict
+from typing import Dict, Optional
 from dataclasses import dataclass as dataclass_fills
 from typing import Optional as Optional_fills
 import time as time_mod
@@ -39,12 +39,22 @@ from src.logging_config import setup_logging
 from src.logging.event_logger import EventLogger
 
 try:
-    from hummingbot.strategy.script_strategy_base import ScriptStrategyBase
-    from hummingbot.core.event.events import OrderType, TradeType
+    from hummingbot.strategy.strategy_v2_base import StrategyV2Base, StrategyV2ConfigBase
+    from hummingbot.connector.connector_base import ConnectorBase
+    from hummingbot.core.data_type.common import MarketDict, OrderType, PriceType, TradeType
+    from hummingbot.core.data_type.order_candidate import OrderCandidate
+    from pydantic import Field
+    V2_AVAILABLE = True
 except ImportError:
-    ScriptStrategyBase = object
+    # Fallback to v1 for local testing
+    V2_AVAILABLE = False
+    StrategyV2Base = object
+    StrategyV2ConfigBase = object
+    ConnectorBase = object
     OrderType = type("OrderType", (), {"LIMIT": "LIMIT"})
     TradeType = type("TradeType", (), {"BUY": "BUY", "SELL": "SELL"})
+    MarketDict = dict
+    Field = lambda **kwargs: kwargs
 
 logger = logging.getLogger(__name__)
 
@@ -65,40 +75,64 @@ class FillRecord:
     grid_state: str
 
 
-class TAGridBTCUSDT(ScriptStrategyBase):
+class TAGridConfig(StrategyV2ConfigBase):
+    """
+    Configuration class for TA-Enhanced Grid Bot strategy.
+    Extends StrategyV2ConfigBase with strategy-specific parameters.
+    """
+
+    # Required by StrategyV2ConfigBase
+    script_file_name: str = Field(default="ta_grid_btcusdt.py")
+
+    # Exchange configuration
+    exchange: str = Field(default="binance_paper_trade")
+    trading_pair: str = Field(default="BTC-USDT")
+
+    # Grid parameters
+    levels: int = Field(default=8)
+    capital_usdt: float = Field(default=200.0)
+    min_reserve: float = Field(default=50.0)
+    order_refresh_time: int = Field(default=60)
+
+    # Bollinger Bands
+    bb_period: int = Field(default=20)
+    bb_std: float = Field(default=2.0)
+
+    # RSI
+    rsi_period: int = Field(default=14)
+    rsi_overbought: float = Field(default=70.0)
+    rsi_oversold: float = Field(default=35.0)
+
+    # EMA
+    ema_period: int = Field(default=200)
+
+    # ATR
+    atr_period: int = Field(default=14)
+    atr_multiplier: float = Field(default=0.8)
+
+    # Risk management
+    max_drawdown_pct: float = Field(default=10.0)
+    daily_loss_limit_pct: float = Field(default=5.0)
+    max_btc_exposure_pct: float = Field(default=80.0)
+
+    # Environment
+    env: str = Field(default="paper")
+
+    def update_markets(self, markets: MarketDict) -> MarketDict:
+        """
+        Register the trading pairs for this strategy.
+        Called by Hummingbot v2 to configure which markets to connect to.
+        """
+        markets[self.exchange] = {self.trading_pair: {}}
+        return markets
+
+
+class TAGridBTCUSDT(StrategyV2Base):
     """
     TA-Enhanced Grid Bot strategy for Hummingbot v2.
     Uses Bollinger Bands, RSI, EMA 200, and ATR to dynamically
     manage a grid of buy/sell orders on BTC/USDT.
     """
-
-    exchange = "binance"
-    trading_pair = "BTC-USDT"
-    order_refresh_time = 60
-
-    levels = 8
-    capital_usdt = float(os.environ.get("GRID_CAPITAL_USDT", "200"))
-    min_reserve = float(os.environ.get("MIN_USDT_RESERVE", "50"))
-
-    bb_period = 20
-    bb_std = 2.0
-    rsi_period = 14
-    rsi_overbought = 70.0
-    rsi_oversold = 35.0
-    ema_period = 200
-    atr_period = 14
-    atr_multiplier = 0.8
-
-    max_drawdown_pct = float(os.environ.get("MAX_DRAWDOWN_PCT", "10"))
-    daily_loss_limit_pct = 5.0
-    max_btc_exposure_pct = float(os.environ.get("MAX_BTC_EXPOSURE_PCT", "80"))
-
-    env = os.environ.get("ENV", "paper")
-    is_testnet = env == "paper"
-
-    markets = {
-        "binance": {"BTC-USDT": {}}
-    }
 
     @staticmethod
     def _load_config() -> dict:
@@ -112,45 +146,70 @@ class TAGridBTCUSDT(ScriptStrategyBase):
                     return yaml.safe_load(f)
         return {}
 
-    def __init__(self, connectors: Dict):
+    def __init__(self, connectors: Dict[str, ConnectorBase], config: TAGridConfig):
+        """
+        Initialize the strategy with connectors and configuration.
+
+        Args:
+            connectors: Dictionary of exchange connector names to connector instances
+            config: Strategy configuration instance
+        """
         setup_logging()
 
+        # Store config
+        self.config = config
+
+        # Load additional config from YAML if available
         cfg = self._load_config()
         grid_cfg = cfg.get("grid", {})
         ind_cfg = cfg.get("indicators", {})
         risk_cfg = cfg.get("risk", {})
 
-        self.levels = int(os.environ.get("GRID_LEVELS", grid_cfg.get("levels", self.levels)))
-        self.capital_usdt = float(os.environ.get("GRID_CAPITAL_USDT", grid_cfg.get("capital_usdt", self.capital_usdt)))
-        self.min_reserve = float(os.environ.get("MIN_USDT_RESERVE", grid_cfg.get("min_usdt_reserve", self.min_reserve)))
-        self.order_refresh_time = grid_cfg.get("order_refresh_time", self.order_refresh_time)
+        # Environment variables override config
+        self.levels = int(os.environ.get("GRID_LEVELS", grid_cfg.get("levels", config.levels)))
+        self.capital_usdt = float(os.environ.get("GRID_CAPITAL_USDT", grid_cfg.get("capital_usdt", config.capital_usdt)))
+        self.min_reserve = float(os.environ.get("MIN_USDT_RESERVE", grid_cfg.get("min_usdt_reserve", config.min_reserve)))
+        self.order_refresh_time = grid_cfg.get("order_refresh_time", config.order_refresh_time)
 
+        # Indicator config
         bb_cfg = ind_cfg.get("bollinger", {})
-        self.bb_period = bb_cfg.get("period", self.bb_period)
-        self.bb_std = bb_cfg.get("std_dev", self.bb_std)
+        self.bb_period = bb_cfg.get("period", config.bb_period)
+        self.bb_std = bb_cfg.get("std_dev", config.bb_std)
         rsi_cfg = ind_cfg.get("rsi", {})
-        self.rsi_period = rsi_cfg.get("period", self.rsi_period)
-        self.rsi_overbought = rsi_cfg.get("overbought", self.rsi_overbought)
-        self.rsi_oversold = rsi_cfg.get("oversold", self.rsi_oversold)
+        self.rsi_period = rsi_cfg.get("period", config.rsi_period)
+        self.rsi_overbought = rsi_cfg.get("overbought", config.rsi_overbought)
+        self.rsi_oversold = rsi_cfg.get("oversold", config.rsi_oversold)
         ema_cfg = ind_cfg.get("ema", {})
-        self.ema_period = ema_cfg.get("period", self.ema_period)
+        self.ema_period = ema_cfg.get("period", config.ema_period)
         atr_cfg = ind_cfg.get("atr", {})
-        self.atr_period = atr_cfg.get("period", self.atr_period)
-        self.atr_multiplier = atr_cfg.get("spacing_multiplier", self.atr_multiplier)
+        self.atr_period = atr_cfg.get("period", config.atr_period)
+        self.atr_multiplier = atr_cfg.get("spacing_multiplier", config.atr_multiplier)
 
-        self.max_drawdown_pct = float(os.environ.get("MAX_DRAWDOWN_PCT", risk_cfg.get("max_drawdown_pct", self.max_drawdown_pct)))
-        self.daily_loss_limit_pct = risk_cfg.get("daily_loss_limit_pct", self.daily_loss_limit_pct)
-        self.max_btc_exposure_pct = float(os.environ.get("MAX_BTC_EXPOSURE_PCT", risk_cfg.get("max_btc_exposure_pct", self.max_btc_exposure_pct)))
+        # Risk config
+        self.max_drawdown_pct = float(os.environ.get("MAX_DRAWDOWN_PCT", risk_cfg.get("max_drawdown_pct", config.max_drawdown_pct)))
+        self.daily_loss_limit_pct = risk_cfg.get("daily_loss_limit_pct", config.daily_loss_limit_pct)
+        self.max_btc_exposure_pct = float(os.environ.get("MAX_BTC_EXPOSURE_PCT", risk_cfg.get("max_btc_exposure_pct", config.max_btc_exposure_pct)))
 
-        super().__init__(connectors)
+        # Environment
+        self.env = os.environ.get("ENV", config.env)
+        self.is_testnet = self.env == "paper"
+
+        # Exchange and trading pair from config
+        self.exchange = config.exchange
+        self.trading_pair = config.trading_pair
+
+        # Call parent constructor (required for v2)
+        super().__init__(connectors, config)
 
         start_health_server(port=8080)
 
+        # Initialize indicators
         self.bb = BollingerBands(self.bb_period, self.bb_std)
         self.rsi = RSI(self.rsi_period)
         self.ema = EMA(self.ema_period)
         self.atr = ATR(self.atr_period, self.atr_multiplier)
 
+        # Initialize grid and risk management components
         self.grid_manager = GridManager(
             levels=self.levels,
             capital_usdt=self.capital_usdt,
@@ -172,15 +231,16 @@ class TAGridBTCUSDT(ScriptStrategyBase):
         self.journal = TradeJournal()
         self.event_log = EventLogger(log_dir="logs")
 
+        # Internal state
         self._peak_equity = self.capital_usdt
         self._open_buys: dict[int, FillRecord] = {}
         self._last_candle_time = None
         self._cached_indicators = None
         self._grid_dirty = True
-        self._last_state_alert_time: dict[str, float] = {}  # state -> last Telegram alert timestamp
+        self._last_state_alert_time: dict[str, float] = {}
         self._state_alert_cooldown = 900  # 15 minutes between repeated state alerts
         self._manual_pause = False
-        self._last_sod_reset: Optional_fills[str] = None
+        self._last_sod_reset: Optional[str] = None
         self._fee_rate: float = 0.00075  # default 0.075% standard tier
 
         self.event_log.log("bot_started", mode=self.env, capital=self.capital_usdt,
