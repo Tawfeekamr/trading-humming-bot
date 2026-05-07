@@ -5,7 +5,7 @@ import threading
 import asyncio
 import urllib.request
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from telegram import Update
 from telegram.constants import ParseMode
@@ -53,6 +53,7 @@ class TelegramCommandHandler:
             self._app.add_handler(CommandHandler("trades", self._cmd_trades, filters=chat_filter))
             self._app.add_handler(CommandHandler("logs", self._cmd_logs, filters=chat_filter))
             self._app.add_handler(CommandHandler("errors", self._cmd_errors, filters=chat_filter))
+            self._app.add_handler(CommandHandler("fees", self._cmd_fees, filters=chat_filter))
             self._app.add_handler(CommandHandler("help", self._cmd_help, filters=chat_filter))
 
             # Add catch-all debug handler to identify chat ID mismatches
@@ -255,6 +256,45 @@ class TelegramCommandHandler:
             logger.error(f"Error in /errors: {e}")
             await update.message.reply_text(f"⚠️ Error reading crash log: {e}")
 
+    async def _cmd_fees(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        try:
+            today = self.journal.fee_summary(
+                datetime.now(timezone.utc).strftime("%Y-%m-%d 00:00:00")
+            )
+            week = self.journal.fee_summary(
+                (datetime.now(timezone.utc) - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
+            )
+            month = self.journal.fee_summary(
+                datetime.now(timezone.utc).strftime("%Y-%m-01 00:00:00")
+            )
+            ot = self.journal.is_overtrading()
+
+            def fmt_ratio(r):
+                return f"{r:.1%}" if r > 0 else "N/A"
+
+            ot_emoji = "🚨" if ot["is_overtrading"] else "✅"
+            ot_status = "YES - fees too high!" if ot["is_overtrading"] else "Normal"
+
+            await update.message.reply_text(
+                f"💸 <b>Fee Analysis</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"📅 Today:   ${today['total_fees']:.2f} "
+                f"(ratio: {fmt_ratio(today['fee_to_gross_ratio'])}, "
+                f"{today['trade_count']} trades)\n"
+                f"📆 Week:    ${week['total_fees']:.2f} "
+                f"(ratio: {fmt_ratio(week['fee_to_gross_ratio'])})\n"
+                f"🗓 Month:   ${month['total_fees']:.2f} "
+                f"(ratio: {fmt_ratio(month['fee_to_gross_ratio'])})\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"{ot_emoji} Overtrading: {ot_status}\n"
+                f"📊 Fee ratio: {fmt_ratio(ot['fee_to_gross_ratio'])} "
+                f"(threshold: {ot['threshold']:.0%})",
+                parse_mode=ParseMode.HTML
+            )
+        except Exception as e:
+            logger.error(f"Error in /fees: {e}")
+            await update.message.reply_text(f"⚠️ Error getting fee analysis: {e}")
+
     async def _cmd_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "📖 <b>Available Commands</b>\n"
@@ -265,6 +305,7 @@ class TelegramCommandHandler:
             "/resume — Resume grid trading\n"
             "/reset — Reset circuit breaker after halt\n"
             "/trades — Last 5 closed trades\n"
+            "/fees — Fee analysis and overtrading detection\n"
             "/logs — Last 30 lines from today's bot log\n"
             "/errors — Recent errors and crashes\n"
             "/help — This message",

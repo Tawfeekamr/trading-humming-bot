@@ -283,6 +283,7 @@ class TAGridBTCUSDT(StrategyV2Base):
         self._manual_pause = False
         self._last_sod_reset: Optional[str] = None
         self._fee_rate: float = 0.00075  # default 0.075% standard tier
+        self._overtrading_alerted_today: str = ""
         self._state_lock = threading.Lock()  # protects _manual_pause, _cached_indicators, _open_buys
 
         self.event_log.log("bot_started", mode=self.env, capital=self.capital_usdt,
@@ -351,6 +352,31 @@ class TAGridBTCUSDT(StrategyV2Base):
             self._last_sod_reset = today_str
             self.event_log.log("daily_reset", equity=round(equity, 2))
             logger.info(f"Start-of-day equity reset: ${equity:.2f}")
+
+        # Overtrading check (once per day)
+        if self._overtrading_alerted_today != today_str:
+            try:
+                ot = self.journal.is_overtrading(threshold=0.30)
+                if ot["is_overtrading"]:
+                    self._overtrading_alerted_today = today_str
+                    self.event_log.log("overtrading_detected", **ot)
+                    ot_msg = (
+                        f"⚠️ <b>OVERTRADING DETECTED</b>\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"💸 Fees today: ${ot['total_fees']:.2f}\n"
+                        f"📊 Gross activity: ${ot['abs_gross_pnl']:.2f}\n"
+                        f"📈 Fee ratio: {ot['fee_to_gross_ratio']:.1%} (threshold: {ot['threshold']:.0%})\n"
+                        f"⚠️ Fees are eating a large portion of your P&L.\n"
+                        f"Consider widening grid spacing or reducing levels."
+                    )
+                    try:
+                        loop = asyncio.get_event_loop()
+                        if loop.is_running():
+                            loop.create_task(self.telegram.send(ot_msg))
+                    except RuntimeError:
+                        pass
+            except Exception as e:
+                logger.error(f"Overtrading check failed: {e}")
 
         should_fetch = (
             self._last_candle_time is None or
