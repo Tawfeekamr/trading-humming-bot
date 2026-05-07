@@ -10,12 +10,30 @@ import asyncio
 import logging
 from decimal import Decimal
 from typing import Dict
+from dataclasses import dataclass as dataclass_fills
+from typing import Optional as Optional_fills
+import time as time_mod
 
 import pandas as pd
 
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+@dataclass_fills
+class FillRecord:
+    order_id: str
+    side: str  # "BUY" or "SELL"
+    price: float
+    quantity: float
+    grid_level: int
+    timestamp: float  # time_mod.time()
+    rsi: float
+    bb_upper: float
+    bb_lower: float
+    ema_200: float
+    atr: float
+    grid_state: str
 
 from src.indicators.bollinger import BollingerBands
 from src.indicators.rsi import RSI
@@ -106,6 +124,10 @@ class TAGridBTCUSDT(ScriptStrategyBase):
         self.journal = TradeJournal()
 
         self._peak_equity = self.capital_usdt
+        self._open_buys: dict[int, FillRecord] = {}  # grid_level -> FillRecord
+        self._last_candle_time = None
+        self._cached_indicators = None  # Store (bb_result, rsi_value, ema_value, atr_value, current_price)
+        self._grid_dirty = True
 
         try:
             loop = asyncio.get_event_loop()
@@ -118,26 +140,44 @@ class TAGridBTCUSDT(ScriptStrategyBase):
         if self.circuit_breaker.halted:
             return
 
-        try:
-            df = self.candle_feed.fetch_candles(limit=250)
-        except Exception as e:
-            logger.error(f"Candle fetch failed: {e}")
-            return
+        now = pd.Timestamp.now(tz="UTC")
 
-        closes = df["close"]
-        highs = df["high"]
-        lows = df["low"]
-        current_price = float(closes.iloc[-1])
+        # Only fetch new candles on hourly boundary (with 5-min tolerance)
+        should_fetch = (
+            self._last_candle_time is None or
+            now - self._last_candle_time >= pd.Timedelta(minutes=55)
+        )
 
-        bb_result = self.bb.calculate(closes)
-        rsi_value = self.rsi.calculate(closes)
-        ema_value = self.ema.calculate(closes)
-        atr_value = self.atr.calculate(highs, lows, closes)
+        if should_fetch:
+            try:
+                df = self.candle_feed.fetch_candles(limit=250)
+            except Exception as e:
+                logger.error(f"Candle fetch failed: {e}")
+                return
 
-        if any(v is None for v in [bb_result, rsi_value, ema_value, atr_value]):
-            logger.warning("Insufficient data for indicator calculation")
-            return
+            closes = df["close"]
+            highs = df["high"]
+            lows = df["low"]
+            current_price = float(closes.iloc[-1])
 
+            bb_result = self.bb.calculate(closes)
+            rsi_value = self.rsi.calculate(closes)
+            ema_value = self.ema.calculate(closes)
+            atr_value = self.atr.calculate(highs, lows, closes)
+
+            if any(v is None for v in [bb_result, rsi_value, ema_value, atr_value]):
+                logger.warning("Insufficient data for indicator calculation")
+                return
+
+            self._cached_indicators = (bb_result, rsi_value, ema_value, atr_value, current_price)
+            self._last_candle_time = now
+            self._grid_dirty = True
+        else:
+            if self._cached_indicators is None:
+                return
+            bb_result, rsi_value, ema_value, atr_value, current_price = self._cached_indicators
+
+        # Evaluate state
         prev_state = self.state_machine.state
         new_state = self.state_machine.evaluate(
             price=current_price,
@@ -152,9 +192,12 @@ class TAGridBTCUSDT(ScriptStrategyBase):
         if new_state != prev_state:
             logger.info(f"Grid state: {prev_state.value} -> {new_state.value}")
             self._notify_state_change(new_state, current_price, rsi_value, bb_result)
+            self._grid_dirty = True
 
         if self.state_machine.is_paused:
-            self._cancel_all_orders()
+            if self._grid_dirty:
+                self._cancel_all_orders()
+                self._grid_dirty = False
             return
 
         equity = self._estimate_equity(current_price)
@@ -164,8 +207,10 @@ class TAGridBTCUSDT(ScriptStrategyBase):
             logger.critical("Circuit breaker triggered!")
             return
 
-        grid = self.grid_manager.calculate_grid(bb_result, atr_value)
-        self._place_grid_orders(grid, current_price)
+        if self._grid_dirty:
+            grid = self.grid_manager.calculate_grid(bb_result, atr_value)
+            self._place_grid_orders(grid, current_price)
+            self._grid_dirty = False
 
     def _place_grid_orders(self, grid, current_price: float):
         self._cancel_all_orders()
@@ -264,24 +309,117 @@ class TAGridBTCUSDT(ScriptStrategyBase):
 
     def did_fill_order(self, event):
         order = event.order
-        trade = Trade(
-            timestamp=pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d %H:%M:%S"),
-            pair="BTC/USDT",
-            side="BUY" if str(order.trade_type) == "BUY" else "SELL",
-            entry_price=float(order.price),
-            exit_price=float(order.price),
-            quantity=float(order.amount),
-            gross_pnl=0.0,
-            fee=0.0,
-            net_pnl=0.0,
-            grid_level=0,
-            duration_min=0,
-            rsi=0.0,
-            bb_upper=0.0,
-            bb_lower=0.0,
-            ema_200=0.0,
-            atr=0.0,
-            grid_state=self.state_machine.state.value,
-        )
-        trade_id = self.journal.log_trade(trade)
-        logger.info(f"Trade filled: {trade.side} {trade.quantity} @ {trade.entry_price}")
+        side = "BUY" if str(order.trade_type) == "BUY" else "SELL"
+        price = float(order.price)
+        quantity = float(order.amount)
+
+        # Get indicator snapshot
+        rsi_val = 0.0
+        bb_upper = 0.0
+        bb_lower = 0.0
+        ema_val = 0.0
+        atr_val = 0.0
+        grid_state_val = self.state_machine.state.value
+
+        if self._cached_indicators:
+            bb_r, rsi_r, ema_r, atr_r, _ = self._cached_indicators
+            rsi_val = rsi_r
+            bb_upper = bb_r.upper
+            bb_lower = bb_r.lower
+            ema_val = ema_r
+            atr_val = atr_r
+
+        # Determine grid level from price
+        grid_level = 0
+        if self._cached_indicators:
+            bb_r = self._cached_indicators[0]
+            mid = bb_r.mid
+            grid_level = int(abs(price - mid) / (self.atr_multiplier * atr_val)) if atr_val > 0 else 0
+
+        if side == "BUY":
+            # Store the buy fill for later pairing
+            self._open_buys[grid_level] = FillRecord(
+                order_id=str(order.client_order_id),
+                side=side,
+                price=price,
+                quantity=quantity,
+                grid_level=grid_level,
+                timestamp=time_mod.time(),
+                rsi=rsi_val,
+                bb_upper=bb_upper,
+                bb_lower=bb_lower,
+                ema_200=ema_val,
+                atr=atr_val,
+                grid_state=grid_state_val,
+            )
+            # Log the buy fill
+            trade = Trade(
+                timestamp=pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d %H:%M:%S"),
+                pair="BTC/USDT",
+                side="BUY",
+                entry_price=price,
+                exit_price=price,
+                quantity=quantity,
+                gross_pnl=0.0,
+                fee=quantity * price * 0.00075,
+                net_pnl=-(quantity * price * 0.00075),
+                grid_level=grid_level,
+                duration_min=0,
+                rsi=rsi_val,
+                bb_upper=bb_upper,
+                bb_lower=bb_lower,
+                ema_200=ema_val,
+                atr=atr_val,
+                grid_state=grid_state_val,
+            )
+            self.journal.log_trade(trade)
+            logger.info(f"BUY filled: {quantity} BTC @ ${price:,.2f} | Level {grid_level}")
+
+        elif side == "SELL":
+            # Find matching buy to compute PnL
+            gross_pnl = 0.0
+            fee = quantity * price * 0.00075
+            duration_min = 0
+            entry_price = price
+
+            # Look for a matching buy at the same grid level
+            matching_buy = self._open_buys.pop(grid_level, None)
+            if matching_buy:
+                entry_price = matching_buy.price
+                gross_pnl = (price - entry_price) * quantity
+                duration_min = int((time_mod.time() - matching_buy.timestamp) / 60)
+            else:
+                # Try to find any open buy
+                if self._open_buys:
+                    level, buy = next(iter(self._open_buys.items()))
+                    self._open_buys.pop(level)
+                    entry_price = buy.price
+                    gross_pnl = (price - entry_price) * quantity
+                    duration_min = int((time_mod.time() - buy.timestamp) / 60)
+
+            net_pnl = gross_pnl - fee
+
+            trade = Trade(
+                timestamp=pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d %H:%M:%S"),
+                pair="BTC/USDT",
+                side="SELL",
+                entry_price=entry_price,
+                exit_price=price,
+                quantity=quantity,
+                gross_pnl=round(gross_pnl, 4),
+                fee=round(fee, 4),
+                net_pnl=round(net_pnl, 4),
+                grid_level=grid_level,
+                duration_min=duration_min,
+                rsi=rsi_val,
+                bb_upper=bb_upper,
+                bb_lower=bb_lower,
+                ema_200=ema_val,
+                atr=atr_val,
+                grid_state=grid_state_val,
+            )
+            self.journal.log_trade(trade)
+            logger.info(
+                f"SELL filled: {quantity} BTC @ ${price:,.2f} | "
+                f"PnL: ${net_pnl:+.2f} | Level {grid_level}"
+            )
