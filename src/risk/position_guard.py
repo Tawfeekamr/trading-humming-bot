@@ -5,16 +5,20 @@ class PositionGuard:
         self.min_usdt_reserve = min_usdt_reserve
         self.total_capital = total_capital
 
-    def btc_exposure_pct(self, current_btc: float, btc_price: float) -> float:
+    def btc_exposure_pct(self, current_btc: float, btc_price: float,
+                         equity: float = 0.0) -> float:
         btc_value = current_btc * btc_price
-        return (btc_value / self.total_capital) * 100
+        base = equity if equity > 0 else self.total_capital
+        return (btc_value / base) * 100
 
     def can_place_order(self, current_btc: float, btc_price: float,
-                        current_usdt: float, order_usdt: float) -> bool:
+                        current_usdt: float, order_usdt: float,
+                        equity: float = 0.0) -> bool:
         if (current_usdt - order_usdt) < self.min_usdt_reserve:
             return False
+        base = equity if equity > 0 else self.total_capital
         new_btc_value = (current_btc * btc_price) + order_usdt
-        new_exposure_pct = (new_btc_value / self.total_capital) * 100
+        new_exposure_pct = (new_btc_value / base) * 100
         if new_exposure_pct > self.max_btc_exposure_pct:
             return False
         return True

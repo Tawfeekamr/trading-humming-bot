@@ -446,7 +446,7 @@ class TAGridBTCUSDT(StrategyV2Base):
         usdt_bal = self._get_usdt_balance()
         btc_bal = self._get_btc_balance()
         equity = self._estimate_equity(current_price)
-        exposure_pct = self.position_guard.btc_exposure_pct(btc_bal, current_price)
+        exposure_pct = self.position_guard.btc_exposure_pct(btc_bal, current_price, equity)
 
         for level in grid.buy_levels:
             if level["price"] >= current_price:
@@ -457,6 +457,7 @@ class TAGridBTCUSDT(StrategyV2Base):
                 btc_price=current_price,
                 current_usdt=usdt_bal,
                 order_usdt=order_usdt,
+                equity=equity,
             ):
                 self.event_log.log("order_blocked",
                     side="BUY",
@@ -638,7 +639,7 @@ class TAGridBTCUSDT(StrategyV2Base):
         usdt_bal = self._get_usdt_balance()
         btc_bal = self._get_btc_balance()
         equity = self._estimate_equity(price)
-        exposure_pct = self.position_guard.btc_exposure_pct(btc_bal, price)
+        exposure_pct = self.position_guard.btc_exposure_pct(btc_bal, price, equity)
 
         self.event_log.log("trade_filled",
             side=side,
