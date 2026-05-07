@@ -1,0 +1,24 @@
+version: "3.8"
+
+services:
+  bot:
+    build: .
+    env_file: .env
+    restart: unless-stopped
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./config:/app/config
+    ports:
+      - "8501:8501"
+
+  dashboard:
+    build: .
+    command: streamlit run app.py --server.port 8501 --server.address 0.0.0.0
+    env_file: .env
+    ports:
+      - "8502:8501"
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      - bot
