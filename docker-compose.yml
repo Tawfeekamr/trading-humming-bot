@@ -3,21 +3,23 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    env_file: .env
+    env_file: .env.docker
     restart: unless-stopped
     volumes:
       - ./data:/home/hummingbot/data
       - ./logs:/home/hummingbot/logs
       - ./config:/home/hummingbot/config
       - ./hummingbot_files:/home/hummingbot/hummingbot_files
+      - ./.env:/home/hummingbot/.env
 
   dashboard:
     build:
       context: .
       dockerfile: Dockerfile.dashboard
-    env_file: .env
+    env_file: .env.docker
     restart: unless-stopped
     ports:
       - "8502:8502"
     volumes:
       - ./data:/app/data:ro
+      - ./.env:/app/.env

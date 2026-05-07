@@ -17,6 +17,9 @@ import sys
 from pathlib import Path
 from datetime import datetime, timezone
 
+from dotenv import load_dotenv
+load_dotenv()
+
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
