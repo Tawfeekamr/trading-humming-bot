@@ -284,6 +284,10 @@ class TAGridBTCUSDT(ScriptStrategyBase):
         for level in grid.sell_levels:
             if level["price"] <= current_price:
                 continue
+            # Check we have enough BTC to sell
+            btc_balance = self._get_btc_balance()
+            if level["quantity"] > btc_balance:
+                continue
             self.place_order(
                 connector_name=self.exchange,
                 trading_pair=self.trading_pair,
@@ -467,3 +471,13 @@ class TAGridBTCUSDT(ScriptStrategyBase):
                 f"SELL filled: {quantity} BTC @ ${price:,.2f} | "
                 f"PnL: ${net_pnl:+.2f} | Level {grid_level}"
             )
+
+    def on_stop(self):
+        self._cancel_all_orders()
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.create_task(self.telegram.alert_shutdown("graceful stop"))
+        except RuntimeError:
+            pass
+        logger.info("Grid bot stopped — all orders cancelled")
