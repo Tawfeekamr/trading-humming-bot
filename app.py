@@ -15,7 +15,7 @@ Shows:
 import os
 import sys
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 import streamlit as st
 import pandas as pd
@@ -88,7 +88,7 @@ def fmt_pnl(val):
 col_title, col_refresh = st.columns([5, 1])
 with col_title:
     st.markdown("## 🤖 BTC/USDT Grid Bot — P&L Dashboard")
-    st.caption(f"Last refreshed: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC")
+    st.caption(f"Last refreshed: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC")
 with col_refresh:
     st.markdown("<br>", unsafe_allow_html=True)
     if st.button("🔄 Refresh", use_container_width=True):
@@ -225,7 +225,7 @@ if trades:
     ]
 
     styled = display.style \
-        .applymap(color_pnl, subset=["Net PnL", "Gross PnL"]) \
+        .map(color_pnl, subset=["Net PnL", "Gross PnL"]) \
         .format({
             "Entry $":   "${:.2f}",
             "Exit $":    "${:.2f}",
@@ -297,7 +297,7 @@ for label, s in periods.items():
 
 df_periods = pd.DataFrame(period_data)
 styled_p = df_periods.style \
-    .applymap(color_pnl, subset=["Net PnL", "Gross PnL", "Best Trade", "Worst Trade"]) \
+    .map(color_pnl, subset=["Net PnL", "Gross PnL", "Best Trade", "Worst Trade"]) \
     .format({
         "Gross PnL":   lambda v: fmt_pnl(v),
         "Fees":        "${:.2f}",

@@ -2,6 +2,7 @@ import os
 import asyncio
 import logging
 from typing import Optional
+from datetime import datetime, timezone
 from telegram import Bot
 from telegram.constants import ParseMode
 
@@ -58,4 +59,4 @@ class TelegramBot:
     @staticmethod
     def _now() -> str:
         from datetime import datetime
-        return datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")

@@ -7,7 +7,7 @@ Provides P&L queries by hour / day / week / month / all-time.
 
 import sqlite3
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from dataclasses import dataclass, asdict
 from typing import Optional
@@ -148,19 +148,19 @@ class TradeJournal:
         return s
 
     def summary_this_hour(self) -> dict:
-        since = (datetime.utcnow() - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
+        since = (datetime.now(timezone.utc) - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
         return self._summary(since)
 
     def summary_today(self) -> dict:
-        since = datetime.utcnow().strftime("%Y-%m-%d 00:00:00")
+        since = datetime.now(timezone.utc).strftime("%Y-%m-%d 00:00:00")
         return self._summary(since)
 
     def summary_this_week(self) -> dict:
-        since = (datetime.utcnow() - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
+        since = (datetime.now(timezone.utc) - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
         return self._summary(since)
 
     def summary_this_month(self) -> dict:
-        since = datetime.utcnow().strftime("%Y-%m-01 00:00:00")
+        since = datetime.now(timezone.utc).strftime("%Y-%m-01 00:00:00")
         return self._summary(since)
 
     def summary_all_time(self) -> dict:
@@ -168,7 +168,7 @@ class TradeJournal:
 
     def equity_curve(self, days: int = 30) -> list[dict]:
         """Daily cumulative net PnL for equity curve chart."""
-        since = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
+        since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
         return self._query("""
             SELECT
                 DATE(timestamp)     AS date,
