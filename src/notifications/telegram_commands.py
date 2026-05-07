@@ -31,8 +31,13 @@ class TelegramCommandHandler:
 
     def start(self):
         if not self._token or not self._chat_id:
-            logger.warning("Telegram commands disabled — missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID")
+            logger.warning(
+                f"Telegram commands disabled — token={'SET' if self._token else 'MISSING'}, "
+                f"chat_id={'SET' if self._chat_id else 'MISSING'}"
+            )
             return
+
+        logger.info(f"Telegram commands starting with chat_id={self._chat_id}")
 
         self._app = Application.builder().token(self._token).build()
         self._app.add_handler(CommandHandler("status", self._cmd_status, filters=filters.Chat(int(self._chat_id))))

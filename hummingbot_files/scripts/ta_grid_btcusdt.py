@@ -14,10 +14,22 @@ from dotenv import load_dotenv
 from pathlib import Path
 
 # Load .env from known locations (mounted at /home/hummingbot/.env in Docker)
+_dotenv_loaded = False
 for _env_path in [Path("/home/hummingbot/.env"), Path(__file__).parent.parent / ".env", Path(".env")]:
     if _env_path.exists():
-        load_dotenv(_env_path)
+        load_dotenv(_env_path, override=True)
+        _dotenv_loaded = True
+        print(f"[STARTUP] Loaded .env from {_env_path}")
         break
+if not _dotenv_loaded:
+    print("[STARTUP] WARNING: No .env file found — Telegram and secrets unavailable")
+
+# Diagnostic: confirm Telegram vars are loaded
+_tg_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+_tg_chat = os.environ.get("TELEGRAM_CHAT_ID", "")
+print(f"[STARTUP] TELEGRAM_BOT_TOKEN: {'SET (' + _tg_token[:6] + '...)' if _tg_token else 'NOT SET'}")
+print(f"[STARTUP] TELEGRAM_CHAT_ID: {'SET (' + _tg_chat[:4] + '...)' if _tg_chat else 'NOT SET'}")
+print(f"[STARTUP] ENV: {os.environ.get('ENV', 'NOT SET')}")
 
 # Global uncaught exception handler — logs + Telegram alert
 def _global_exception_handler(exc_type, exc_value, exc_tb):
