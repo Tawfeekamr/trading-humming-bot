@@ -478,12 +478,11 @@ class TAGridBTCUSDT(StrategyV2Base):
                 btc_balance=round(btc_bal, 8),
                 equity=round(equity, 2),
             )
-            self.place_order(
+            self.buy(
                 connector_name=self.exchange,
                 trading_pair=self.trading_pair,
-                order_type=OrderType.LIMIT,
-                trade_type=TradeType.BUY,
                 amount=Decimal(str(level["quantity"])),
+                order_type=OrderType.LIMIT,
                 price=Decimal(str(level["price"])),
             )
 
@@ -510,27 +509,27 @@ class TAGridBTCUSDT(StrategyV2Base):
                 btc_balance=round(btc_balance, 8),
                 equity=round(equity, 2),
             )
-            self.place_order(
+            self.sell(
                 connector_name=self.exchange,
                 trading_pair=self.trading_pair,
-                order_type=OrderType.LIMIT,
-                trade_type=TradeType.SELL,
                 amount=Decimal(str(level["quantity"])),
+                order_type=OrderType.LIMIT,
                 price=Decimal(str(level["price"])),
             )
 
     def _cancel_all_orders(self, reason: str = "grid_refresh"):
-        connector = self.connectors.get(self.exchange)
-        if not connector:
-            return
-        for order in list(getattr(connector, "in_flight_orders", {}).values()):
+        try:
+            active = self.get_active_orders(self.exchange)
+        except Exception:
+            active = []
+        for order in active:
             self.event_log.log("order_cancelled",
                 order_id=str(order.client_order_id),
-                side=str(order.trade_type),
+                side="BUY" if order.is_buy else "SELL",
                 price=float(order.price),
                 reason=reason,
             )
-            self.cancel_order(self.exchange, order.trading_pair, order.client_order_id)
+            self.cancel(self.exchange, order.trading_pair, order.client_order_id)
 
     # ── Balance Helpers ──────────────────────────────────────────────
 
