@@ -52,12 +52,26 @@ def _check_auth():
         st.warning("Dashboard authentication not configured. Set DASHBOARD_USERNAME and DASHBOARD_PASSWORD_HASH environment variables.")
         st.stop()
 
-    config = {
-        "credentials": {"usernames": {username: {"name": username, "password": password_hash}}},
-        "cookie": {"name": "grid_bot_dashboard", "key": os.environ.get("COOKIE_SECRET", "change-me-in-prod"), "expiry_days": 30},
+    credentials = {
+        "usernames": {
+            username: {
+                "name": username,
+                "password": password_hash,
+            }
+        }
+    }
+    cookie = {
+        "name": "grid_bot_dashboard",
+        "key": os.environ.get("COOKIE_SECRET", "change-me-in-prod"),
+        "expiry_days": 30,
     }
 
-    authenticator = stauth.Authenticate(config)
+    authenticator = stauth.Authenticate(
+        credentials=credentials,
+        cookie_name=cookie["name"],
+        cookie_key=cookie["key"],
+        cookie_expiry_days=cookie["expiry_days"],
+    )
 
     authenticator.login(location="main")
 
