@@ -188,3 +188,75 @@ class TradeJournal:
         best  = self._query("SELECT * FROM trades ORDER BY net_pnl DESC LIMIT ?", (limit,))
         worst = self._query("SELECT * FROM trades ORDER BY net_pnl ASC  LIMIT ?", (limit,))
         return {"best": best, "worst": worst}
+
+    # ── Fee Analysis ───────────────────────────────────────────────────
+
+    def fee_summary(self, since: str) -> dict:
+        """Aggregate fee analysis for a period."""
+        rows = self._query("""
+            SELECT
+                SUM(fee)                     AS total_fees,
+                SUM(gross_pnl)               AS total_gross_pnl,
+                SUM(ABS(gross_pnl))          AS abs_gross,
+                COUNT(*)                     AS trade_count
+            FROM trades
+            WHERE timestamp >= ?
+        """, (since,))
+        r = rows[0]
+
+        # Handle NULL results when no trades match
+        total_fees = r.get("total_fees") or 0
+        total_gross_pnl = r.get("total_gross_pnl") or 0
+        abs_gross = r.get("abs_gross") or 0
+        trade_count = r.get("trade_count") or 0
+
+        fee_to_gross_ratio = round(total_fees / abs_gross, 4) if abs_gross > 0 else 0
+        avg_fee_per_trade = round(total_fees / trade_count, 4) if trade_count > 0 else 0
+
+        return {
+            "total_fees": total_fees,
+            "total_gross_pnl": total_gross_pnl,
+            "fee_to_gross_ratio": fee_to_gross_ratio,
+            "trade_count": trade_count,
+            "avg_fee_per_trade": avg_fee_per_trade
+        }
+
+    def is_overtrading(self, threshold: float = 0.30) -> dict:
+        """Check if today's fees exceed threshold of abs(gross_pnl)."""
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d 00:00:00")
+        rows = self._query("""
+            SELECT
+                SUM(fee)             AS total_fees,
+                SUM(ABS(gross_pnl))  AS abs_gross_pnl
+            FROM trades
+            WHERE timestamp >= ?
+        """, (today,))
+        r = rows[0]
+
+        total_fees = r.get("total_fees") or 0
+        abs_gross_pnl = r.get("abs_gross_pnl") or 0
+
+        fee_to_gross_ratio = round(total_fees / abs_gross_pnl, 4) if abs_gross_pnl > 0 else 0
+        is_overtrading = fee_to_gross_ratio > threshold
+
+        return {
+            "is_overtrading": is_overtrading,
+            "fee_to_gross_ratio": fee_to_gross_ratio,
+            "total_fees": total_fees,
+            "abs_gross_pnl": abs_gross_pnl,
+            "threshold": threshold
+        }
+
+    def fee_time_series(self, days: int = 30) -> list[dict]:
+        """Daily cumulative fee series."""
+        since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+        return self._query("""
+            SELECT
+                DATE(timestamp)     AS date,
+                SUM(fee)            AS daily_fees,
+                SUM(SUM(fee)) OVER (ORDER BY DATE(timestamp)) AS cumulative_fees
+            FROM trades
+            WHERE timestamp >= ?
+            GROUP BY DATE(timestamp)
+            ORDER BY date ASC
+        """, (since,))
