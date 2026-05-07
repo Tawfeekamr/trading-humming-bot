@@ -670,10 +670,11 @@ class TAGridBTCUSDT(StrategyV2Base):
             self._safe_telegram_crash("did_fill_order", str(e), tb)
 
     def _did_fill_order_inner(self, event):
-        order = event.order
-        side = "BUY" if str(order.trade_type) == "BUY" else "SELL"
-        price = float(order.price)
-        quantity = float(order.amount)
+        # Hummingbot v2 OrderFilledEvent: attributes are directly on event, not event.order
+        side = "BUY" if str(getattr(event, 'trade_type', '')) == "BUY" else "SELL"
+        price = float(getattr(event, 'price', 0))
+        quantity = float(getattr(event, 'amount', 0))
+        order_id = str(getattr(event, 'order_id', getattr(event, 'client_order_id', '')))
 
         rsi_val = 0.0
         bb_upper = 0.0
@@ -720,7 +721,7 @@ class TAGridBTCUSDT(StrategyV2Base):
 
         if side == "BUY":
             self._open_buys[grid_level] = FillRecord(
-                order_id=str(order.client_order_id),
+                order_id=order_id,
                 side=side,
                 price=price,
                 quantity=quantity,
