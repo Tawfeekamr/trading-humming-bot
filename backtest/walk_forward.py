@@ -7,7 +7,13 @@ Target: Consistent results across bull/bear/sideways
 """
 
 import os
+import sys
+from pathlib import Path
 import pandas as pd
+
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from backtest.reporting import compute_benchmark, monte_carlo_simulation
 
 
 def fetch_data(symbol: str = "BTCUSDT", start: str = "2024-01-01",
@@ -80,6 +86,10 @@ def walk_forward_test(df: pd.DataFrame, train_months: int = 6,
         pf = apply_strategy(test_df)
         stats = pf.stats()
 
+        # Benchmark: HODL return over same test window
+        test_close = test_df["Close"]
+        bench_return = (test_close.iloc[-1] / test_close.iloc[0] - 1) * 100
+
         results.append({
             "train_period": f"{current.date()} -> {train_end.date()}",
             "test_period": f"{train_end.date()} -> {test_end.date()}",
@@ -88,6 +98,7 @@ def walk_forward_test(df: pd.DataFrame, train_months: int = 6,
             "max_drawdown": stats.get("Max Drawdown [%]", 0),
             "trades": stats.get("Total Trades", 0),
             "win_rate": stats.get("Win Rate [%]", 0),
+            "benchmark_return": bench_return,
         })
         current = train_end
 
@@ -97,6 +108,25 @@ def walk_forward_test(df: pd.DataFrame, train_months: int = 6,
     print(f"\nAverage Return: {results_df['total_return'].mean():.2f}%")
     print(f"Average Sharpe: {results_df['sharpe'].mean():.2f}")
     print(f"Worst Drawdown: {results_df['max_drawdown'].min():.2f}%")
+
+    # Strategy vs HODL comparison
+    if not results_df.empty:
+        outperformed = (results_df["total_return"] > results_df["benchmark_return"]).sum()
+        total_windows = len(results_df)
+        print(f"\nStrategy outperformed HODL in {outperformed}/{total_windows} windows")
+
+        # Monte Carlo on aggregate returns
+        all_returns = []
+        for _, row in results_df.iterrows():
+            all_returns.append(row["total_return"])
+        if all_returns:
+            ret_series = pd.Series(all_returns)
+            mc = monte_carlo_simulation(ret_series, n_sims=500, n_days=90)
+            print(f"\nMonte Carlo (90-day projection):")
+            print(f"  Worst case (p5):  {mc['p5'].iloc[-1]:.2f}%")
+            print(f"  Median (p50):     {mc['p50'].iloc[-1]:.2f}%")
+            print(f"  Best case (p95):  {mc['p95'].iloc[-1]:.2f}%")
+
     return results_df
 
 

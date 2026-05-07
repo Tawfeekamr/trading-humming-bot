@@ -7,9 +7,15 @@ Target: Sharpe > 1.2, Max Drawdown < 8%, 200+ trades
 """
 
 import os
+import sys
+from pathlib import Path
 import pandas as pd
 import numpy as np
 from itertools import product
+
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from backtest.reporting import compute_benchmark, monte_carlo_simulation, BacktestResult, format_report
 
 
 def fetch_data(symbol: str = "BTCUSDT", start: str = "2025-01-01",
@@ -34,10 +40,14 @@ def run_sweep(df: pd.DataFrame):
 
     results = []
 
+    # Compute HODL benchmark
+    close = df["Close"]
+    benchmark = compute_benchmark(close)
+    print(f"\n=== HODL BENCHMARK: {benchmark.iloc[-1]:.2f}% ===")
+
     for bb_p, rsi_low, rsi_high, atr_m in product(
         bb_periods, rsi_oversold, rsi_overbought, atr_multipliers
     ):
-        close = df["Close"]
 
         sma = close.rolling(bb_p).mean()
         std = close.rolling(bb_p).std()
@@ -112,6 +122,19 @@ def run_sweep(df: pd.DataFrame):
     print(f"\n=== PASSING CRITERIA: {len(passing)} / {len(results_df)} ===")
     if not passing.empty:
         print(passing.to_string(index=False))
+
+    # Monte Carlo on best parameters
+    if not results_df.empty:
+        best = results_df.iloc[0]
+        print(f"\n=== MONTE CARLO SIMULATION (best params, 90-day projection) ===")
+        print(f"Best params: BB={int(best['bb_period'])}, RSI<{best['rsi_oversold']}/{best['rsi_overbought']}, ATR×{best['atr_multiplier']}")
+        # Use daily return approximation for MC
+        daily_ret = close.resample('D').last().pct_change().dropna()
+        mc = monte_carlo_simulation(daily_ret, n_sims=500, n_days=90)
+        print(f"  5th percentile:  {mc['p5'].iloc[-1]:.2f}%")
+        print(f"  50th percentile: {mc['p50'].iloc[-1]:.2f}%")
+        print(f"  95th percentile: {mc['p95'].iloc[-1]:.2f}%")
+
     return results_df
 
 
