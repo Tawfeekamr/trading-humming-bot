@@ -32,6 +32,7 @@ from src.risk.circuit_breaker import CircuitBreaker
 from src.risk.position_guard import PositionGuard
 from src.data.candle_feed import CandleFeed
 from src.notifications.telegram_bot import TelegramBot
+from src.notifications.telegram_commands import TelegramCommandHandler
 from src.journal.trade_journal import TradeJournal, Trade
 from src.health import update_health, set_halted, start_health_server
 from src.logging_config import setup_logging
@@ -178,9 +179,35 @@ class TAGridBTCUSDT(ScriptStrategyBase):
         self._grid_dirty = True
         self._last_state_alert_time: dict[str, float] = {}  # state -> last Telegram alert timestamp
         self._state_alert_cooldown = 900  # 15 minutes between repeated state alerts
+        self._manual_pause = False
+        self._last_sod_reset: Optional_fills[str] = None
+        self._fee_rate: float = 0.00075  # default 0.075% standard tier
 
         self.event_log.log("bot_started", mode=self.env, capital=self.capital_usdt,
                            levels=self.levels, testnet=self.is_testnet)
+
+        # Fee tier auto-detection
+        try:
+            fee_info = self.candle_feed.client.get_trade_fee(symbol="BTCUSDT")
+            if fee_info and len(fee_info) > 0:
+                maker_fee = float(fee_info[0].get("makerCommission", 0.00075))
+                if maker_fee > 0:
+                    self._fee_rate = maker_fee
+            logger.info(f"Fee rate: {self._fee_rate * 100:.4f}%")
+            self.event_log.log("fee_detected", rate=self._fee_rate)
+        except Exception as e:
+            logger.info(f"Fee detection skipped, using default 0.075%: {e}")
+
+        # Start Telegram command handler
+        self._telegram_commands = TelegramCommandHandler(
+            journal=self.journal,
+            state_machine=self.state_machine,
+            circuit_breaker=self.circuit_breaker,
+            position_guard=self.position_guard,
+            event_logger=self.event_log,
+            strategy=self,
+        )
+        self._telegram_commands.start()
 
         try:
             loop = asyncio.get_event_loop()
@@ -195,7 +222,24 @@ class TAGridBTCUSDT(ScriptStrategyBase):
         if self.circuit_breaker.halted:
             return
 
+        if self._manual_pause:
+            if self._grid_dirty:
+                self._cancel_all_orders("manual_pause")
+                self._grid_dirty = False
+            return
+
         now = pd.Timestamp.now(tz="UTC")
+
+        # Start-of-day equity reset
+        today_str = now.strftime("%Y-%m-%d")
+        if self._last_sod_reset != today_str:
+            equity = self._estimate_equity(
+                self._cached_indicators[4] if self._cached_indicators else 0
+            )
+            self.circuit_breaker.set_start_of_day_equity(equity)
+            self._last_sod_reset = today_str
+            self.event_log.log("daily_reset", equity=round(equity, 2))
+            logger.info(f"Start-of-day equity reset: ${equity:.2f}")
 
         should_fetch = (
             self._last_candle_time is None or
@@ -527,7 +571,7 @@ class TAGridBTCUSDT(ScriptStrategyBase):
             mid = bb_r.mid
             grid_level = int(abs(price - mid) / (self.atr_multiplier * atr_val)) if atr_val > 0 else 0
 
-        fee_est = quantity * price * 0.00075
+        fee_est = quantity * price * self._fee_rate
         usdt_bal = self._get_usdt_balance()
         btc_bal = self._get_btc_balance()
         equity = self._estimate_equity(price)
@@ -707,6 +751,8 @@ class TAGridBTCUSDT(ScriptStrategyBase):
     # ── Graceful Shutdown ────────────────────────────────────────────
 
     def on_stop(self):
+        if hasattr(self, "_telegram_commands"):
+            self._telegram_commands.stop()
         self._cancel_all_orders("graceful_shutdown")
         self.event_log.log("bot_stopped", reason="graceful stop")
         self.event_log.close()

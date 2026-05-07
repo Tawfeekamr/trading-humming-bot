@@ -1,27 +1,39 @@
+# ════════════════════════════════════════════════════════════════════
+#  TA-Enhanced BTC/USDT Grid Bot — Strategy Configuration
+#  All non-secret settings live here. Loaded by the strategy script.
+# ════════════════════════════════════════════════════════════════════
+
+# ── Pair & Exchange ───────────────────────────────────────────────
 pair: "BTC-USDT"
 exchange: "binance"
 timeframe: "1h"
 
+# ── Grid Parameters ───────────────────────────────────────────────
 grid:
-  levels: 8
-  capital_usdt: 200
-  min_usdt_reserve: 50
-  order_refresh_time: 60
+  levels: 10                  # Orders on each side of mid price
+  capital_usdt: 1000          # Total USDT allocated
+  min_usdt_reserve: 100       # Always keep this in reserve
+  order_refresh_time: 60      # Seconds between order refresh
 
+# ── Indicator Settings ────────────────────────────────────────────
 indicators:
   bollinger:
     period: 20
     std_dev: 2.0
+
   rsi:
     period: 14
-    oversold: 35
-    overbought: 70
+    oversold: 35              # Grid activates below this
+    overbought: 70            # Grid pauses above this
+
   ema:
-    period: 200
+    period: 200               # Trend filter: only run grid above EMA200
+
   atr:
     period: 14
-    spacing_multiplier: 0.8
+    spacing_multiplier: 0.8   # Grid spacing = ATR × this value
 
+# ── Grid State Rules ──────────────────────────────────────────────
 rules:
   activate_conditions:
     - "price > ema_200"
@@ -33,7 +45,12 @@ rules:
     - "rsi < 35"
     - "price near lower_bb"
 
+# ── Risk Management ───────────────────────────────────────────────
 risk:
-  max_drawdown_pct: 10
-  daily_loss_limit_pct: 5
-  max_btc_exposure_pct: 80
+  max_drawdown_pct: 10        # Bot halts if portfolio drops this % from peak
+  daily_loss_limit_pct: 5     # Circuit breaker if -5% in 24h
+  max_btc_exposure_pct: 80    # Never deploy more than 80% capital in BTC
+
+# ── Dashboard ─────────────────────────────────────────────────────
+dashboard:
+  port: 8501

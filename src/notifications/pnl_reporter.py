@@ -19,6 +19,7 @@ class PnLReporter:
         self.journal = journal
         self.bot = Bot(token=os.environ["TELEGRAM_BOT_TOKEN"])
         self.chat_id = os.environ["TELEGRAM_CHAT_ID"]
+        self.env = os.environ.get("ENV", "paper").upper()
 
     async def _send(self, message: str):
         await self.bot.send_message(
@@ -48,7 +49,8 @@ class PnLReporter:
             f"💸 Fee:        -${abs(trade.fee):.2f}\n"
             f"<b>📊 Net PnL:   {sign}${trade.net_pnl:.2f}</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"RSI: {trade.rsi:.1f}  |  Grid: {trade.grid_state}"
+            f"RSI: {trade.rsi:.1f}  |  Grid: {trade.grid_state}\n"
+            f"🌐 Mode: {self.env}"
         )
         await self._send(msg)
 
@@ -70,6 +72,7 @@ class PnLReporter:
             f"💰 Gross:      {sign}${s['gross_pnl']:.2f}\n"
             f"💸 Fees:       -${abs(s['total_fees']):.2f}\n"
             f"<b>📈 Net PnL:   {sign}${s['net_pnl']:.2f}</b>\n"
+            f"🌐 Mode: {self.env}"
         )
         await self._send(msg)
 
@@ -101,6 +104,7 @@ class PnLReporter:
             f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"📆 This Week:   {sign_w}${sw['net_pnl']:.2f}\n"
             f"🗓 This Month:  {sign_m}${sm['net_pnl']:.2f}\n"
+            f"🌐 Mode: {self.env}\n"
         )
 
         if best:
@@ -143,6 +147,7 @@ class PnLReporter:
             f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"🏦 All-time Net:   {sign_a}${sa['net_pnl']:.2f}\n"
             f"📊 All-time Trades:{sa['total_trades']}\n"
+            f"🌐 Mode: {self.env}\n"
         )
         await self._send(msg)
 

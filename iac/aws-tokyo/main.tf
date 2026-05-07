@@ -37,30 +37,41 @@ resource "aws_route_table_association" "public_assoc" {
   route_table_id = aws_route_table.public_rt.id
 }
 
+# ── IAM ROLE FOR SESSION MANAGER ────────────────────────────────────
+
+resource "aws_iam_role" "ssm_role" {
+  name = "trading-bot-ssm-role"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action = "sts:AssumeRole"
+      Effect = "Allow"
+      Principal = { Service = "ec2.amazonaws.com" }
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "ssm_core" {
+  role       = aws_iam_role.ssm_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+
+resource "aws_iam_instance_profile" "ssm_profile" {
+  name = "trading-bot-ssm-profile"
+  role = aws_iam_role.ssm_role.name
+}
+
 # ── SECURITY ────────────────────────────────────────────────────────
 
 resource "aws_security_group" "bot_sg" {
   name        = "trading-bot-sg"
-  description = "Allow SSH and Dashboard access"
+  description = "No inbound ports - access via Session Manager only"
   vpc_id      = aws_vpc.trading_vpc.id
 
-  # SSH Access (Restrict to your IP)
-  ingress {
-    from_port   = 22
-    to_port     = 22
-    protocol    = "tcp"
-    cidr_blocks = [var.my_ip]
-  }
+  # No SSH ingress — Session Manager handles access
+  # No dashboard ingress — use port forwarding via Session Manager
 
-  # Streamlit Dashboard Port
-  ingress {
-    from_port   = 8501
-    to_port     = 8501
-    protocol    = "tcp"
-    cidr_blocks = [var.my_ip]
-  }
-
-  # Outbound to Exchange APIs
+  # Outbound: Exchange APIs, Docker pulls, Binance WebSocket
   egress {
     from_port   = 0
     to_port     = 0
@@ -71,7 +82,6 @@ resource "aws_security_group" "bot_sg" {
 
 # ── COMPUTE ─────────────────────────────────────────────────────────
 
-# Get latest Amazon Linux 2023 AMI
 data "aws_ami" "amazon_linux_2023" {
   most_recent = true
   owners      = ["amazon"]
@@ -86,16 +96,16 @@ resource "aws_instance" "bot_server" {
   ami           = data.aws_ami.amazon_linux_2023.id
   instance_type = "t3.medium"
   subnet_id     = aws_subnet.public_subnet.id
-  key_name      = var.key_pair_name
 
   vpc_security_group_ids = [aws_security_group.bot_sg.id]
+  iam_instance_profile   = aws_iam_instance_profile.ssm_profile.name
 
   root_block_device {
-    volume_size = 20 # 20GB is plenty for logs/DB
+    volume_size = 20
     volume_type = "gp3"
   }
 
-  # Bootstrap: Install Docker & Docker Compose
+  # Bootstrap: Docker + Session Manager agent (pre-installed on AL2023)
   user_data = <<-EOF
               #!/bin/bash
               yum update -y
@@ -103,10 +113,13 @@ resource "aws_instance" "bot_server" {
               systemctl start docker
               systemctl enable docker
               usermod -a -G docker ec2-user
-              
-              # Install Docker Compose
+
+              # Docker Compose
               curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
               chmod +x /usr/local/bin/docker-compose
+
+              # Install Session Manager plugin helper
+              yum install -y https://s3.amazonaws.com/session-manager-downloads/plugin/latest/linux_64bit/session-manager-plugin.rpm
               EOF
 
   tags = {
@@ -115,7 +128,7 @@ resource "aws_instance" "bot_server" {
 }
 
 # ── ELASTIC IP ──────────────────────────────────────────────────────
-# Stable IP for Binance Whitelisting
+# Stable IP for Binance API whitelisting (outbound IP)
 
 resource "aws_eip" "bot_eip" {
   instance = aws_instance.bot_server.id

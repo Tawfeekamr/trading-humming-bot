@@ -16,6 +16,7 @@ APScheduler>=3.10
 
 # Dashboard
 streamlit>=1.30
+streamlit-authenticator>=0.3.0
 plotly>=5.18
 
 # Backtesting

@@ -1,31 +1,99 @@
 # AWS Tokyo Infrastructure as Code (IaC)
 
-This directory contains the Terraform configuration to deploy your trading bot to AWS Tokyo (ap-northeast-1).
+Terraform configuration to deploy the trading bot to AWS Tokyo (ap-northeast-1).
 
-## 🚀 Deployment Instructions
+## Why Tokyo?
 
-1.  **Install Terraform**: [Download here](https://developer.hashicorp.com/terraform/downloads).
-2.  **AWS CLI**: Ensure you have an AWS account and the [AWS CLI configured](https://docs.aws.amazon.com/cli/latest/userguide/cli-chap-configure.html) with credentials.
-3.  **Initialize**:
-    ```bash
-    terraform init
-    ```
-4.  **Plan**:
-    ```bash
-    terraform plan
-    ```
-5.  **Apply**:
-    ```bash
-    terraform apply
-    ```
+~35ms latency to Binance servers — critical for grid trading where order placement speed matters.
 
-## 🔒 Security Notes
-- The server is configured with a **Security Group** that only allows SSH from your IP.
-- An **Elastic IP** is created. **You must whitelist this IP in your Binance API settings.**
-- Secrets (API Keys) are NOT managed by Terraform. Use a `.env` file on the server or AWS Secrets Manager.
+## Access: AWS Session Manager (No SSH)
 
-## 🛠️ After Deployment
-Once the server is up:
-1.  Connect via SSH: `ssh -i keys/bot-key.pem ec2-user@<ELASTIC_IP>`
-2.  The server comes pre-installed with **Docker** and **Docker Compose**.
-3.  Clone your repo and run `docker-compose up -d`.
+This setup uses **AWS Session Manager** instead of SSH. Benefits:
+- No SSH keys to manage
+- No inbound ports open (zero attack surface)
+- Works from any IP — no need to update security groups when your IP changes
+- All sessions logged to CloudTrail for audit
+
+## Prerequisites
+
+1. **AWS CLI** installed and configured (`aws configure`)
+2. **Terraform** >= 1.0 ([Download](https://developer.hashicorp.com/terraform/downloads))
+3. **Session Manager plugin** for AWS CLI:
+   ```bash
+   # macOS
+   brew install session-manager-plugin
+   # Linux
+   curl "https://session-manager-downloads.s3.amazonaws.com/plugin/latest/linux_64bit/session-manager-plugin.rpm" -o session-manager-plugin.rpm
+   sudo yum install -y session-manager-plugin.rpm
+   ```
+
+## Deploy
+
+```bash
+cd iac/aws-tokyo
+terraform init
+terraform plan
+terraform apply
+```
+
+After apply, note the outputs:
+- `bot_server_public_ip` — whitelist this on Binance
+- `instance_id` — the EC2 instance ID
+- `ssm_connect_command` — command to connect
+
+## Connect to the Server
+
+```bash
+# Shell access
+aws ssm start-session --target i-xxxxxxxxxxxxx
+
+# Or use the output directly:
+terraform output -raw ssm_connect_command | bash
+```
+
+## Access the Streamlit Dashboard
+
+Use port forwarding through Session Manager:
+
+```bash
+aws ssm start-session \
+  --target i-xxxxxxxxxxxxx \
+  --document-name AWS-StartPortForwardingSession \
+  --parameters '{"portNumber":["8502"]}'
+```
+
+Then open `https://localhost:8502` in your browser.
+
+## Deploy the Bot
+
+Once connected via Session Manager:
+
+```bash
+# Upload your project (from your local machine)
+aws ssm put-parameter --name "/trading-bot/env" --type SecureString --value "$(cat .env)" --overwrite
+
+# On the server
+cd /home/ec2-user
+git clone <your-repo-url> trading-bot
+cd trading-bot
+
+# Create .env file
+aws ssm get-parameter --name "/trading-bot/env" --with-decryption --query 'Parameter.Value' --output text > .env
+
+# Start the bot
+docker-compose up -d
+```
+
+## Whitelist on Binance
+
+1. Get the Elastic IP: `terraform output bot_server_public_ip`
+2. Go to Binance → API Management → Edit restrictions
+3. Add the IP to the whitelist
+
+## Security
+
+- **No inbound ports** — the security group allows zero ingress
+- **Session Manager** — IAM-authenticated access, no SSH keys
+- **Elastic IP** — stable outbound IP for Binance API whitelisting
+- **All egress allowed** — Exchange APIs, Docker pulls, WebSocket connections
+- Secrets are NOT managed by Terraform — use `.env` on the server or AWS Secrets Manager

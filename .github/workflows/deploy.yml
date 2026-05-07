@@ -1,0 +1,97 @@
+name: Deploy Grid Bot
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  PYTHON_VERSION: "3.12"
+  AWS_REGION: "ap-northeast-1"
+
+jobs:
+  # ── Stage 1: Run Tests ───────────────────────────────────────────
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run unit tests
+        run: pytest tests/ -v --tb=short
+
+  # ── Stage 2: Deploy to EC2 via SSM (main only) ──────────────────
+  deploy:
+    name: Deploy to AWS Tokyo
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Deploy via SSM
+        uses: peterkimzz/aws-ssm-send-command@master
+        id: ssm
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          instance-ids: ${{ secrets.EC2_INSTANCE_ID }}
+          working-directory: /home/ec2-user/trading-humming-bot
+          command: |
+            set -e
+
+            echo "Pulling latest code..."
+            git pull origin main
+
+            echo "Rebuilding containers..."
+            docker-compose down
+            docker-compose up -d --build
+
+            echo "Waiting for health check..."
+            sleep 10
+
+            if docker-compose ps | grep -q "Up"; then
+              echo "Deploy successful at $(date)"
+            else
+              echo "Deploy failed - containers not running"
+              docker-compose logs --tail=50
+              exit 1
+            fi
+
+      - name: Notify Telegram on success
+        if: success()
+        run: |
+          COMMIT_MSG=$(echo "${{ github.event.head_commit.message }}" | head -1)
+          curl -s -X POST \
+            "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
+            -d parse_mode=HTML \
+            -d text="🚀 <b>Bot Deployed</b>%0A━━━━━━━━━━━━━━━━━━━━━━%0A📝 ${COMMIT_MSG}%0A🔗 Commit: ${{ github.sha }}%0A⏰ $(date -u +'%Y-%m-%d %H:%M UTC')"
+
+      - name: Notify Telegram on failure
+        if: failure()
+        run: |
+          curl -s -X POST \
+            "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
+            -d parse_mode=HTML \
+            -d text="❌ <b>Deploy FAILED</b>%0A━━━━━━━━━━━━━━━━━━━━━━%0A🔗 Commit: ${{ github.sha }}%0ACheck: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"

@@ -21,6 +21,9 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
+import streamlit_authenticator as stauth
+import yaml
+from yaml import SafeLoader
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from src.journal.trade_journal import TradeJournal
@@ -32,8 +35,49 @@ st.set_page_config(
     page_title="Grid Bot Dashboard",
     page_icon="🤖",
     layout="wide",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="expanded",
 )
+
+
+# ── Authentication ─────────────────────────────────────────────────
+
+def _check_auth():
+    username = os.environ.get("DASHBOARD_USERNAME")
+    password_hash = os.environ.get("DASHBOARD_PASSWORD_HASH")
+
+    if not username or not password_hash:
+        st.warning("Dashboard authentication not configured. Set DASHBOARD_USERNAME and DASHBOARD_PASSWORD_HASH environment variables.")
+        st.stop()
+
+    config = {
+        "credentials": {"usernames": {username: {"name": username, "password": password_hash}}},
+        "cookie": {"name": "grid_bot_dashboard", "key": os.environ.get("COOKIE_SECRET", "change-me-in-prod"), "expiry_days": 30},
+    }
+
+    authenticator = stauth.Authenticate(
+        config["credentials"],
+        config["cookie"]["name"],
+        config["cookie"]["key"],
+        config["cookie"]["expiry_days"],
+    )
+
+    authenticator.login(location="main")
+
+    if st.session_state.get("authentication_status") is not True:
+        if st.session_state.get("authentication_status") is False:
+            st.error("Username or password is incorrect")
+        elif st.session_state.get("authentication_status") is None:
+            st.info("Please enter your credentials")
+        st.stop()
+
+    return authenticator
+
+authenticator = _check_auth()
+
+with st.sidebar:
+    st.write(f"Logged in as **{st.session_state['username']}**")
+    if authenticator.logout("Logout", location="sidebar"):
+        st.rerun()
 
 # ── Dark Theme CSS ─────────────────────────────────────────────────
 
@@ -237,7 +281,20 @@ if trades:
         })
 
     st.dataframe(styled, use_container_width=True, height=400)
-    st.caption(f"Showing {len(display)} trades")
+
+    col_count, col_csv = st.columns([5, 1])
+    with col_count:
+        st.caption(f"Showing {len(display)} trades")
+    with col_csv:
+        csv_data = df.to_csv(index=False).encode("utf-8")
+        today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        st.download_button(
+            "📥 Download CSV",
+            data=csv_data,
+            file_name=f"trades_export_{today_str}.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
 else:
     st.info("No trades logged yet.")
 
