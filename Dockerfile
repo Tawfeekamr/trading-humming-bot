@@ -19,6 +19,6 @@ RUN mkdir -p /home/hummingbot/data /home/hummingbot/logs
 
 ENV SCRIPT_CONFIG=ta_grid_btcusdt.yml
 ENV HEADLESS_MODE=true
-ENV CONFIG_PASSWORD=
+ENV CONFIG_PASSWORD=tradingbot
 
 CMD ["/bin/bash", "-c", "source /opt/conda/etc/profile.d/conda.sh && conda activate hummingbot && python ./bin/hummingbot_quickstart.py"]
