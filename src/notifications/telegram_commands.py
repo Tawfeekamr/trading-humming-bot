@@ -1,16 +1,15 @@
-"""
-telegram_commands.py — Interactive Telegram bot commands.
-Runs a python-telegram-bot Application in a background thread.
-"""
-
 import os
 import time
 import logging
 import threading
+import asyncio
+import urllib.request
+from pathlib import Path
 from datetime import datetime, timezone
 
 from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes, filters
+from telegram.constants import ParseMode
+from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +27,7 @@ class TelegramCommandHandler:
         self._started_at = time.time()
         self._app = None
         self._thread = None
+        self._loop = None
 
     def start(self):
         if not self._token or not self._chat_id:
@@ -37,36 +37,80 @@ class TelegramCommandHandler:
             )
             return
 
-        logger.info(f"Telegram commands starting with chat_id={self._chat_id}")
+        logger.info(f"Telegram commands initializing with chat_id={self._chat_id}")
 
-        self._app = Application.builder().token(self._token).build()
-        self._app.add_handler(CommandHandler("status", self._cmd_status, filters=filters.Chat(int(self._chat_id))))
-        self._app.add_handler(CommandHandler("pnl", self._cmd_pnl, filters=filters.Chat(int(self._chat_id))))
-        self._app.add_handler(CommandHandler("pause", self._cmd_pause, filters=filters.Chat(int(self._chat_id))))
-        self._app.add_handler(CommandHandler("resume", self._cmd_resume, filters=filters.Chat(int(self._chat_id))))
-        self._app.add_handler(CommandHandler("reset", self._cmd_reset, filters=filters.Chat(int(self._chat_id))))
-        self._app.add_handler(CommandHandler("trades", self._cmd_trades, filters=filters.Chat(int(self._chat_id))))
-        self._app.add_handler(CommandHandler("logs", self._cmd_logs, filters=filters.Chat(int(self._chat_id))))
-        self._app.add_handler(CommandHandler("errors", self._cmd_errors, filters=filters.Chat(int(self._chat_id))))
-        self._app.add_handler(CommandHandler("help", self._cmd_help, filters=filters.Chat(int(self._chat_id))))
+        try:
+            # Build application
+            self._app = Application.builder().token(self._token).build()
 
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
-        logger.info("Telegram command handler started")
+            # Add command handlers with strict chat filter
+            chat_filter = filters.Chat(int(self._chat_id))
+            self._app.add_handler(CommandHandler("status", self._cmd_status, filters=chat_filter))
+            self._app.add_handler(CommandHandler("pnl", self._cmd_pnl, filters=chat_filter))
+            self._app.add_handler(CommandHandler("pause", self._cmd_pause, filters=chat_filter))
+            self._app.add_handler(CommandHandler("resume", self._cmd_resume, filters=chat_filter))
+            self._app.add_handler(CommandHandler("reset", self._cmd_reset, filters=chat_filter))
+            self._app.add_handler(CommandHandler("trades", self._cmd_trades, filters=chat_filter))
+            self._app.add_handler(CommandHandler("logs", self._cmd_logs, filters=chat_filter))
+            self._app.add_handler(CommandHandler("errors", self._cmd_errors, filters=chat_filter))
+            self._app.add_handler(CommandHandler("help", self._cmd_help, filters=chat_filter))
+
+            # Add catch-all debug handler to identify chat ID mismatches
+            # This logs ANY message that wasn't handled by the above (including from other chats)
+            self._app.add_handler(MessageHandler(filters.ALL & ~chat_filter, self._cmd_debug))
+
+            # Start in background thread
+            self._thread = threading.Thread(target=self._run, daemon=True, name="TelegramBotThread")
+            self._thread.start()
+            logger.info("Telegram command handler thread launched")
+
+        except Exception as e:
+            logger.error(f"Failed to start Telegram commands: {e}", exc_info=True)
 
     def stop(self):
         if self._app:
-            self._app.stop_running()
-            logger.info("Telegram command handler stopped")
+            # Note: stopping a running polling from another thread is complex in PTB v20+
+            # We rely on daemon thread for clean exit if needed
+            logger.info("Telegram command handler stop requested")
 
     def _run(self):
-        self._app.run_polling(drop_pending_updates=True, close_loop=False)
+        """Runs the telegram polling in a dedicated event loop."""
+        try:
+            self._loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self._loop)
+            
+            # Verifying connectivity via low-level urllib (bypass library state)
+            try:
+                ping_msg = f"📡 <b>Telegram Command Handler Online</b>\nChat ID: <code>{self._chat_id}</code>"
+                url = f"https://api.telegram.org/bot{self._token}/sendMessage?chat_id={self._chat_id}&parse_mode=HTML&text={urllib.request.quote(ping_msg)}"
+                urllib.request.urlopen(url, timeout=5)
+                logger.info("Startup ping sent successfully")
+            except Exception as e:
+                logger.warning(f"Startup ping failed (bot might still work): {e}")
+
+            logger.info("Starting Telegram polling loop...")
+            self._app.run_polling(drop_pending_updates=True, close_loop=False)
+        except Exception as e:
+            logger.error(f"Telegram polling thread crashed: {e}", exc_info=True)
 
     def _fmt_pnl(self, val):
         if val is None:
             return "$0.00"
         sign = "+" if val >= 0 else ""
         return f"{sign}${val:.2f}"
+
+    async def _cmd_debug(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Logs details of messages that failed the chat filter."""
+        chat = update.effective_chat
+        user = update.effective_user
+        msg_text = update.message.text if update.message and update.message.text else "NON-TEXT"
+        logger.warning(
+            f"Unauthorized access attempt! "
+            f"Chat ID: {chat.id} ({chat.type}), "
+            f"User: {user.username if user else 'N/A'} ({user.id if user else 'N/A'}), "
+            f"Message: {msg_text}"
+        )
+        # We don't reply to unauthorized users to avoid being a spam vector
 
     async def _cmd_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
@@ -77,7 +121,7 @@ class TelegramCommandHandler:
             state = self.state_machine.state.value
             mode = self.strategy.env.upper()
             cb_status = "🛑 HALTED" if self.circuit_breaker.halted else "✅ OK"
-            pending = self.strategy.order_tracker.total_pending
+            pending = self.strategy._grid_order_tracker.total_pending
 
             await update.message.reply_text(
                 f"📊 <b>Bot Status</b>\n"
@@ -86,7 +130,8 @@ class TelegramCommandHandler:
                 f"Mode: {mode}\n"
                 f"Circuit Breaker: {cb_status}\n"
                 f"⏱ Uptime: {hours}h {minutes}m {secs}s\n"
-                f"📋 Pending orders: {pending}"
+                f"📋 Pending orders: {pending}",
+                parse_mode=ParseMode.HTML
             )
         except Exception as e:
             logger.error(f"Error in /status: {e}")
@@ -105,7 +150,8 @@ class TelegramCommandHandler:
                 f"📅 Today: {self._fmt_pnl(today['net_pnl'])}  ({today['total_trades']} trades, {today['win_rate']}%)\n"
                 f"📆 Week:  {self._fmt_pnl(week['net_pnl'])}\n"
                 f"🗓 Month: {self._fmt_pnl(month['net_pnl'])}\n"
-                f"🏦 All:   {self._fmt_pnl(alltime['net_pnl'])}  ({alltime['total_trades']} trades)"
+                f"🏦 All:   {self._fmt_pnl(alltime['net_pnl'])}  ({alltime['total_trades']} trades)",
+                parse_mode=ParseMode.HTML
             )
         except Exception as e:
             logger.error(f"Error in /pnl: {e}")
@@ -113,7 +159,7 @@ class TelegramCommandHandler:
 
     async def _cmd_pause(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
-            self.strategy.manual_pause = True
+            self.strategy._manual_pause = True
             self.event_log.log("manual_pause", source="telegram")
             await update.message.reply_text(
                 "⏸️ Grid manually paused. Use /resume to restart."
@@ -124,7 +170,7 @@ class TelegramCommandHandler:
 
     async def _cmd_resume(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
-            self.strategy.manual_pause = False
+            self.strategy._manual_pause = False
             self.event_log.log("manual_resume", source="telegram")
             await update.message.reply_text(
                 "🟢 Grid resumed. Will activate on next valid signal."
@@ -135,11 +181,12 @@ class TelegramCommandHandler:
 
     async def _cmd_reset(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
-            indicators = self.strategy.get_indicators_snapshot()
+            self.circuit_breaker.halted = False
             equity = self.strategy._estimate_equity(
-                indicators[4] if indicators else 0
+                self.strategy._cached_indicators[4] if self.strategy._cached_indicators else 0
             )
-            self.circuit_breaker.reset(equity)
+            self.circuit_breaker.set_peak_equity(max(equity, 0))
+            self.circuit_breaker.set_start_of_day_equity(max(equity, 0))
             self.event_log.log("circuit_breaker_reset", source="telegram", equity=round(equity, 2))
             await update.message.reply_text(
                 "🔄 Circuit breaker reset. Bot will resume on next tick."
@@ -165,7 +212,7 @@ class TelegramCommandHandler:
                 side = t.get("side", "?")
                 lines.append(f"{emoji} {side} @ ${price:,.0f}  {sign}${pnl:.2f}  {ts[:16]}")
 
-            await update.message.reply_text("\n".join(lines))
+            await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
         except Exception as e:
             logger.error(f"Error in /trades: {e}")
             await update.message.reply_text(f"⚠️ Error getting trades: {e}")
@@ -180,7 +227,10 @@ class TelegramCommandHandler:
                 return
             lines = log_file.read_text(encoding="utf-8", errors="replace").strip().split("\n")
             tail = "\n".join(lines[-30:])
-            await update.message.reply_text(f"📜 <b>Last 30 log lines ({today})</b>\n━━━━━━━━━━━━━━━━━━━━━━\n<pre>{tail[:3900]}</pre>")
+            await update.message.reply_text(
+                f"📜 <b>Last 30 log lines ({today})</b>\n━━━━━━━━━━━━━━━━━━━━━━\n<pre>{tail[:3900]}</pre>",
+                parse_mode=ParseMode.HTML
+            )
         except Exception as e:
             logger.error(f"Error in /logs: {e}")
             await update.message.reply_text(f"⚠️ Error reading logs: {e}")
@@ -197,7 +247,10 @@ class TelegramCommandHandler:
                 await update.message.reply_text("✅ No errors logged — all clean!")
                 return
             tail = "\n".join(lines[-40:])
-            await update.message.reply_text(f"🚨 <b>Recent Errors</b>\n━━━━━━━━━━━━━━━━━━━━━━\n<pre>{tail[:3900]}</pre>")
+            await update.message.reply_text(
+                f"🚨 <b>Recent Errors</b>\n━━━━━━━━━━━━━━━━━━━━━━\n<pre>{tail[:3900]}</pre>",
+                parse_mode=ParseMode.HTML
+            )
         except Exception as e:
             logger.error(f"Error in /errors: {e}")
             await update.message.reply_text(f"⚠️ Error reading crash log: {e}")
@@ -214,5 +267,6 @@ class TelegramCommandHandler:
             "/trades — Last 5 closed trades\n"
             "/logs — Last 30 lines from today's bot log\n"
             "/errors — Recent errors and crashes\n"
-            "/help — This message"
+            "/help — This message",
+            parse_mode=ParseMode.HTML
         )
