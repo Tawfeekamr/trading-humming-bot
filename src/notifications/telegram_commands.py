@@ -62,24 +62,28 @@ class TelegramCommandHandler:
         return f"{sign}${val:.2f}"
 
     async def _cmd_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        uptime_s = int(time.time() - self._started_at)
-        hours, remainder = divmod(uptime_s, 3600)
-        minutes, secs = divmod(remainder, 60)
+        try:
+            uptime_s = int(time.time() - self._started_at)
+            hours, remainder = divmod(uptime_s, 3600)
+            minutes, secs = divmod(remainder, 60)
 
-        state = self.state_machine.state.value
-        mode = self.strategy.env.upper()
-        cb_status = "🛑 HALTED" if self.circuit_breaker.halted else "✅ OK"
-        pending = self.strategy.order_tracker.total_pending
+            state = self.state_machine.state.value
+            mode = self.strategy.env.upper()
+            cb_status = "🛑 HALTED" if self.circuit_breaker.halted else "✅ OK"
+            pending = self.strategy._grid_order_tracker.total_pending
 
-        await update.message.reply_text(
-            f"📊 <b>Bot Status</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"Grid: <b>{state}</b>\n"
-            f"Mode: {mode}\n"
-            f"Circuit Breaker: {cb_status}\n"
-            f"⏱ Uptime: {hours}h {minutes}m {secs}s\n"
-            f"📋 Pending orders: {pending}"
-        )
+            await update.message.reply_text(
+                f"📊 <b>Bot Status</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"Grid: <b>{state}</b>\n"
+                f"Mode: {mode}\n"
+                f"Circuit Breaker: {cb_status}\n"
+                f"⏱ Uptime: {hours}h {minutes}m {secs}s\n"
+                f"📋 Pending orders: {pending}"
+            )
+        except Exception as e:
+            logger.error(f"Error in /status: {e}")
+            await update.message.reply_text(f"⚠️ Error getting status: {e}")
 
     async def _cmd_pnl(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         today = self.journal.summary_today()

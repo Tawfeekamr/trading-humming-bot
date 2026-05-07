@@ -10,7 +10,13 @@ import asyncio
 import logging
 from decimal import Decimal
 from dotenv import load_dotenv
-load_dotenv()
+from pathlib import Path
+
+# Load .env from known locations (mounted at /home/hummingbot/.env in Docker)
+for _env_path in [Path("/home/hummingbot/.env"), Path(__file__).parent.parent / ".env", Path(".env")]:
+    if _env_path.exists():
+        load_dotenv(_env_path)
+        break
 from typing import Dict, Optional
 from dataclasses import dataclass as dataclass_fills
 from typing import Optional as Optional_fills
