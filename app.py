@@ -57,12 +57,7 @@ def _check_auth():
         "cookie": {"name": "grid_bot_dashboard", "key": os.environ.get("COOKIE_SECRET", "change-me-in-prod"), "expiry_days": 30},
     }
 
-    authenticator = stauth.Authenticate(
-        config["credentials"],
-        config["cookie"]["name"],
-        config["cookie"]["key"],
-        config["cookie"]["expiry_days"],
-    )
+    authenticator = stauth.Authenticate(config)
 
     authenticator.login(location="main")
 
