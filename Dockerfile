@@ -2,15 +2,20 @@ FROM hummingbot/hummingbot:latest
 
 WORKDIR /home/hummingbot
 
-COPY requirements.txt /home/hummingbot/
-RUN pip install --no-cache-dir -r requirements.txt
+# Install additional Python packages needed by our strategy
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt && rm /tmp/requirements.txt
 
-COPY . /home/hummingbot/
+# Copy only our custom code — do NOT overwrite the entire /home/hummingbot/
+# or the hummingbot source gets wiped out
+COPY src/ /home/hummingbot/src/
+COPY hummingbot_files/ /home/hummingbot/hummingbot_files/
+COPY config/ /home/hummingbot/config/
 
-RUN mkdir -p data logs
-
+# Ensure data/logs dirs exist with correct ownership
 USER root
-RUN chown -R hummingbot:hummingbot /home/hummingbot
+RUN mkdir -p /home/hummingbot/data /home/hummingbot/logs \
+    && chown -R hummingbot:hummingbot /home/hummingbot/data /home/hummingbot/logs /home/hummingbot/src /home/hummingbot/hummingbot_files /home/hummingbot/config
 USER hummingbot
 
 CMD ["start", "--script", "hummingbot_files/scripts/ta_grid_btcusdt.py"]
