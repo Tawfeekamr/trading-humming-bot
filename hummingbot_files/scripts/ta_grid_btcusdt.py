@@ -15,6 +15,7 @@ from typing import Optional as Optional_fills
 import time as time_mod
 
 import pandas as pd
+import yaml
 
 import sys
 from pathlib import Path
@@ -95,7 +96,50 @@ class TAGridBTCUSDT(ScriptStrategyBase):
         "binance": {"BTC-USDT": {}}
     }
 
+    @staticmethod
+    def _load_config() -> dict:
+        config_paths = [
+            Path("config/strategy.yaml"),
+            Path(__file__).parent.parent.parent / "config" / "strategy.yaml",
+        ]
+        for path in config_paths:
+            if path.exists():
+                with open(path) as f:
+                    return yaml.safe_load(f)
+        return {}
+
     def __init__(self, connectors: Dict):
+        cfg = self._load_config()
+        # Override class attributes from config file
+        grid_cfg = cfg.get("grid", {})
+        ind_cfg = cfg.get("indicators", {})
+        risk_cfg = cfg.get("risk", {})
+
+        # Grid settings (env vars take precedence, then config, then defaults)
+        self.levels = int(os.environ.get("GRID_LEVELS", grid_cfg.get("levels", self.levels)))
+        self.capital_usdt = float(os.environ.get("GRID_CAPITAL_USDT", grid_cfg.get("capital_usdt", self.capital_usdt)))
+        self.min_reserve = float(os.environ.get("MIN_USDT_RESERVE", grid_cfg.get("min_usdt_reserve", self.min_reserve)))
+        self.order_refresh_time = grid_cfg.get("order_refresh_time", self.order_refresh_time)
+
+        # Indicator settings
+        bb_cfg = ind_cfg.get("bollinger", {})
+        self.bb_period = bb_cfg.get("period", self.bb_period)
+        self.bb_std = bb_cfg.get("std_dev", self.bb_std)
+        rsi_cfg = ind_cfg.get("rsi", {})
+        self.rsi_period = rsi_cfg.get("period", self.rsi_period)
+        self.rsi_overbought = rsi_cfg.get("overbought", self.rsi_overbought)
+        self.rsi_oversold = rsi_cfg.get("oversold", self.rsi_oversold)
+        ema_cfg = ind_cfg.get("ema", {})
+        self.ema_period = ema_cfg.get("period", self.ema_period)
+        atr_cfg = ind_cfg.get("atr", {})
+        self.atr_period = atr_cfg.get("period", self.atr_period)
+        self.atr_multiplier = atr_cfg.get("spacing_multiplier", self.atr_multiplier)
+
+        # Risk settings
+        self.max_drawdown_pct = float(os.environ.get("MAX_DRAWDOWN_PCT", risk_cfg.get("max_drawdown_pct", self.max_drawdown_pct)))
+        self.daily_loss_limit_pct = risk_cfg.get("daily_loss_limit_pct", self.daily_loss_limit_pct)
+        self.max_btc_exposure_pct = float(os.environ.get("MAX_BTC_EXPOSURE_PCT", risk_cfg.get("max_btc_exposure_pct", self.max_btc_exposure_pct)))
+
         super().__init__(connectors)
 
         self.bb = BollingerBands(self.bb_period, self.bb_std)
