@@ -9,6 +9,8 @@ import os
 import asyncio
 import logging
 from decimal import Decimal
+from dotenv import load_dotenv
+load_dotenv()
 from typing import Dict, Optional
 from dataclasses import dataclass as dataclass_fills
 from typing import Optional as Optional_fills

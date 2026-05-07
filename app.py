@@ -139,12 +139,30 @@ def fmt_pnl(val):
     return val
 
 
+# ── Mode Indicator ──────────────────────────────────────────────────
+
+_env_mode = os.environ.get("ENV", "paper").lower()
+_is_live = _env_mode == "live"
+_mode_label = "LIVE TRADING" if _is_live else "PAPER TRADING"
+_mode_emoji = "🔴" if _is_live else "🟡"
+_mode_color = "#f85149" if _is_live else "#d29922"
+_mode_border = "#da3633" if _is_live else "#9e6a03"
+
 # ── Header ─────────────────────────────────────────────────────────
 
-col_title, col_refresh = st.columns([5, 1])
+col_title, col_mode, col_refresh = st.columns([4, 1.5, 1])
 with col_title:
     st.markdown("## 🤖 BTC/USDT Grid Bot — P&L Dashboard")
     st.caption(f"Last refreshed: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC")
+with col_mode:
+    st.markdown(
+        f'<div style="text-align:center; margin-top:24px; padding:8px 16px; '
+        f'border:2px solid {_mode_color}; border-radius:8px; background:rgba(0,0,0,0.3);">'
+        f'<span style="font-size:20px;">{_mode_emoji}</span> '
+        f'<span style="font-size:16px; font-weight:700; color:{_mode_color};">{_mode_label}</span>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
 with col_refresh:
     st.markdown("<br>", unsafe_allow_html=True)
     if st.button("🔄 Refresh", use_container_width=True):
@@ -174,7 +192,7 @@ def metric_card(label, value, is_pnl=True):
         <div class="metric-value {cls}">{val_f}</div>
     </div>"""
 
-c1, c2, c3, c4, c5, c6 = st.columns(6)
+c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
 cards = [
     (c1, "Today Net PnL",   today["net_pnl"]),
     (c2, "This Week",       week["net_pnl"]),
@@ -182,13 +200,20 @@ cards = [
     (c4, "All-Time Net",    alltime["net_pnl"]),
     (c5, "Total Trades",    alltime["total_trades"], False),
     (c6, "Win Rate",        f"{today['win_rate']}%", False),
+    (c7, "Mode",            _mode_label, False),
 ]
 for item in cards:
     col = item[0]
     label, value = item[1], item[2]
     is_pnl = item[3] if len(item) > 3 else True
     with col:
-        if is_pnl:
+        if label == "Mode":
+            st.markdown(f"""
+            <div class="metric-card" style="border-color:{_mode_color};">
+                <div class="metric-label">{label}</div>
+                <div class="metric-value" style="color:{_mode_color};">{_mode_emoji} {value}</div>
+            </div>""", unsafe_allow_html=True)
+        elif is_pnl:
             st.markdown(metric_card(label, value, True), unsafe_allow_html=True)
         else:
             st.markdown(f"""
@@ -378,4 +403,4 @@ styled_p = df_periods.style \
 st.dataframe(styled_p, use_container_width=True, hide_index=True)
 
 st.markdown("---")
-st.caption("TA-Enhanced BTC/USDT Grid Bot · Hummingbot v2 · Binance FZE · Dubai, UAE")
+st.caption(f"TA-Enhanced BTC/USDT Grid Bot · {_mode_label} · Hummingbot v2 · Binance FZE · Dubai, UAE")
