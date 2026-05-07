@@ -49,7 +49,7 @@ resource "aws_security_group" "bot_sg" {
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"] # WARNING: Replace with your actual IP e.g. "203.0.113.5/32"
+    cidr_blocks = [var.my_ip]
   }
 
   # Streamlit Dashboard Port
@@ -57,7 +57,7 @@ resource "aws_security_group" "bot_sg" {
     from_port   = 8501
     to_port     = 8501
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = [var.my_ip]
   }
 
   # Outbound to Exchange APIs
