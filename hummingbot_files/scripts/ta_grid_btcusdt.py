@@ -176,6 +176,8 @@ class TAGridBTCUSDT(ScriptStrategyBase):
         self._last_candle_time = None
         self._cached_indicators = None
         self._grid_dirty = True
+        self._last_state_alert_time: dict[str, float] = {}  # state -> last Telegram alert timestamp
+        self._state_alert_cooldown = 900  # 15 minutes between repeated state alerts
 
         self.event_log.log("bot_started", mode=self.env, capital=self.capital_usdt,
                            levels=self.levels, testnet=self.is_testnet)
@@ -448,6 +450,15 @@ class TAGridBTCUSDT(ScriptStrategyBase):
     # ── Notifications ────────────────────────────────────────────────
 
     def _notify_state_change(self, new_state, prev_state, trigger_reason, price, rsi, bb, ema, atr):
+        # Cooldown: skip Telegram if we alerted this same state within 15 min
+        state_key = new_state.value
+        now = time_mod.time()
+        last_alert = self._last_state_alert_time.get(state_key, 0)
+        if now - last_alert < self._state_alert_cooldown:
+            logger.info(f"State alert suppressed (cooldown): {state_key}")
+            return
+        self._last_state_alert_time[state_key] = now
+
         spacing = atr * self.atr_multiplier if atr else 0
 
         if new_state == GridState.ACTIVE:
