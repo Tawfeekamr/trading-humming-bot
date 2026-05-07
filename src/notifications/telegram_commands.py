@@ -41,6 +41,8 @@ class TelegramCommandHandler:
         self._app.add_handler(CommandHandler("resume", self._cmd_resume, filters=filters.Chat(int(self._chat_id))))
         self._app.add_handler(CommandHandler("reset", self._cmd_reset, filters=filters.Chat(int(self._chat_id))))
         self._app.add_handler(CommandHandler("trades", self._cmd_trades, filters=filters.Chat(int(self._chat_id))))
+        self._app.add_handler(CommandHandler("logs", self._cmd_logs, filters=filters.Chat(int(self._chat_id))))
+        self._app.add_handler(CommandHandler("errors", self._cmd_errors, filters=filters.Chat(int(self._chat_id))))
         self._app.add_handler(CommandHandler("help", self._cmd_help, filters=filters.Chat(int(self._chat_id))))
 
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -164,6 +166,38 @@ class TelegramCommandHandler:
             logger.error(f"Error in /trades: {e}")
             await update.message.reply_text(f"⚠️ Error getting trades: {e}")
 
+    async def _cmd_logs(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        try:
+            log_dir = os.environ.get("LOG_DIR", "logs")
+            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            log_file = Path(log_dir) / f"bot_{today}.log"
+            if not log_file.exists():
+                await update.message.reply_text(f"No log file for today ({today}).")
+                return
+            lines = log_file.read_text(encoding="utf-8", errors="replace").strip().split("\n")
+            tail = "\n".join(lines[-30:])
+            await update.message.reply_text(f"📜 <b>Last 30 log lines ({today})</b>\n━━━━━━━━━━━━━━━━━━━━━━\n<pre>{tail[:3900]}</pre>")
+        except Exception as e:
+            logger.error(f"Error in /logs: {e}")
+            await update.message.reply_text(f"⚠️ Error reading logs: {e}")
+
+    async def _cmd_errors(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        try:
+            log_dir = os.environ.get("LOG_DIR", "logs")
+            crash_file = Path(log_dir) / "crashes.log"
+            if not crash_file.exists():
+                await update.message.reply_text("✅ No errors logged — all clean!")
+                return
+            lines = crash_file.read_text(encoding="utf-8", errors="replace").strip().split("\n")
+            if not lines or (len(lines) == 1 and not lines[0]):
+                await update.message.reply_text("✅ No errors logged — all clean!")
+                return
+            tail = "\n".join(lines[-40:])
+            await update.message.reply_text(f"🚨 <b>Recent Errors</b>\n━━━━━━━━━━━━━━━━━━━━━━\n<pre>{tail[:3900]}</pre>")
+        except Exception as e:
+            logger.error(f"Error in /errors: {e}")
+            await update.message.reply_text(f"⚠️ Error reading crash log: {e}")
+
     async def _cmd_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "📖 <b>Available Commands</b>\n"
@@ -174,5 +208,7 @@ class TelegramCommandHandler:
             "/resume — Resume grid trading\n"
             "/reset — Reset circuit breaker after halt\n"
             "/trades — Last 5 closed trades\n"
+            "/logs — Last 30 lines from today's bot log\n"
+            "/errors — Recent errors and crashes\n"
             "/help — This message"
         )
