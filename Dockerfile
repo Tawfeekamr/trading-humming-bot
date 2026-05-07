@@ -17,8 +17,12 @@ COPY config/ta_grid_btcusdt_conf.yml /home/hummingbot/conf/scripts/ta_grid_btcus
 # Ensure data/logs dirs exist
 RUN mkdir -p /home/hummingbot/data /home/hummingbot/logs
 
+# Copy entrypoint script
+COPY docker-entrypoint.sh /home/hummingbot/docker-entrypoint.sh
+RUN chmod +x /home/hummingbot/docker-entrypoint.sh
+
 ENV SCRIPT_CONFIG=ta_grid_btcusdt.yml
 ENV HEADLESS_MODE=true
 ENV CONFIG_PASSWORD=tradingbot
 
-CMD ["/bin/bash", "-c", "source /opt/conda/etc/profile.d/conda.sh && conda activate hummingbot && python ./bin/hummingbot_quickstart.py"]
+CMD ["/home/hummingbot/docker-entrypoint.sh"]
