@@ -8,14 +8,8 @@ class CandleFeed:
                  testnet: bool = False):
         self.symbol = symbol
         self.interval = interval
-        if testnet:
-            api_key = os.environ.get("BINANCE_TESTNET_API_KEY", "")
-            api_secret = os.environ.get("BINANCE_TESTNET_API_SECRET", "")
-            self.client = Client(api_key, api_secret, testnet=True)
-        else:
-            api_key = os.environ.get("BINANCE_API_KEY", "")
-            api_secret = os.environ.get("BINANCE_API_SECRET", "")
-            self.client = Client(api_key, api_secret)
+        # Always use real Binance for candle data (public endpoint, no keys needed)
+        self.client = Client("", "")
 
     def fetch_candles(self, limit: int = 200) -> pd.DataFrame:
         klines = self.client.get_klines(
