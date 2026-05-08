@@ -18,14 +18,41 @@ fi
 source /opt/conda/etc/profile.d/conda.sh
 conda activate hummingbot
 
-# Background: patch MQTT config once Hummingbot creates conf_client.yml.
-# The file is generated during quickstart startup, so we watch for it.
+# Pre-create conf_client.yml so Hummingbot reads our MQTT settings on first load.
+# If the file already exists (recreated container but mounted conf), patch it.
 CONF="/home/hummingbot/conf/conf_client.yml"
-(
-    while [ ! -f "$CONF" ]; do sleep 0.5; done
+mkdir -p /home/hummingbot/conf
+if [ -f "$CONF" ]; then
     sed -i 's/mqtt_host: localhost/mqtt_host: mosquitto/' "$CONF"
     sed -i 's/mqtt_autostart: false/mqtt_autostart: true/' "$CONF"
-    echo "MQTT config patched: host=mosquitto, autostart=true"
-) &
+    echo "Patched existing conf_client.yml"
+else
+    # Write minimal config with correct MQTT settings.
+    # Hummingbot will merge/expand this with defaults for missing fields.
+    cat > "$CONF" <<'YAML'
+mqtt_bridge:
+  mqtt_host: mosquitto
+  mqtt_port: 1883
+  mqtt_username: ''
+  mqtt_password: ''
+  mqtt_namespace: hbot
+  mqtt_ssl: false
+  mqtt_logger: true
+  mqtt_notifier: true
+  mqtt_commands: true
+  mqtt_events: true
+  mqtt_external_events: true
+  mqtt_autostart: true
+YAML
+    echo "Created conf_client.yml with mosquitto MQTT config"
+fi
+
+# Patch MQTT retry loop to break after first failure instead of retrying forever.
+# Without this, the infinite retry blocks the event loop and prevents ticks (Issue #8012).
+MQTT_CMD="/home/hummingbot/hummingbot/client/command/mqtt_command.py"
+if [ -f "$MQTT_CMD" ] && ! grep -q "break  # grid-bot" "$MQTT_CMD"; then
+    sed -i 's/await asyncio.sleep(self._mqtt_sleep_rate_autostart_retry)/break  # grid-bot: fail fast so event loop ticks/' "$MQTT_CMD"
+    echo "Patched MQTT retry loop"
+fi
 
 exec python ./bin/hummingbot_quickstart.py
