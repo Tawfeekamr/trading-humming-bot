@@ -53,6 +53,24 @@ class TestBollingerBands:
         expected_mid = sample_candles.iloc[-20:].mean()
         assert abs(result.mid - expected_mid) < 0.01
 
+    def test_constant_prices_returns_none(self):
+        """When all prices are identical, BB should return None (no volatility)."""
+        closes = pd.Series([100_000.0] * 25)
+        bb = BollingerBands(period=20, std_dev=2.0)
+        result = bb.calculate(closes)
+        # With zero std, all bands collapse to the same price - invalid for trading
+        assert result is None
+
+    def test_invalid_period_raises_error(self):
+        """Non-positive period should raise ValueError."""
+        with pytest.raises(ValueError, match="period must be positive"):
+            BollingerBands(period=0, std_dev=2.0)
+
+    def test_invalid_std_dev_raises_error(self):
+        """Non-positive std_dev should raise ValueError."""
+        with pytest.raises(ValueError, match="std_dev must be positive"):
+            BollingerBands(period=20, std_dev=0.0)
+
 
 class TestRSI:
     def test_calculate_returns_float(self, sample_candles):
@@ -77,6 +95,18 @@ class TestRSI:
         result = rsi.calculate(closes)
         assert result == 100.0
 
+    def test_constant_prices_returns_100(self):
+        """When all prices are the same, RSI should return 100 (avg_loss=0 case)."""
+        closes = pd.Series([100_000.0] * 20)
+        rsi = RSI(period=14)
+        result = rsi.calculate(closes)
+        assert result == 100.0
+
+    def test_invalid_period_raises_error(self):
+        """Non-positive period should raise ValueError."""
+        with pytest.raises(ValueError, match="period must be positive"):
+            RSI(period=0)
+
 
 class TestEMA:
     def test_calculate_returns_float(self, sample_candles):
@@ -100,6 +130,18 @@ class TestEMA:
         ema = EMA(period=200)
         result = ema.calculate(closes)
         assert abs(result - 50_000.0) < 0.01
+
+    def test_nan_in_series_returns_none(self):
+        """When input series contains NaN, EMA should return None."""
+        closes = pd.Series([100_000.0, 101_000.0, float('nan'), 100_500.0])
+        ema = EMA(period=2)
+        result = ema.calculate(closes)
+        assert result is None
+
+    def test_invalid_period_raises_error(self):
+        """Non-positive period should raise ValueError."""
+        with pytest.raises(ValueError, match="period must be positive"):
+            EMA(period=0)
 
 
 class TestATR:
@@ -129,3 +171,23 @@ class TestATR:
         atr = ATR(period=14)
         result = atr.calculate(highs, lows, closes)
         assert result is None
+
+    def test_constant_prices_returns_none(self):
+        """When all prices are identical, ATR should return None (no volatility)."""
+        closes = pd.Series([100_000.0] * 20)
+        highs = pd.Series([100_000.0] * 20)
+        lows = pd.Series([100_000.0] * 20)
+        atr = ATR(period=14)
+        result = atr.calculate(highs, lows, closes)
+        # With zero volatility, ewm returns NaN - should return None
+        assert result is None
+
+    def test_invalid_period_raises_error(self):
+        """Non-positive period should raise ValueError."""
+        with pytest.raises(ValueError, match="period must be positive"):
+            ATR(period=0)
+
+    def test_invalid_spacing_multiplier_raises_error(self):
+        """Non-positive spacing_multiplier should raise ValueError."""
+        with pytest.raises(ValueError, match="spacing_multiplier must be positive"):
+            ATR(spacing_multiplier=0.0)

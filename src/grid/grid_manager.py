@@ -13,12 +13,21 @@ class GridLayout:
 class GridManager:
     def __init__(self, levels: int = 8, capital_usdt: float = 200,
                  min_reserve: float = 50, spacing_multiplier: float = 0.8):
+        if levels <= 0:
+            raise ValueError(f"levels must be positive, got {levels}")
+        if capital_usdt <= 0:
+            raise ValueError(f"capital_usdt must be positive, got {capital_usdt}")
+        if spacing_multiplier <= 0:
+            raise ValueError(f"spacing_multiplier must be positive, got {spacing_multiplier}")
         self.levels = levels
         self.capital_usdt = capital_usdt
         self.min_reserve = min_reserve
         self.spacing_multiplier = spacing_multiplier
 
     def calculate_grid(self, bb: BBResult, atr_value: float) -> GridLayout:
+        if atr_value <= 0:
+            raise ValueError(f"atr_value must be positive, got {atr_value}")
+
         spacing = atr_value * self.spacing_multiplier
         deployable = self.capital_usdt - self.min_reserve
         order_value = deployable / (self.levels * 2)

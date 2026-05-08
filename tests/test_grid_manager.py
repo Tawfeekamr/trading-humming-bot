@@ -55,3 +55,36 @@ class TestGridManager:
         )
         spacing = 500 * 0.8
         assert abs(grid.buy_levels[0]["price"] - (100_000 - spacing)) < 1.0
+
+    def test_zero_atr_raises_error(self):
+        """Zero ATR should raise ValueError to prevent invalid grid."""
+        gm = GridManager(levels=8, capital_usdt=200, min_reserve=50)
+        with pytest.raises(ValueError, match="atr_value must be positive"):
+            gm.calculate_grid(
+                bb=BBResult(upper=105_000, mid=100_000, lower=95_000),
+                atr_value=0.0,
+            )
+
+    def test_negative_atr_raises_error(self):
+        """Negative ATR should raise ValueError."""
+        gm = GridManager(levels=8, capital_usdt=200, min_reserve=50)
+        with pytest.raises(ValueError, match="atr_value must be positive"):
+            gm.calculate_grid(
+                bb=BBResult(upper=105_000, mid=100_000, lower=95_000),
+                atr_value=-100.0,
+            )
+
+    def test_invalid_levels_raises_error(self):
+        """Non-positive levels should raise ValueError."""
+        with pytest.raises(ValueError, match="levels must be positive"):
+            GridManager(levels=0, capital_usdt=200, min_reserve=50)
+
+    def test_invalid_capital_raises_error(self):
+        """Non-positive capital should raise ValueError."""
+        with pytest.raises(ValueError, match="capital_usdt must be positive"):
+            GridManager(levels=8, capital_usdt=0, min_reserve=50)
+
+    def test_invalid_spacing_multiplier_raises_error(self):
+        """Non-positive spacing_multiplier should raise ValueError."""
+        with pytest.raises(ValueError, match="spacing_multiplier must be positive"):
+            GridManager(levels=8, capital_usdt=200, min_reserve=50, spacing_multiplier=0.0)

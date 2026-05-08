@@ -1,9 +1,12 @@
 # src/indicators/rsi.py
+import math
 import pandas as pd
 
 
 class RSI:
     def __init__(self, period: int = 14):
+        if period <= 0:
+            raise ValueError(f"period must be positive, got {period}")
         self.period = period
 
     def calculate(self, closes: pd.Series) -> float | None:
@@ -26,4 +29,10 @@ class RSI:
             return 100.0
 
         rs = avg_gain / avg_loss
-        return 100.0 - (100.0 / (1.0 + rs))
+        result = 100.0 - (100.0 / (1.0 + rs))
+
+        # Validate result is finite
+        if not math.isfinite(result):
+            return None
+
+        return result

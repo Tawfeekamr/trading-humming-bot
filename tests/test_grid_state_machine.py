@@ -4,6 +4,8 @@ Ensures REACTIVATING state is not overwritten by ACTIVE state.
 """
 
 import pytest
+import threading
+import time
 from src.grid.grid_state import GridStateMachine, GridState
 
 
@@ -145,3 +147,83 @@ class TestGridStateMachine:
 
         sm.state = GridState.REACTIVATING
         assert sm.is_paused is False
+
+    def test_thread_safety_concurrent_evaluates(self):
+        """Multiple threads calling evaluate should not corrupt state."""
+        sm = GridStateMachine()
+        results = []
+        errors = []
+
+        def evaluate_state(rsi_value):
+            try:
+                result = sm.evaluate(
+                    price=100_000,
+                    rsi=rsi_value,
+                    ema_200=100_000,
+                    bb_lower=95_000,
+                    bb_upper=105_000
+                )
+                results.append(result)
+            except Exception as e:
+                errors.append(e)
+
+        # Create multiple threads
+        threads = []
+        for rsi in [30, 50, 75, 40, 60]:  # Mix of oversold, normal, overbought
+            t = threading.Thread(target=evaluate_state, args=(rsi,))
+            threads.append(t)
+            t.start()
+
+        # Wait for all threads
+        for t in threads:
+            t.join()
+
+        # Should have no errors
+        assert len(errors) == 0, f"Thread safety errors: {errors}"
+
+        # Should have results from all threads
+        assert len(results) == 5
+
+        # All results should be valid GridState enum values
+        for result in results:
+            assert isinstance(result, GridState)
+
+    def test_thread_safety_state_read_write(self):
+        """Concurrent state reads and writes should be safe."""
+        sm = GridStateMachine()
+        errors = []
+
+        def read_state():
+            try:
+                for _ in range(100):
+                    _ = sm.state
+                    _ = sm.is_active
+                    _ = sm.is_paused
+            except Exception as e:
+                errors.append(f"Read error: {e}")
+
+        def write_state():
+            try:
+                for i in range(100):
+                    sm.state = GridState.ACTIVE if i % 2 == 0 else GridState.PAUSED
+            except Exception as e:
+                errors.append(f"Write error: {e}")
+
+        # Create reader and writer threads
+        threads = []
+        for _ in range(3):  # 3 readers
+            t = threading.Thread(target=read_state)
+            threads.append(t)
+            t.start()
+
+        for _ in range(2):  # 2 writers
+            t = threading.Thread(target=write_state)
+            threads.append(t)
+            t.start()
+
+        # Wait for all threads
+        for t in threads:
+            t.join()
+
+        # Should have no errors
+        assert len(errors) == 0, f"Thread safety errors: {errors}"
