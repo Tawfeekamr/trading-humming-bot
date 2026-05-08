@@ -818,6 +818,25 @@ class TAGridBTCUSDT(StrategyV2Base):
             logger.info(f"BUY filled: {quantity} BTC @ ${price:,.2f} | Level {grid_level}")
             self._grid_dirty = True  # Refresh grid after fill
 
+            # Telegram notification for BUY fills
+            spacing = atr_val * self.atr_multiplier if atr_val else 0
+            buy_msg = (
+                f"📈 <b>BUY Filled — BTC/USDT</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"💵 Price: ${price:,.2f}\n"
+                f"📦 Qty: {quantity} BTC\n"
+                f"📊 Level {grid_level}  |  RSI: {rsi_val:.1f}\n"
+                f"💸 Fee: -${fee_est:.2f}\n"
+                f"🏦 Equity: ${equity:,.2f}  |  Exposure: {exposure_pct:.0f}%\n"
+                f"🌐 Mode: {self.env.upper()}"
+            )
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    loop.create_task(self.telegram.send(buy_msg))
+            except RuntimeError:
+                pass
+
         elif side == "SELL":
             gross_pnl = 0.0
             fee = fee_est
