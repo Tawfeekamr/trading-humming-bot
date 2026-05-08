@@ -1,27 +1,21 @@
 services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    restart: unless-stopped
+    volumes:
+      - ./config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+
   bot:
     build:
       context: .
       dockerfile: Dockerfile
     env_file: .env.docker
     restart: unless-stopped
+    depends_on:
+      - mosquitto
     environment:
-      - MQTT_BRIDGE_ENABLED=false
-      - USE_MQTT=false
       - CONFIG_PASSWORD=${CONFIG_PASSWORD:-changeme}
     volumes:
       - ./data:/home/hummingbot/data
       - ./logs:/home/hummingbot/logs
       - ./.env:/home/hummingbot/.env
-
-  # dashboard:
-  #   build:
-  #     context: .
-  #     dockerfile: Dockerfile.dashboard
-  #   env_file: .env.docker
-  #   restart: unless-stopped
-  #   ports:
-  #     - "8502:8502"
-  #   volumes:
-  #     - ./data:/app/data
-  #     - ./.env:/app/.env

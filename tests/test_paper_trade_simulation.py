@@ -343,9 +343,14 @@ class TestPaperTradeSimulation:
 
     def test_candle_feed_handles_api_failure(self, bot):
         """CandleFeed should return empty DataFrame on API failure (Fix #7)."""
-        feed = CandleFeed(symbol="BTCUSDT", interval="1h")
-        with patch.object(feed.client, 'get_klines', side_effect=Exception("API timeout")):
+        with patch('src.data.candle_feed.Client') as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client_cls.return_value = mock_client
+            mock_client.get_klines.side_effect = Exception("API timeout")
+            
+            feed = CandleFeed(symbol="BTCUSDT", interval="1h")
             df = feed.fetch_candles(limit=200)
+            
             assert isinstance(df, pd.DataFrame)
             assert len(df) == 0
 
