@@ -79,20 +79,38 @@ class TelegramCommandHandler:
         try:
             self._loop = asyncio.new_event_loop()
             asyncio.set_event_loop(self._loop)
-            
-            # Verifying connectivity via low-level urllib (bypass library state)
-            try:
-                ping_msg = f"📡 <b>Telegram Command Handler Online</b>\nChat ID: <code>{self._chat_id}</code>"
-                url = f"https://api.telegram.org/bot{self._token}/sendMessage?chat_id={self._chat_id}&parse_mode=HTML&text={urllib.request.quote(ping_msg)}"
-                urllib.request.urlopen(url, timeout=5)
-                logger.info("Startup ping sent successfully")
-            except Exception as e:
-                logger.warning(f"Startup ping failed (bot might still work): {e}")
 
             logger.info("Starting Telegram polling loop...")
-            self._app.run_polling(drop_pending_updates=True, close_loop=False)
+            self._loop.run_until_complete(self._poll_forever())
         except Exception as e:
             logger.error(f"Telegram polling thread crashed: {e}", exc_info=True)
+
+    async def _poll_forever(self):
+        """Low-level polling that works inside Docker daemon threads.
+        run_polling() uses signal handlers that fail in daemon threads,
+        so we use the async API directly.
+        """
+        try:
+            await self._app.initialize()
+            await self._app.start()
+            await self._app.updater.start_polling(drop_pending_updates=True)
+
+            # Send startup ping
+            ping_msg = (
+                f"📡 <b>Telegram Command Handler Online</b>\n"
+                f"Chat ID: <code>{self._chat_id}</code>\n"
+                f"Commands: /status /pnl /trades /fees /help"
+            )
+            await self._app.bot.send_message(
+                chat_id=self._chat_id, text=ping_msg, parse_mode=ParseMode.HTML
+            )
+            logger.info("Telegram command handler online — polling active")
+
+            # Keep the loop alive
+            while True:
+                await asyncio.sleep(1)
+        except Exception as e:
+            logger.error(f"Telegram _poll_forever crashed: {e}", exc_info=True)
 
     def _fmt_pnl(self, val):
         if val is None:
