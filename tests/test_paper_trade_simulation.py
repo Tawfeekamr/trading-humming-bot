@@ -485,7 +485,7 @@ class TestPaperTradeSimulation:
             grid = bot["gm"].calculate_grid(bb_result, atr_value)
             assert len(grid.buy_levels) > 0
             assert len(grid.sell_levels) > 0
-            assert grid.spacing > 0  # Fix #10: no zero spacing
+            assert grid.buy_spacing > 0  # Fix #10: no zero spacing
 
             # Verify order sizes are reasonable for $200 capital
             for level in grid.buy_levels:
