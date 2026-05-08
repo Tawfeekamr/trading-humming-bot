@@ -97,12 +97,14 @@ class TelegramCommandHandler:
         so we use the async API directly.
         """
         try:
-            # Clear any stale webhook from previous sessions
-            await self._app.initialize()
+            logger.info("Telegram _poll_forever: initializing app...")
+            await asyncio.wait_for(self._app.initialize(), timeout=15)
+            logger.info("Telegram _poll_forever: app initialized, clearing webhook...")
             await self._app.bot.delete_webhook(drop_pending_updates=True)
             logger.info("Telegram webhook cleared")
 
             await self._app.start()
+            logger.info("Telegram _poll_forever: app started, beginning polling...")
             await asyncio.wait_for(
                 self._app.updater.start_polling(drop_pending_updates=True),
                 timeout=30,
