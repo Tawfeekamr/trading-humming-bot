@@ -53,6 +53,7 @@ class TelegramCommandHandler:
             self._app.add_handler(CommandHandler("resume", self._cmd_resume, filters=chat_filter))
             self._app.add_handler(CommandHandler("reset", self._cmd_reset, filters=chat_filter))
             self._app.add_handler(CommandHandler("trades", self._cmd_trades, filters=chat_filter))
+            self._app.add_handler(CommandHandler("pending", self._cmd_pending, filters=chat_filter))
             self._app.add_handler(CommandHandler("logs", self._cmd_logs, filters=chat_filter))
             self._app.add_handler(CommandHandler("errors", self._cmd_errors, filters=chat_filter))
             self._app.add_handler(CommandHandler("fees", self._cmd_fees, filters=chat_filter))
@@ -111,7 +112,7 @@ class TelegramCommandHandler:
             ping_msg = (
                 f"📡 <b>Telegram Command Handler Online</b>\n"
                 f"Chat ID: <code>{self._chat_id}</code>\n"
-                f"Commands: /status /pnl /trades /fees /system /clear /help"
+                f"Commands: /status /pnl /trades /pending /fees /system /clear /help"
             )
             await self._app.bot.send_message(
                 chat_id=self._chat_id, text=ping_msg, parse_mode=ParseMode.HTML
@@ -258,6 +259,45 @@ class TelegramCommandHandler:
         except Exception as e:
             logger.error(f"Error in /trades: {e}")
             await update.message.reply_text(f"⚠️ Error getting trades: {e}")
+
+    async def _cmd_pending(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        try:
+            logger.info("Telegram /pending received")
+            tracker = self.strategy.order_tracker
+            pending = tracker.pending_orders()
+
+            if not pending:
+                await update.message.reply_text("📋 No pending orders.")
+                return
+
+            buys = [o for o in pending if o.side.value == "BUY"]
+            sells = [o for o in pending if o.side.value == "SELL"]
+
+            lines = [f"📋 <b>Pending Orders ({len(pending)})</b>", "━━━━━━━━━━━━━━━━━━━━━━"]
+
+            if buys:
+                buys.sort(key=lambda o: o.price, reverse=True)
+                lines.append(f"📈 <b>BUY ({len(buys)})</b>")
+                for o in buys:
+                    val = o.price * o.quantity
+                    lines.append(f"  L{o.level}: ${o.price:,.2f} × {o.quantity:.8f} (${val:.2f})")
+
+            if sells:
+                sells.sort(key=lambda o: o.price)
+                lines.append(f"📉 <b>SELL ({len(sells)})</b>")
+                for o in sells:
+                    val = o.price * o.quantity
+                    lines.append(f"  L{o.level}: ${o.price:,.2f} × {o.quantity:.8f} (${val:.2f})")
+
+            lines.append("━━━━━━━━━━━━━━━━━━━━━━")
+            total_buy = sum(o.price * o.quantity for o in buys)
+            total_sell = sum(o.price * o.quantity for o in sells)
+            lines.append(f"💰 Buy value: ${total_buy:,.2f} | Sell value: ${total_sell:,.2f}")
+
+            await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+        except Exception as e:
+            logger.error(f"Error in /pending: {e}")
+            await update.message.reply_text(f"⚠️ Error getting pending orders: {e}")
 
     async def _cmd_logs(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
@@ -419,6 +459,7 @@ class TelegramCommandHandler:
             "/resume — Resume grid trading\n"
             "/reset — Reset circuit breaker after halt\n"
             "/trades — Last 5 closed trades\n"
+            "/pending — Show all pending buy/sell orders\n"
             "/fees — Fee analysis and overtrading detection\n"
             "/system — CPU, RAM, Disk usage (alerts at 75%)\n"
             "/logs — Last 30 lines from today's bot log\n"
