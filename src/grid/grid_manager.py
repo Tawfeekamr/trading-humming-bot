@@ -6,7 +6,8 @@ from src.indicators.bollinger import BBResult
 class GridLayout:
     buy_levels: list[dict]
     sell_levels: list[dict]
-    spacing: float
+    buy_spacing: float
+    sell_spacing: float
     mid_price: float
 
 
@@ -74,6 +75,7 @@ class GridManager:
         return GridLayout(
             buy_levels=buy_levels,
             sell_levels=sell_levels,
-            spacing=round(buy_spacing, 2),
+            buy_spacing=round(buy_spacing, 2),
+            sell_spacing=round(sell_spacing, 2),
             mid_price=bb.mid,
         )

@@ -53,7 +53,7 @@ class TestGridManager:
         # atr_spacing = 500 * 0.8 = 400
         # max_spacing = (100000 - 96000) / 5 = 800
         # spacing = min(400, 800) = 400
-        assert grid.spacing == 400.0
+        assert grid.buy_spacing == 400.0
         # Buy level 1 (closest to mid): bb.lower + spacing * 4 = 96000 + 1600*4 = 102400
         # Wait, buys sorted descending — first buy is the one closest to mid
         # buy prices: 96000+1600*1=97600, 96000+1600*2=99200, 96000+1600*3=100800(>mid!), 96000+1600*4=102400(>mid!)
@@ -69,7 +69,7 @@ class TestGridManager:
         # buy levels: 79375+107, 79375+214, ..., 79375+856 = 80231 (all below mid 79858? No, level 5+ would exceed mid)
         # Actually 79375 + 107*5 = 79910 > 79858
         # So buys can go above mid. That's fine — the strategy filters out buys above current price.
-        assert grid.spacing > 0
+        assert grid.buy_spacing > 0
 
     def test_levels_spread_across_bb_range(self):
         gm = GridManager(levels=8, capital_usdt=200, min_reserve=50)
@@ -90,7 +90,7 @@ class TestGridManager:
         # atr_spacing = 324 * 0.8 = 259.2
         # max_buy_spacing = (79858 - 79375) / 9 = 53.666...
         expected_spacing = (79_858 - 79_375) / 9
-        assert abs(grid.spacing - round(expected_spacing, 2)) < 0.01
+        assert abs(grid.buy_spacing - round(expected_spacing, 2)) < 0.01
 
     def test_zero_atr_raises_error(self):
         gm = GridManager(levels=8, capital_usdt=200, min_reserve=50)

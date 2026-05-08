@@ -9,6 +9,7 @@ import os
 import asyncio
 import logging
 import threading
+import json
 import traceback as traceback_mod
 from decimal import Decimal
 from dotenv import load_dotenv
@@ -349,6 +350,66 @@ class TAGridBTCUSDT(StrategyV2Base):
         except RuntimeError:
             pass
 
+        # Load persisted state (open BUYs)
+        self._state_file = Path("data/grid_state.json")
+        self._load_state()
+
+    def _save_state(self):
+        """Persist open positions to a JSON file."""
+        try:
+            if not self._state_file.parent.exists():
+                self._state_file.parent.mkdir(parents=True, exist_ok=True)
+            
+            data = {
+                "open_buys": {
+                    order_id: {
+                        "order_id": fill.order_id,
+                        "side": fill.side,
+                        "price": fill.price,
+                        "quantity": fill.quantity,
+                        "grid_level": fill.grid_level,
+                        "timestamp": fill.timestamp,
+                        "rsi": fill.rsi,
+                        "bb_upper": fill.bb_upper,
+                        "bb_lower": fill.bb_lower,
+                        "ema_200": fill.ema_200,
+                        "atr": fill.atr,
+                        "grid_state": fill.grid_state
+                    } for order_id, fill in self._open_buys.items()
+                }
+            }
+            with open(self._state_file, "w") as f:
+                json.dump(data, f, indent=2)
+            logger.debug(f"State saved: {len(self._open_buys)} open positions")
+        except Exception as e:
+            logger.error(f"Failed to save state: {e}")
+
+    def _load_state(self):
+        """Restore open positions from JSON file."""
+        try:
+            if self._state_file.exists():
+                with open(self._state_file, "r") as f:
+                    data = json.load(f)
+                    raw_buys = data.get("open_buys", {})
+                    for order_id, d in raw_buys.items():
+                        self._open_buys[order_id] = FillRecord(
+                            order_id=d["order_id"],
+                            side=d["side"],
+                            price=d["price"],
+                            quantity=d["quantity"],
+                            grid_level=d["grid_level"],
+                            timestamp=d["timestamp"],
+                            rsi=d["rsi"],
+                            bb_upper=d["bb_upper"],
+                            bb_lower=d["bb_lower"],
+                            ema_200=d["ema_200"],
+                            atr=d["atr"],
+                            grid_state=d["grid_state"]
+                        )
+                logger.info(f"Restored {len(self._open_buys)} open positions from {self._state_file}")
+        except Exception as e:
+            logger.error(f"Failed to load state: {e}")
+
     # ── Main Tick Loop ───────────────────────────────────────────────
     # NOTE: Do NOT override tick() — Cython dispatch (StrategyPyBase.c_tick)
     # bypasses Python-level overrides and calls StrategyV2Base.tick() directly.
@@ -490,7 +551,8 @@ class TAGridBTCUSDT(StrategyV2Base):
                 ema_200=round(ema_value, 2),
             )
 
-            self._notify_state_change(new_state, prev_state, trigger_reason, current_price, rsi_value, bb_result, ema_value, atr_value)
+            # Use dummy spacing for state transition if grid not yet calculated
+            self._notify_state_change(new_state, prev_state, trigger_reason, current_price, rsi_value, bb_result, ema_value, atr_value, 0)
             self._grid_dirty = True
 
         if self.state_machine.is_paused:
@@ -522,6 +584,9 @@ class TAGridBTCUSDT(StrategyV2Base):
             grid = self.grid_manager.calculate_grid(bb_result, atr_value)
             self._place_grid_orders(grid, current_price)
             self._last_grid_place_time = now_ts
+            
+            # Log exact grid info for transparency
+            logger.info(f"Grid updated: buy_spacing=${grid.buy_spacing:.2f}, sell_spacing=${grid.sell_spacing:.2f}")
 
             deployed = sum(l["price"] * l["quantity"] for l in grid.buy_levels)
             self.event_log.log("grid_recalculated",
@@ -605,21 +670,21 @@ class TAGridBTCUSDT(StrategyV2Base):
                 )
                 continue
             buys_placed += 1
-            order_id = f"buy_{level['level']}_{level['price']}"
-            self.buy(
+            client_order_id = self.buy(
                 connector_name=self.exchange,
                 trading_pair=self.trading_pair,
                 amount=Decimal(str(level["quantity"])),
                 order_type=OrderType.LIMIT,
                 price=Decimal(str(level["price"])),
             )
-            self._grid_order_tracker.add(GridOrder(
-                order_id=order_id,
-                level=level["level"],
-                side=OrderSide.BUY,
-                price=level["price"],
-                quantity=level["quantity"],
-            ))
+            if client_order_id:
+                self._grid_order_tracker.add(GridOrder(
+                    order_id=client_order_id,
+                    level=level["level"],
+                    side=OrderSide.BUY,
+                    price=level["price"],
+                    quantity=level["quantity"],
+                ))
 
         sells_skipped_price = 0
         sells_blocked = 0
@@ -632,21 +697,21 @@ class TAGridBTCUSDT(StrategyV2Base):
                 sells_blocked += 1
                 continue
             sells_placed += 1
-            order_id = f"sell_{level['level']}_{level['price']}"
-            self.sell(
+            client_order_id = self.sell(
                 connector_name=self.exchange,
                 trading_pair=self.trading_pair,
                 amount=Decimal(str(level["quantity"])),
                 order_type=OrderType.LIMIT,
                 price=Decimal(str(level["price"])),
             )
-            self._grid_order_tracker.add(GridOrder(
-                order_id=order_id,
-                level=level["level"],
-                side=OrderSide.SELL,
-                price=level["price"],
-                quantity=level["quantity"],
-            ))
+            if client_order_id:
+                self._grid_order_tracker.add(GridOrder(
+                    order_id=client_order_id,
+                    level=level["level"],
+                    side=OrderSide.SELL,
+                    price=level["price"],
+                    quantity=level["quantity"],
+                ))
 
         logger.info(
             f"Grid placement: buys={buys_placed} placed / {buys_skipped_price} above price / {buys_blocked} blocked | "
@@ -693,7 +758,7 @@ class TAGridBTCUSDT(StrategyV2Base):
 
     # ── Notifications ────────────────────────────────────────────────
 
-    def _notify_state_change(self, new_state, prev_state, trigger_reason, price, rsi, bb, ema, atr):
+    def _notify_state_change(self, new_state, prev_state, trigger_reason, price, rsi, bb, ema, atr, actual_spacing=0):
         # Cooldown: skip Telegram if we alerted this same state within 15 min
         state_key = new_state.value
         now = time_mod.time()
@@ -703,7 +768,7 @@ class TAGridBTCUSDT(StrategyV2Base):
             return
         self._last_state_alert_time[state_key] = now
 
-        spacing = atr * self.atr_multiplier if atr else 0
+        spacing = actual_spacing if actual_spacing > 0 else (atr * self.atr_multiplier if atr else 0)
 
         if new_state == GridState.ACTIVE:
             msg = (
@@ -787,10 +852,16 @@ class TAGridBTCUSDT(StrategyV2Base):
             atr_val = atr_r
 
         grid_level = 0
-        if self._cached_indicators:
+        # Try to find the order in the tracker to get the actual level
+        grid_order = self._grid_order_tracker.mark_filled(order_id)
+        if grid_order:
+            grid_level = grid_order.level
+        elif self._cached_indicators:
+            # Fallback estimation if tracker missing (e.g. restart)
             bb_r = self._cached_indicators[0]
             mid = bb_r.mid
-            grid_level = int(abs(price - mid) / (self.atr_multiplier * atr_val)) if atr_val > 0 else 0
+            est_spacing = atr_val * self.atr_multiplier if atr_val > 0 else 1
+            grid_level = int(round(abs(price - mid) / est_spacing))
 
         fee_est = quantity * price * self._fee_rate
         usdt_bal = self._get_usdt_balance()
@@ -829,6 +900,7 @@ class TAGridBTCUSDT(StrategyV2Base):
                 atr=atr_val,
                 grid_state=grid_state_val,
             )
+            self._save_state()
             trade = Trade(
                 timestamp=pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d %H:%M:%S"),
                 pair="BTC/USDT",
@@ -888,6 +960,9 @@ class TAGridBTCUSDT(StrategyV2Base):
                 # FIFO: pop oldest buy (earliest timestamp)
                 oldest_id = min(self._open_buys, key=lambda k: self._open_buys[k].timestamp)
                 matching_buy = self._open_buys.pop(oldest_id)
+            
+            if matching_buy or True: # Always save even if no match found (to update file)
+                self._save_state()
             if matching_buy:
                 entry_price = matching_buy.price
                 entry_rsi = matching_buy.rsi
