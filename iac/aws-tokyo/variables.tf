@@ -1,1 +1,4 @@
-# No variables needed — access is via AWS Session Manager, no SSH key or IP required.
+variable "billing_alert_email" {
+  description = "Email address for AWS billing and idle alerts"
+  type        = string
+}

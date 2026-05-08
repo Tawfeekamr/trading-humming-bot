@@ -155,3 +155,61 @@ resource "aws_eip" "bot_eip" {
   instance = aws_instance.bot_server.id
   domain   = "vpc"
 }
+
+# ── COST PROTECTION ─────────────────────────────────────────────────
+
+# Billing alert — email when spend exceeds threshold
+resource "aws_sns_topic" "billing_alerts" {
+  name = "billing-alerts"
+}
+
+resource "aws_sns_topic_subscription" "billing_email" {
+  topic_arn = aws_sns_topic.billing_alerts.arn
+  protocol  = "email"
+  endpoint  = var.billing_alert_email
+}
+
+resource "aws_budgets_budget" "monthly_cost" {
+  name              = "trading-bot-monthly"
+  budget_type       = "COST"
+  limit_amount      = "40"
+  limit_unit        = "USD"
+  time_unit         = "MONTHLY"
+  time_period_start = "2026-05-01_00:00"
+
+  notification {
+    comparison_operator       = "GREATER_THAN"
+    threshold                 = 80
+    threshold_type            = "PERCENTAGE"
+    notification_type         = "ACTUAL"
+    subscriber_sns_topic_arns = [aws_sns_topic.billing_alerts.arn]
+  }
+
+  notification {
+    comparison_operator       = "GREATER_THAN"
+    threshold                 = 100
+    threshold_type            = "PERCENTAGE"
+    notification_type         = "FORECASTED"
+    subscriber_sns_topic_arns = [aws_sns_topic.billing_alerts.arn]
+  }
+}
+
+# Auto-stop instance if CPU stays idle for 2 hours (saves money when bot crashes)
+resource "aws_cloudwatch_metric_alarm" "idle_stop" {
+  alarm_name          = "trading-bot-idle-stop"
+  comparison_operator = "LessThanThreshold"
+  evaluation_periods  = 12
+  metric_name         = "CPUUtilization"
+  namespace           = "AWS/EC2"
+  period              = 600
+  statistic           = "Average"
+  threshold           = 5
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    InstanceId = aws_instance.bot_server.id
+  }
+
+  alarm_description = "Stops instance if CPU < 5% for 2 hours (bot likely crashed)"
+  alarm_actions     = [aws_sns_topic.billing_alerts.arn]
+}
