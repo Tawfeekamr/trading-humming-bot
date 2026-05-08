@@ -72,10 +72,13 @@ class TelegramCommandHandler:
 
         base_url = f"https://api.telegram.org/bot{self._token}"
         last_update_id = 0
+        logger.info("Telegram _poll_forever: clearing webhook...")
 
         # Clear webhook
         try:
-            resp = urllib.request.urlopen(f"{base_url}/deleteWebhook?drop_pending_updates=true")
+            resp = urllib.request.urlopen(
+                f"{base_url}/deleteWebhook?drop_pending_updates=true", timeout=10
+            )
             logger.info("Telegram webhook cleared")
         except Exception as e:
             logger.warning(f"Telegram deleteWebhook failed: {e}")
@@ -93,7 +96,7 @@ class TelegramCommandHandler:
             }).encode()
             urllib.request.urlopen(urllib.request.Request(
                 f"{base_url}/sendMessage", data=ping_data
-            ))
+            ), timeout=10)
             logger.info("Telegram startup ping sent")
         except Exception as e:
             logger.warning(f"Telegram startup ping failed: {e}")
@@ -166,7 +169,7 @@ class TelegramCommandHandler:
                 }).encode()
                 urllib.request.urlopen(urllib.request.Request(
                     f"{base_url}/sendMessage", data=data
-                ))
+                ), timeout=10)
 
         class _MockUpdate:
             def __init__(self, msg_dict, chat_id):
@@ -185,7 +188,7 @@ class TelegramCommandHandler:
                 }).encode()
                 urllib.request.urlopen(urllib.request.Request(
                     f"{base_url}/sendMessage", data=err_data
-                ))
+                ), timeout=10)
             except Exception:
                 pass
 
