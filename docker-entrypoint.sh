@@ -19,20 +19,14 @@ fi
 source /opt/conda/etc/profile.d/conda.sh
 conda activate hummingbot
 
-# Disable MQTT (not needed, causes connector readiness issues)
-CONF="/home/hummingbot/conf/conf_client.yml"
-if [ -f "$CONF" ]; then
-    sed -i 's/mqtt_logger: true/mqtt_logger: false/' "$CONF"
-    sed -i 's/mqtt_notifier: true/mqtt_notifier: false/' "$CONF"
-    sed -i 's/mqtt_commands: true/mqtt_commands: false/' "$CONF"
-    sed -i 's/mqtt_events: true/mqtt_events: false/' "$CONF"
-    sed -i 's/mqtt_external_events: true/mqtt_external_events: false/' "$CONF"
-fi
-
-# Patch quickstart to NOT force mqtt_autostart=True in headless mode
-QUICKSTART="/home/hummingbot/bin/hummingbot_quickstart.py"
-if [ -f "$QUICKSTART" ]; then
-    sed -i 's/client_config_map.mqtt_bridge.mqtt_autostart = True/pass  # MQTT disabled for trading bot/' "$QUICKSTART"
+# Patch Hummingbot to remove MQTT requirement in headless mode
+# MQTT reconnection loop blocks the asyncio event loop, preventing
+# the Binance connector from becoming ready. We skip MQTT entirely.
+APP="/home/hummingbot/hummingbot/client/hummingbot_application.py"
+if [ -f "$APP" ]; then
+    # Remove the MQTT validation check in run_headless
+    sed -i '/if not self.client_config_map.mqtt_bridge.mqtt_autostart/,/raise RuntimeError("MQTT is required for headless mode")/c\            pass  # MQTT check disabled for trading bot' "$APP"
+    # Keep MQTT autostart True so the code path doesn't crash elsewhere
 fi
 
 exec python ./bin/hummingbot_quickstart.py
