@@ -540,17 +540,12 @@ class TelegramCommandHandler:
                 crash_file.touch()
                 cleared.append("crashes.log")
 
-            # Clear state and journal
+            # Clear grid state only (preserve trades.json)
             state_file = data_dir / "grid_state.json"
             if state_file.exists():
                 state_file.unlink()
                 state_file.write_text("{}")
                 cleared.append("grid_state.json")
-            journal_file = data_dir / "trades.json"
-            if journal_file.exists():
-                journal_file.unlink()
-                journal_file.write_text("[]")
-                cleared.append("trades.json")
 
             # Clear strategy-specific log
             strat_log = log_dir / "logs_ta_grid_btcusdt.log"
@@ -592,7 +587,7 @@ class TelegramCommandHandler:
             "/system — CPU, RAM, Disk usage (alerts at 75%)\n"
             "/logs — Last 30 lines from today's bot log\n"
             "/errors — Recent errors and crashes\n"
-            "/clear — Clear all logs, events, and trade data\n"
+            "/clear — Clear logs and grid state (keeps trade history)\n"
             "/help — This message",
             parse_mode="HTML"
         )
