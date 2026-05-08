@@ -18,4 +18,15 @@ fi
 # Start hummingbot
 source /opt/conda/etc/profile.d/conda.sh
 conda activate hummingbot
+
+# Disable MQTT (not needed, causes connector readiness issues)
+CONF="/home/hummingbot/conf/conf_client.yml"
+if [ -f "$CONF" ]; then
+    sed -i 's/mqtt_logger: true/mqtt_logger: false/' "$CONF"
+    sed -i 's/mqtt_notifier: true/mqtt_notifier: false/' "$CONF"
+    sed -i 's/mqtt_commands: true/mqtt_commands: false/' "$CONF"
+    sed -i 's/mqtt_events: true/mqtt_events: false/' "$CONF"
+    sed -i 's/mqtt_external_events: true/mqtt_external_events: false/' "$CONF"
+fi
+
 exec python ./bin/hummingbot_quickstart.py
