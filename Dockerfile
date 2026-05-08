@@ -10,6 +10,9 @@ COPY src/ /home/hummingbot/src/
 # Copy strategy script to hummingbot's scripts/ directory
 COPY hummingbot_files/scripts/ta_grid_btcusdt.py /home/hummingbot/scripts/ta_grid_btcusdt.py
 
+# Copy diagnostic scripts
+COPY scripts/diagnose_telegram.py /home/hummingbot/scripts/diagnose_telegram.py
+
 # Create v2 config so quickstart finds our script
 RUN mkdir -p /home/hummingbot/conf/scripts
 COPY config/ta_grid_btcusdt_conf.yml /home/hummingbot/conf/scripts/ta_grid_btcusdt.yml
