@@ -291,6 +291,7 @@ class TAGridBTCUSDT(StrategyV2Base):
         self._fee_rate: float = 0.00075  # default 0.075% standard tier
         self._overtrading_alerted_today: str = ""
         self._state_lock = threading.Lock()  # protects _manual_pause, _cached_indicators, _open_buys
+        self._tick_count = 0
 
         self.event_log.log("bot_started", mode=self.env, capital=self.capital_usdt,
                            levels=self.levels, testnet=self.is_testnet)
@@ -348,8 +349,16 @@ class TAGridBTCUSDT(StrategyV2Base):
 
     # ── Main Tick Loop ───────────────────────────────────────────────
 
+    def tick(self, timestamp: float):
+        self._tick_count += 1
+        if self._tick_count <= 5 or self._tick_count % 30 == 0:
+            connectors_ready = {name: c.ready for name, c in self.connectors.items()}
+            logger.info(f"tick #{self._tick_count}: connectors_ready={connectors_ready}")
+        super().tick(timestamp)
+
     def on_tick(self):
         try:
+            logger.info("on_tick fired")
             self._on_tick_inner()
         except Exception as e:
             import traceback
