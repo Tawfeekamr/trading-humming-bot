@@ -57,6 +57,8 @@ class TelegramCommandHandler:
             self._app.add_handler(CommandHandler("errors", self._cmd_errors, filters=chat_filter))
             self._app.add_handler(CommandHandler("fees", self._cmd_fees, filters=chat_filter))
             self._app.add_handler(CommandHandler("server", self._cmd_server, filters=chat_filter))
+            self._app.add_handler(CommandHandler("system", self._cmd_server, filters=chat_filter))
+            self._app.add_handler(CommandHandler("clear", self._cmd_clear, filters=chat_filter))
             self._app.add_handler(CommandHandler("help", self._cmd_help, filters=chat_filter))
 
             # Add catch-all debug handler to identify chat ID mismatches
@@ -102,7 +104,7 @@ class TelegramCommandHandler:
             ping_msg = (
                 f"📡 <b>Telegram Command Handler Online</b>\n"
                 f"Chat ID: <code>{self._chat_id}</code>\n"
-                f"Commands: /status /pnl /trades /fees /help"
+                f"Commands: /status /pnl /trades /fees /system /clear /help"
             )
             await self._app.bot.send_message(
                 chat_id=self._chat_id, text=ping_msg, parse_mode=ParseMode.HTML
@@ -338,6 +340,56 @@ class TelegramCommandHandler:
             logger.error(f"Error in /server: {e}")
             await update.message.reply_text(f"⚠️ Error getting server status: {e}")
 
+    async def _cmd_clear(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        try:
+            log_dir = Path(os.environ.get("LOG_DIR", "logs"))
+            data_dir = Path("data")
+            cleared = []
+
+            # Clear log files
+            for f in log_dir.glob("bot_*.log"):
+                f.write_text("")
+                cleared.append(f.name)
+            for f in log_dir.glob("events_*.jsonl"):
+                f.write_text("")
+                cleared.append(f.name)
+            crash_file = log_dir / "crashes.log"
+            if crash_file.exists():
+                crash_file.write_text("")
+                cleared.append("crashes.log")
+
+            # Clear state and journal
+            state_file = data_dir / "grid_state.json"
+            if state_file.exists():
+                state_file.write_text("{}")
+                cleared.append("grid_state.json")
+            journal_file = data_dir / "trades.json"
+            if journal_file.exists():
+                journal_file.write_text("[]")
+                cleared.append("trades.json")
+
+            # Clear strategy-specific log
+            strat_log = log_dir / "logs_ta_grid_btcusdt.log"
+            if strat_log.exists():
+                strat_log.write_text("")
+                cleared.append(strat_log.name)
+
+            self.event_log.log("logs_cleared", source="telegram", files=cleared)
+            logger.info(f"Telegram /clear — cleared: {cleared}")
+
+            files_list = "\n".join(f"  🗑 {f}" for f in cleared) if cleared else "  (nothing to clear)"
+            await update.message.reply_text(
+                f"🧹 <b>Logs & Data Cleared</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"{files_list}\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"Bot continues running — fresh start.",
+                parse_mode=ParseMode.HTML
+            )
+        except Exception as e:
+            logger.error(f"Error in /clear: {e}")
+            await update.message.reply_text(f"⚠️ Error clearing logs: {e}")
+
     async def _cmd_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info("Telegram /help received")
         await update.message.reply_text(
@@ -350,9 +402,10 @@ class TelegramCommandHandler:
             "/reset — Reset circuit breaker after halt\n"
             "/trades — Last 5 closed trades\n"
             "/fees — Fee analysis and overtrading detection\n"
-            "/server — CPU, RAM, Disk usage (alerts at 75%)\n"
+            "/system — CPU, RAM, Disk usage (alerts at 75%)\n"
             "/logs — Last 30 lines from today's bot log\n"
             "/errors — Recent errors and crashes\n"
+            "/clear — Clear all logs, events, and trade data\n"
             "/help — This message",
             parse_mode=ParseMode.HTML
         )
