@@ -754,12 +754,22 @@ class TAGridBTCUSDT(StrategyV2Base):
             self._safe_telegram_crash("did_fill_order", str(e), tb)
 
     def _did_fill_order_inner(self, event):
-        # Hummingbot v2 OrderFilledEvent: attributes are directly on event, not event.order
         trade_type = getattr(event, 'trade_type', None)
-        side = "BUY" if trade_type is not None and trade_type.name == "BUY" else "SELL"
         price = float(getattr(event, 'price', 0))
         quantity = float(getattr(event, 'amount', 0))
         order_id = str(getattr(event, 'order_id', getattr(event, 'client_order_id', '')))
+
+        # Robust side detection: handle TradeType enum, string, or None
+        if trade_type is not None:
+            tt_name = getattr(trade_type, 'name', str(trade_type))
+            is_buy = tt_name == "BUY"
+        else:
+            tt_name = "UNKNOWN"
+            # Fallback: check if order_id starts with "buy_"
+            is_buy = order_id.startswith("buy_")
+        side = "BUY" if is_buy else "SELL"
+        logger.info(f"Fill event: type={type(event).__name__} trade_type={tt_name} side={side} "
+                     f"price=${price:,.2f} qty={quantity} order_id={order_id}")
 
         rsi_val = 0.0
         bb_upper = 0.0
