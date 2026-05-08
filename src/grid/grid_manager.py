@@ -28,27 +28,24 @@ class GridManager:
         if atr_value <= 0:
             raise ValueError(f"atr_value must be positive, got {atr_value}")
 
-        bb_range = bb.upper - bb.lower
-        if bb_range <= 0:
-            raise ValueError(f"BB range must be positive, got {bb_range}")
-
+        # Use ATR-based spacing anchored at the mid price.
+        # This ensures buys are below mid and sells are above mid.
+        spacing = atr_value * self.spacing_multiplier
+        
         deployable = self.capital_usdt - self.min_reserve
+        # Still divide by (levels * 2) to maintain the same conservative capital allocation
         order_value = deployable / (self.levels * 2)
-
-        # Spread levels evenly across the BB range.
-        # Each level gets an equal slice of the band.
-        spacing = bb_range / (self.levels + 1)
 
         buy_levels = []
         sell_levels = []
 
         for i in range(1, self.levels + 1):
-            # Buy levels: from BB lower upward
-            buy_price = bb.lower + spacing * i
+            # Buy levels: step DOWN from mid
+            buy_price = bb.mid - (spacing * i)
             buy_qty = order_value / buy_price
 
-            # Sell levels: from BB upper downward
-            sell_price = bb.upper - spacing * i
+            # Sell levels: step UP from mid
+            sell_price = bb.mid + (spacing * i)
             sell_qty = order_value / sell_price
 
             buy_levels.append({
@@ -62,7 +59,7 @@ class GridManager:
                 "level": i,
             })
 
-        # Sort buys descending (closest to mid first) and sells ascending
+        # Sort buys descending (highest price first) and sells ascending (lowest price first)
         buy_levels.sort(key=lambda l: l["price"], reverse=True)
         sell_levels.sort(key=lambda l: l["price"])
 
