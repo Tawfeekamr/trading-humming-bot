@@ -295,6 +295,8 @@ class TAGridBTCUSDT(StrategyV2Base):
         self._tick_count = 0
         self._last_grid_place_time = 0  # timestamp of last grid placement
         self._min_grid_refresh_sec = 300  # 5 min minimum between grid refreshes
+        self._active_buy_spacing = 0.0
+        self._active_sell_spacing = 0.0
 
         self.event_log.log("bot_started", mode=self.env, capital=self.capital_usdt,
                            levels=self.levels, testnet=self.is_testnet)
@@ -552,7 +554,7 @@ class TAGridBTCUSDT(StrategyV2Base):
             )
 
             # Use dummy spacing for state transition if grid not yet calculated
-            self._notify_state_change(new_state, prev_state, trigger_reason, current_price, rsi_value, bb_result, ema_value, atr_value, 0)
+            self._notify_state_change(new_state, prev_state, trigger_reason, current_price, rsi_value, bb_result, ema_value, atr_value, self._active_buy_spacing)
             self._grid_dirty = True
 
         if self.state_machine.is_paused:
@@ -582,6 +584,8 @@ class TAGridBTCUSDT(StrategyV2Base):
             if elapsed < self._min_grid_refresh_sec:
                 return  # Too soon — let existing orders work
             grid = self.grid_manager.calculate_grid(bb_result, atr_value)
+            self._active_buy_spacing = grid.buy_spacing
+            self._active_sell_spacing = grid.sell_spacing
             self._place_grid_orders(grid, current_price)
             self._last_grid_place_time = now_ts
             
@@ -861,8 +865,12 @@ class TAGridBTCUSDT(StrategyV2Base):
             # Fallback estimation if tracker missing (e.g. restart)
             bb_r = self._cached_indicators[0]
             mid = bb_r.mid
-            est_spacing = atr_val * self.atr_multiplier if atr_val > 0 else 1
-            grid_level = int(round(abs(price - mid) / est_spacing))
+            # Use actual spacing for estimation if available
+            spacing = self._active_buy_spacing if is_buy else self._active_sell_spacing
+            if spacing <= 0:
+                spacing = atr_val * self.atr_multiplier if atr_val > 0 else 1
+            
+            grid_level = int(round(abs(price - mid) / spacing)) if spacing > 0 else 0
 
         fee_est = quantity * price * self._fee_rate
         usdt_bal = self._get_usdt_balance()
@@ -926,13 +934,13 @@ class TAGridBTCUSDT(StrategyV2Base):
             self._grid_dirty = True  # Refresh grid after fill
 
             # Telegram notification for BUY fills
-            spacing = atr_val * self.atr_multiplier if atr_val else 0
             buy_msg = (
                 f"📈 <b>BUY Filled — BTC/USDT</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"💵 Price: ${price:,.2f}\n"
                 f"📦 Qty: {quantity} BTC\n"
                 f"📊 Level {grid_level}  |  RSI: {rsi_val:.1f}\n"
+                f"📏 Spacing: ${self._active_buy_spacing:,.0f}\n"
                 f"💸 Fee: -${fee_est:.2f}\n"
                 f"🏦 Equity: ${equity:,.2f}  |  Exposure: {exposure_pct:.0f}%\n"
                 f"🌐 Mode: {self.env.upper()}"
@@ -1041,7 +1049,7 @@ class TAGridBTCUSDT(StrategyV2Base):
                 f"━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"📉 RSI: {entry_rsi:.1f} → {rsi_val:.1f}\n"
                 f"📐 BB: ${entry_bb_lower:,.0f} → ${bb_upper:,.0f}\n"
-                f"📏 ATR: ${atr_val:,.0f}  |  Spacing: ${spacing:,.0f}\n"
+                f"📏 ATR: ${atr_val:,.0f}  |  Spacing: ${self._active_sell_spacing:,.0f}\n"
                 f"🏦 Equity: ${equity:,.2f}  |  Exposure: {exposure_pct:.0f}%\n"
                 f"Grid: {grid_state_val}  |  Pending: {pending} orders\n"
                 f"🌐 Mode: {self.env.upper()}"
