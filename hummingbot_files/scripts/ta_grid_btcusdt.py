@@ -519,7 +519,25 @@ class TAGridBTCUSDT(StrategyV2Base):
                 buy_levels=[{"level": l["level"], "price": l["price"], "qty": l["quantity"]} for l in grid.buy_levels],
                 sell_levels=[{"level": l["level"], "price": l["price"], "qty": l["quantity"]} for l in grid.sell_levels],
             )
-            self._grid_dirty = False
+            # Only clear dirty flag if orders were actually placed
+            try:
+                active_count = len(self.get_active_orders(self.exchange))
+            except Exception:
+                active_count = 0
+            if active_count > 0 or not self.state_machine.is_active:
+                self._grid_dirty = False
+            else:
+                logger.warning(f"Grid ACTIVE but 0 active orders after placement — will retry next tick")
+
+        # Safety net: if grid is active but has no orders, retry next tick
+        if self.state_machine.is_active and not self._grid_dirty:
+            try:
+                active_count = len(self.get_active_orders(self.exchange))
+            except Exception:
+                active_count = 0
+            if active_count == 0:
+                self._grid_dirty = True
+                logger.info("Grid ACTIVE with 0 orders — scheduling retry")
 
     # ── State Change Helpers ─────────────────────────────────────────
 
@@ -546,6 +564,10 @@ class TAGridBTCUSDT(StrategyV2Base):
         self._cancel_all_orders("grid_refresh")
         connector = self.connectors.get(self.exchange)
         if not connector:
+            logger.warning(
+                f"No connector for exchange '{self.exchange}' — "
+                f"available: {list(self.connectors.keys())}"
+            )
             return
 
         usdt_bal = self._get_usdt_balance()
@@ -553,8 +575,20 @@ class TAGridBTCUSDT(StrategyV2Base):
         equity = self._estimate_equity(current_price)
         exposure_pct = self.position_guard.btc_exposure_pct(btc_bal, current_price, equity)
 
+        logger.info(
+            f"Placing grid: {len(grid.buy_levels)} buy / {len(grid.sell_levels)} sell levels | "
+            f"price=${current_price:,.0f} usdt=${usdt_bal:.2f} btc={btc_bal:.8f} "
+            f"equity=${equity:.2f} exposure={exposure_pct:.0f}%"
+        )
+
+        buys_placed = 0
+        sells_placed = 0
+        buys_skipped_price = 0
+        buys_blocked = 0
+
         for level in grid.buy_levels:
             if level["price"] >= current_price:
+                buys_skipped_price += 1
                 continue
             order_usdt = level["price"] * level["quantity"]
             if not self.position_guard.can_place_order(
@@ -564,26 +598,13 @@ class TAGridBTCUSDT(StrategyV2Base):
                 order_usdt=order_usdt,
                 equity=equity,
             ):
-                self.event_log.log("order_blocked",
-                    side="BUY",
-                    price=level["price"],
-                    quantity=level["quantity"],
-                    reason="below_usdt_reserve" if (usdt_bal - order_usdt) < self.min_reserve else "exceeds_btc_exposure",
-                    current_usdt=round(usdt_bal, 2),
-                    current_btc=round(btc_bal, 8),
-                    exposure_pct=round(exposure_pct, 1),
+                buys_blocked += 1
+                logger.debug(
+                    f"BUY blocked: level={level['level']} price=${level['price']:,.0f} "
+                    f"usdt=${usdt_bal:.2f} need=${order_usdt:.2f} reserve=${self.min_reserve}"
                 )
                 continue
-            self.event_log.log("order_placed",
-                side="BUY",
-                price=level["price"],
-                quantity=level["quantity"],
-                grid_level=level["level"],
-                current_price=round(current_price, 2),
-                usdt_balance=round(usdt_bal, 2),
-                btc_balance=round(btc_bal, 8),
-                equity=round(equity, 2),
-            )
+            buys_placed += 1
             self.buy(
                 connector_name=self.exchange,
                 trading_pair=self.trading_pair,
@@ -592,29 +613,17 @@ class TAGridBTCUSDT(StrategyV2Base):
                 price=Decimal(str(level["price"])),
             )
 
+        sells_skipped_price = 0
+        sells_blocked = 0
         for level in grid.sell_levels:
             if level["price"] <= current_price:
+                sells_skipped_price += 1
                 continue
             btc_balance = self._get_btc_balance()
             if level["quantity"] > btc_balance:
-                self.event_log.log("order_blocked",
-                    side="SELL",
-                    price=level["price"],
-                    quantity=level["quantity"],
-                    reason="insufficient_btc",
-                    current_btc=round(btc_balance, 8),
-                )
+                sells_blocked += 1
                 continue
-            self.event_log.log("order_placed",
-                side="SELL",
-                price=level["price"],
-                quantity=level["quantity"],
-                grid_level=level["level"],
-                current_price=round(current_price, 2),
-                usdt_balance=round(usdt_bal, 2),
-                btc_balance=round(btc_balance, 8),
-                equity=round(equity, 2),
-            )
+            sells_placed += 1
             self.sell(
                 connector_name=self.exchange,
                 trading_pair=self.trading_pair,
@@ -622,6 +631,11 @@ class TAGridBTCUSDT(StrategyV2Base):
                 order_type=OrderType.LIMIT,
                 price=Decimal(str(level["price"])),
             )
+
+        logger.info(
+            f"Grid placement: buys={buys_placed} placed / {buys_skipped_price} above price / {buys_blocked} blocked | "
+            f"sells={sells_placed} placed / {sells_skipped_price} below price / {sells_blocked} blocked"
+        )
 
     def _cancel_all_orders(self, reason: str = "grid_refresh"):
         try:
