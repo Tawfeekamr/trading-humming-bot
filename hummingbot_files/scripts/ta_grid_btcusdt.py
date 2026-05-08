@@ -735,7 +735,8 @@ class TAGridBTCUSDT(StrategyV2Base):
 
     def _did_fill_order_inner(self, event):
         # Hummingbot v2 OrderFilledEvent: attributes are directly on event, not event.order
-        side = "BUY" if str(getattr(event, 'trade_type', '')) == "BUY" else "SELL"
+        trade_type = getattr(event, 'trade_type', None)
+        side = "BUY" if trade_type is not None and trade_type.name == "BUY" else "SELL"
         price = float(getattr(event, 'price', 0))
         quantity = float(getattr(event, 'amount', 0))
         order_id = str(getattr(event, 'order_id', getattr(event, 'client_order_id', '')))
