@@ -14,23 +14,28 @@ from decimal import Decimal
 from dotenv import load_dotenv
 from pathlib import Path
 
+# Setup logging FIRST so all startup messages go to files
+from src.logging_config import setup_logging
+setup_logging()
+_logger = logging.getLogger("startup")
+
 # Load .env from known locations (mounted at /home/hummingbot/.env in Docker)
 _dotenv_loaded = False
 for _env_path in [Path("/home/hummingbot/.env"), Path(__file__).parent.parent / ".env", Path(".env")]:
     if _env_path.exists():
         load_dotenv(_env_path, override=True)
         _dotenv_loaded = True
-        print(f"[STARTUP] Loaded .env from {_env_path}")
+        _logger.info(f"Loaded .env from {_env_path}")
         break
 if not _dotenv_loaded:
-    print("[STARTUP] WARNING: No .env file found — Telegram and secrets unavailable")
+    _logger.warning("No .env file found — Telegram and secrets unavailable")
 
-# Diagnostic: confirm Telegram vars are loaded
+# Log env status
 _tg_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 _tg_chat = os.environ.get("TELEGRAM_CHAT_ID", "")
-print(f"[STARTUP] TELEGRAM_BOT_TOKEN: {'SET (' + _tg_token[:6] + '...)' if _tg_token else 'NOT SET'}")
-print(f"[STARTUP] TELEGRAM_CHAT_ID: {'SET (' + _tg_chat[:4] + '...)' if _tg_chat else 'NOT SET'}")
-print(f"[STARTUP] ENV: {os.environ.get('ENV', 'NOT SET')}")
+_logger.info(f"ENV={os.environ.get('ENV', 'NOT SET')} "
+             f"TELEGRAM_TOKEN={'SET' if _tg_token else 'NOT SET'} "
+             f"TELEGRAM_CHAT_ID={'SET' if _tg_chat else 'NOT SET'}")
 
 # Global uncaught exception handler — logs + Telegram alert
 def _global_exception_handler(exc_type, exc_value, exc_tb):
@@ -288,6 +293,22 @@ class TAGridBTCUSDT(StrategyV2Base):
 
         self.event_log.log("bot_started", mode=self.env, capital=self.capital_usdt,
                            levels=self.levels, testnet=self.is_testnet)
+
+        # Log full configuration for remote debugging
+        logger.info(
+            f"Bot config: env={self.env} exchange={self.exchange} pair={self.trading_pair} "
+            f"levels={self.levels} capital=${self.capital_usdt} reserve=${self.min_reserve} "
+            f"bb={self.bb_period}/{self.bb_std} rsi={self.rsi_period} "
+            f"rsi_ob={self.rsi_overbought} rsi_os={self.rsi_oversold} "
+            f"ema={self.ema_period} atr={self.atr_period}*{self.atr_multiplier} "
+            f"max_dd={self.max_drawdown_pct}% daily_loss={self.daily_loss_limit_pct}% "
+            f"max_exposure={self.max_btc_exposure_pct}% fee={self._fee_rate*100:.4f}%"
+        )
+        logger.info(
+            f"Components: telegram_token={'SET' if os.environ.get('TELEGRAM_BOT_TOKEN') else 'NOT SET'} "
+            f"telegram_chat={'SET' if os.environ.get('TELEGRAM_CHAT_ID') else 'NOT SET'} "
+            f"journal={type(self.journal).__name__} event_log={type(self.event_log).__name__}"
+        )
 
         # Fee tier auto-detection
         try:

@@ -124,15 +124,15 @@ class TelegramCommandHandler:
         user = update.effective_user
         msg_text = update.message.text if update.message and update.message.text else "NON-TEXT"
         logger.warning(
-            f"Unauthorized access attempt! "
+            f"Unauthorized Telegram access attempt! "
             f"Chat ID: {chat.id} ({chat.type}), "
             f"User: {user.username if user else 'N/A'} ({user.id if user else 'N/A'}), "
             f"Message: {msg_text}"
         )
-        # We don't reply to unauthorized users to avoid being a spam vector
 
     async def _cmd_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
+            logger.info("Telegram /status received")
             uptime_s = int(time.time() - self._started_at)
             hours, remainder = divmod(uptime_s, 3600)
             minutes, secs = divmod(remainder, 60)
@@ -140,8 +140,9 @@ class TelegramCommandHandler:
             state = self.state_machine.state.value
             mode = self.strategy.env.upper()
             cb_status = "🛑 HALTED" if self.circuit_breaker.halted else "✅ OK"
-            pending = self.strategy._grid_order_tracker.total_pending
+            pending = self.strategy.order_tracker.total_pending
 
+            logger.info(f"Telegram /status response: state={state}, mode={mode}, cb={cb_status}, pending={pending}")
             await update.message.reply_text(
                 f"📊 <b>Bot Status</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -158,11 +159,13 @@ class TelegramCommandHandler:
 
     async def _cmd_pnl(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
+            logger.info("Telegram /pnl received")
             today = self.journal.summary_today()
             week = self.journal.summary_this_week()
             month = self.journal.summary_this_month()
             alltime = self.journal.summary_all_time()
 
+            logger.info(f"Telegram /pnl response: today={today['net_pnl']}, all={alltime['net_pnl']}")
             await update.message.reply_text(
                 f"💰 <b>P&L Report</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -178,8 +181,9 @@ class TelegramCommandHandler:
 
     async def _cmd_pause(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
-            self.strategy._manual_pause = True
+            self.strategy.manual_pause = True
             self.event_log.log("manual_pause", source="telegram")
+            logger.info("Telegram /pause — grid paused")
             await update.message.reply_text(
                 "⏸️ Grid manually paused. Use /resume to restart."
             )
@@ -189,8 +193,9 @@ class TelegramCommandHandler:
 
     async def _cmd_resume(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
-            self.strategy._manual_pause = False
+            self.strategy.manual_pause = False
             self.event_log.log("manual_resume", source="telegram")
+            logger.info("Telegram /resume — grid resumed")
             await update.message.reply_text(
                 "🟢 Grid resumed. Will activate on next valid signal."
             )
@@ -200,13 +205,13 @@ class TelegramCommandHandler:
 
     async def _cmd_reset(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
-            self.circuit_breaker.halted = False
+            indicators = self.strategy.get_indicators_snapshot()
             equity = self.strategy._estimate_equity(
-                self.strategy._cached_indicators[4] if self.strategy._cached_indicators else 0
+                indicators[4] if indicators else 0
             )
-            self.circuit_breaker.set_peak_equity(max(equity, 0))
-            self.circuit_breaker.set_start_of_day_equity(max(equity, 0))
+            self.circuit_breaker.reset(equity)
             self.event_log.log("circuit_breaker_reset", source="telegram", equity=round(equity, 2))
+            logger.info(f"Telegram /reset — circuit breaker reset, equity=${equity:.2f}")
             await update.message.reply_text(
                 "🔄 Circuit breaker reset. Bot will resume on next tick."
             )
@@ -216,6 +221,7 @@ class TelegramCommandHandler:
 
     async def _cmd_trades(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
+            logger.info("Telegram /trades received")
             trades = self.journal.get_trades()
             if not trades:
                 await update.message.reply_text("No trades recorded yet.")
@@ -238,6 +244,7 @@ class TelegramCommandHandler:
 
     async def _cmd_logs(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
+            logger.info("Telegram /logs received")
             log_dir = os.environ.get("LOG_DIR", "logs")
             today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             log_file = Path(log_dir) / f"bot_{today}.log"
@@ -256,6 +263,7 @@ class TelegramCommandHandler:
 
     async def _cmd_errors(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
+            logger.info("Telegram /errors received")
             log_dir = os.environ.get("LOG_DIR", "logs")
             crash_file = Path(log_dir) / "crashes.log"
             if not crash_file.exists():
@@ -276,6 +284,7 @@ class TelegramCommandHandler:
 
     async def _cmd_fees(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
+            logger.info("Telegram /fees received")
             today = self.journal.fee_summary(
                 datetime.now(timezone.utc).strftime("%Y-%m-%d 00:00:00")
             )
@@ -314,6 +323,7 @@ class TelegramCommandHandler:
             await update.message.reply_text(f"⚠️ Error getting fee analysis: {e}")
 
     async def _cmd_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        logger.info("Telegram /help received")
         await update.message.reply_text(
             "📖 <b>Available Commands</b>\n"
             "━━━━━━━━━━━━━━━━━━━━━━\n"
