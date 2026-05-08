@@ -83,6 +83,7 @@ from src.journal.trade_journal import TradeJournal, Trade
 from src.health import update_health, set_halted, start_health_server
 from src.logging_config import setup_logging
 from src.logging.event_logger import EventLogger
+from src.monitoring.system_monitor import SystemAlertMonitor
 
 try:
     from hummingbot.strategy.strategy_v2_base import StrategyV2Base, StrategyV2ConfigBase
@@ -332,6 +333,11 @@ class TAGridBTCUSDT(StrategyV2Base):
             strategy=self,
         )
         self._telegram_commands.start()
+
+        # Start system resource monitor (alerts at 75% CPU/RAM/Disk)
+        self._sys_monitor = SystemAlertMonitor(self.telegram, interval_sec=300)
+        self._sys_monitor.start()
+        logger.info("System resource monitor started")
 
         try:
             loop = asyncio.get_event_loop()
@@ -963,6 +969,8 @@ class TAGridBTCUSDT(StrategyV2Base):
     # ── Graceful Shutdown ────────────────────────────────────────────
 
     def on_stop(self):
+        if hasattr(self, "_sys_monitor"):
+            self._sys_monitor.stop()
         if hasattr(self, "_telegram_commands"):
             self._telegram_commands.stop()
         try:

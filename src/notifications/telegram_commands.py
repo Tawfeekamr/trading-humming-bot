@@ -11,6 +11,8 @@ from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 
+from src.monitoring.system_monitor import get_stats
+
 logger = logging.getLogger(__name__)
 
 
@@ -54,6 +56,7 @@ class TelegramCommandHandler:
             self._app.add_handler(CommandHandler("logs", self._cmd_logs, filters=chat_filter))
             self._app.add_handler(CommandHandler("errors", self._cmd_errors, filters=chat_filter))
             self._app.add_handler(CommandHandler("fees", self._cmd_fees, filters=chat_filter))
+            self._app.add_handler(CommandHandler("server", self._cmd_server, filters=chat_filter))
             self._app.add_handler(CommandHandler("help", self._cmd_help, filters=chat_filter))
 
             # Add catch-all debug handler to identify chat ID mismatches
@@ -322,6 +325,19 @@ class TelegramCommandHandler:
             logger.error(f"Error in /fees: {e}")
             await update.message.reply_text(f"⚠️ Error getting fee analysis: {e}")
 
+    async def _cmd_server(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        try:
+            logger.info("Telegram /server received")
+            stats = get_stats()
+            logger.info(f"Telegram /server response: cpu={stats.cpu_percent:.0f}% ram={stats.ram_percent:.0f}% disk={stats.disk_percent:.0f}%")
+            await update.message.reply_text(
+                stats.format_telegram(),
+                parse_mode=ParseMode.HTML
+            )
+        except Exception as e:
+            logger.error(f"Error in /server: {e}")
+            await update.message.reply_text(f"⚠️ Error getting server status: {e}")
+
     async def _cmd_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info("Telegram /help received")
         await update.message.reply_text(
@@ -334,6 +350,7 @@ class TelegramCommandHandler:
             "/reset — Reset circuit breaker after halt\n"
             "/trades — Last 5 closed trades\n"
             "/fees — Fee analysis and overtrading detection\n"
+            "/server — CPU, RAM, Disk usage (alerts at 75%)\n"
             "/logs — Last 30 lines from today's bot log\n"
             "/errors — Recent errors and crashes\n"
             "/help — This message",
