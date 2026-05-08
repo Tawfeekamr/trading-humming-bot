@@ -60,25 +60,35 @@ class TelegramCommandHandler:
             logger.error(f"Telegram polling thread crashed: {e}", exc_info=True)
 
     def _tg_get(self, path, params=None, timeout=35):
-        """HTTP GET to Telegram API using subprocess curl to avoid thread blocking."""
+        """HTTP GET to Telegram API via subprocess to avoid thread deadlock."""
         url = f"https://api.telegram.org/bot{self._token}/{path}"
-        cmd = ["curl", "-sS", "--max-time", str(timeout)]
         if params:
-            for k, v in params.items():
-                cmd.extend(["-d", f"{k}={v}"])
-        cmd.append(url)
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 5)
+            qs = "&".join(f"{k}={v}" for k, v in params.items())
+            url = f"{url}?{qs}"
+        script = (
+            "import urllib.request, json, sys\n"
+            f"r = urllib.request.urlopen({url!r}, timeout={timeout})\n"
+            "sys.stdout.write(r.read().decode())\n"
+        )
+        result = subprocess.run(
+            ["python", "-c", script],
+            capture_output=True, text=True, timeout=timeout + 10,
+        )
         return json.loads(result.stdout) if result.stdout else {}
 
     def _tg_post(self, path, data, timeout=10):
-        """HTTP POST to Telegram API using subprocess curl."""
+        """HTTP POST to Telegram API via subprocess to avoid thread deadlock."""
         url = f"https://api.telegram.org/bot{self._token}/{path}"
-        cmd = ["curl", "-sS", "--max-time", str(timeout), "-X", "POST"]
-        for k, v in data.items():
-            cmd.extend(["-d", f"{k}={v}"])
-        cmd.append(url)
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 5)
-        return json.loads(result.stdout) if result.stdout else {}
+        encoded = "&".join(f"{k}={v}" for k, v in data.items())
+        script = (
+            "import urllib.request, sys\n"
+            f"req = urllib.request.Request({url!r}, data={encoded!r}.encode())\n"
+            f"urllib.request.urlopen(req, timeout={timeout})\n"
+        )
+        subprocess.run(
+            ["python", "-c", script],
+            capture_output=True, text=True, timeout=timeout + 10,
+        )
 
     def _poll_forever(self):
         """Synchronous getUpdates-based polling loop using subprocess curl."""

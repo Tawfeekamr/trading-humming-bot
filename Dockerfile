@@ -1,10 +1,5 @@
 FROM hummingbot/hummingbot:latest
 
-# Install curl for Telegram API calls
-USER root
-RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
-USER hummingbot
-
 # Install our requirements into the conda hummingbot environment
 COPY requirements.txt /tmp/requirements.txt
 RUN /opt/conda/envs/hummingbot/bin/pip install --no-cache-dir -r /tmp/requirements.txt && rm /tmp/requirements.txt
