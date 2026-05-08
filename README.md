@@ -16,9 +16,9 @@
 | **Indicators**          | Bollinger Bands · RSI · EMA 200 · ATR                    |
 | **Timeframe**           | 1h candles for TA signals                                |
 | **Language**            | Python 3.11+                                             |
-| **Deployment**          | Railway (auto-deploy from GitHub, no DevOps)             |
-| **Notifications**       | Telegram real-time alerts                                |
-| **Status**              | 🔧 In Development                                        |
+| **Deployment**          | AWS EC2 (Tokyo) via GitHub Actions + Docker               |
+| **Notifications**       | Telegram real-time alerts + interactive commands          |
+| **Status**              | ✅ Paper Trading                                          |
 
 ---
 
@@ -36,7 +36,10 @@ Every 1h candle closes:
 ├─ IF price > EMA200 AND RSI < 65          ← Uptrend, not overbought
 │    └─ Grid ACTIVE (long-biased)
 │       ├─ Range:   Lower BB  →  Upper BB
-│       └─ Spacing: ATR × 0.5
+│       ├─ Range:   Lower BB  →  Upper BB
+│       └─ Spacing: ATR × 1.5
+│       ├─ Skip BUY levels when RSI > 60
+│       └─ Skip SELL levels when RSI < 40
 │
 ├─ IF RSI > 70 OR price < EMA200           ← Overbought or downtrend
 │    └─ Grid PAUSED — cancel all orders, hold USDT
@@ -51,9 +54,9 @@ Every 1h candle closes:
 | Indicator | Role | Setting |
 |-----------|------|---------|
 | **Bollinger Bands** | Sets grid upper/lower range automatically | Period 20, StdDev 2 |
-| **RSI** | Activates grid when oversold, pauses when overbought | Period 14 |
+| **RSI** | Activates grid when oversold, pauses when overbought; filters individual levels | Period 14 |
 | **EMA 200** | Trend filter — only run grid in uptrend | Period 200 |
-| **ATR** | Sets dynamic grid spacing based on volatility | Period 14, multiplier 0.5 |
+| **ATR** | Sets dynamic grid spacing based on volatility | Period 14, multiplier 1.5 |
 
 ---
 
@@ -98,6 +101,7 @@ ta-grid-bot/
 │   │
 │   └── notifications/
 │       ├── telegram_bot.py       # Grid state alerts
+│       ├── telegram_commands.py  # Interactive Telegram commands (/status, /pnl, etc.)
 │       └── pnl_reporter.py       # Hourly/daily/monthly P&L summaries
 │
 ├── config/
@@ -165,10 +169,10 @@ timeframe: "1h"
 
 # ── Grid Parameters ───────────────────────────────────────────────
 grid:
-  levels: 10                  # Orders on each side of mid price
+  levels: 6                   # Orders on each side of mid price
   capital_usdt: 1000          # Total USDT allocated
   min_usdt_reserve: 100       # Always keep this in reserve
-  order_refresh_time: 30      # Seconds between order refresh
+  order_refresh_time: 60      # Seconds between order refresh
 
 # ── Indicator Settings ────────────────────────────────────────────
 indicators:
@@ -186,7 +190,7 @@ indicators:
 
   atr:
     period: 14
-    spacing_multiplier: 0.5   # Grid spacing = ATR × this value
+    spacing_multiplier: 1.5   # Grid spacing = ATR × this value
 
 # ── Grid State Rules ──────────────────────────────────────────────
 rules:
@@ -269,22 +273,25 @@ start --script ta_grid_btcusdt.py --conf conf_ta_grid_live.yml
 ```
 Price
   │
-Upper BB ──── 🔴 SELL order 10  ($105,000)
-              🔴 SELL order 9   ($104,000)
-              🔴 SELL order 8   ($103,000)
-              🔴 SELL order 7   ($102,000)
-              🔴 SELL order 6   ($101,000)
+Upper BB ──── 🔴 SELL order 6   ($103,500)
+              🔴 SELL order 5   ($103,000)
+              🔴 SELL order 4   ($102,500)
+              🔴 SELL order 3   ($102,000)
+              🔴 SELL order 2   ($101,500)
+              🔴 SELL order 1   ($101,000)
 Mid Price ─── ◆  Current BTC   ($100,000)
-              🟢 BUY  order 5   ($99,000)
-              🟢 BUY  order 4   ($98,000)
+              🟢 BUY  order 1   ($99,000)
+              🟢 BUY  order 2   ($98,000)
               🟢 BUY  order 3   ($97,000)
-              🟢 BUY  order 2   ($96,000)
-Lower BB ──── 🟢 BUY  order 1   ($95,000)
+              🟢 BUY  order 4   ($96,000)
+              🟢 BUY  order 5   ($95,000)
+Lower BB ──── 🟢 BUY  order 6   ($94,000)
   │
-  └─ Spacing = ATR × 0.5  (recalculated every 1h)
+  └─ Spacing = ATR × 1.5  (recalculated every 1h)
      Range   = Lower BB → Upper BB  (recalculated every 1h)
 
   ⏸️  RSI > 70 or price < EMA200 → ALL ORDERS CANCELLED → HOLD USDT
+  🔍  RSI > 60 → skip BUY levels  |  RSI < 40 → skip SELL levels
 ```
 
 ---
@@ -300,7 +307,9 @@ Lower BB ──── 🟢 BUY  order 1   ($95,000)
 
 ---
 
-## 📬 Telegram Alerts
+## 📬 Telegram Alerts & Commands
+
+### Alerts (automatic)
 
 | Event | Alert | Content |
 |-------|-------|---------|
@@ -311,6 +320,24 @@ Lower BB ──── 🟢 BUY  order 1   ($95,000)
 | Sell order filled | 🔴 | Price, qty, PnL for that level |
 | Circuit breaker | 🚨 | Drawdown %, bot halted |
 | Daily summary | 📊 | Total trades, PnL, fees, grid efficiency |
+
+### Commands (interactive)
+
+| Command | Description |
+|---------|-------------|
+| `/status` | Grid state, mode, uptime, pending orders |
+| `/pnl` | P&L summary — today, week, month, all-time with win rates |
+| `/price` | Current BTC/USDT price with RSI, EMA, Bollinger Bands |
+| `/trades` | Last 5 closed trades |
+| `/pending` | Open orders with prices and amounts |
+| `/system` | CPU, memory, disk usage |
+| `/fees` | Total fees paid today / this week / this month |
+| `/errors` | Recent errors from crash log |
+| `/logs` | Last 30 lines from today's bot log |
+| `/pause` | Manually pause grid trading |
+| `/resume` | Resume grid from manual pause |
+| `/reset` | Reset circuit breaker after halt |
+| `/help` | Command reference |
 
 ---
 
@@ -384,11 +411,10 @@ streamlit run src/dashboard/app.py
 # Opens at http://localhost:8501
 ```
 
-**Deploy on Railway (alongside bot):**
+**Deploy on EC2 (alongside bot):**
 ```bash
-# Add second service in Railway pointing to:
-streamlit run src/dashboard/app.py --server.port $PORT --server.address 0.0.0.0
-# Railway gives it a public URL you can bookmark
+# Dashboard runs inside the same Docker container on EC2
+# Accessible at http://<ec2-ip>:8501
 ```
 
 ---
@@ -462,199 +488,103 @@ Stage 5 — Full Capital Deployment
 
 ---
 
-## 🚀 Deployment (Railway — No DevOps Required)
+## 🚀 Deployment (AWS EC2 + GitHub Actions)
 
-Railway connects directly to your GitHub repo and deploys automatically. No servers, no SSH, no terminal. Every time you push code, it redeploys itself.
-
----
-
-### 📋 Prerequisites
-
-Before deploying, make sure you have:
-- [ ] A [GitHub](https://github.com) account
-- [ ] A [Railway](https://railway.app) account (free, sign in with GitHub)
-- [ ] Your project pushed to a GitHub repository
-- [ ] Your `.env` keys ready to paste
+The bot runs on an AWS EC2 instance in Tokyo, deployed via GitHub Actions CI/CD. Every push to `main` triggers an automatic rebuild and redeploy.
 
 ---
 
-### 🪜 Step-by-Step Railway Deployment
+### Architecture
 
-#### Step 1 — Push Project to GitHub
+```
+GitHub (push to main)
+  └─► GitHub Actions workflow
+       └─► SSH into EC2 via AWS SSM
+            └─► docker compose build + up
+                 └─► Hummingbot container (strategy script + indicators)
+```
+
+---
+
+### Infrastructure
+
+| Component | Details |
+|-----------|---------|
+| **Cloud** | AWS EC2 (ap-northeast-1 — Tokyo) |
+| **Container** | Docker + docker-compose |
+| **CI/CD** | GitHub Actions → AWS SSM Session Manager |
+| **Base image** | `hummingbot/hummingbot:latest` |
+| **Logs** | Docker volume mount at `./logs/` |
+
+---
+
+### Deploy Process
+
+Pushing to `main` triggers the GitHub Actions workflow:
+
+1. Checkout code
+2. Connect to EC2 via AWS SSM
+3. Pull latest code
+4. Rebuild Docker container
+5. Restart with `docker compose up -d`
+6. Bot sends startup alert to Telegram
+
+---
+
+### Monitoring
+
+| What | How |
+|------|-----|
+| Live logs | `docker compose logs -f` on EC2 |
+| Telegram commands | `/status`, `/pnl`, `/trades`, `/errors` |
+| Trade alerts | Automatic on every fill |
+| Daily summary | Sent at midnight UTC |
+
+---
+
+### Paper → Live Transition
+
+Update the `ENV` variable from `paper` to `live` in your `.env` file on the EC2 instance, then restart:
 
 ```bash
-cd ta-grid-bot
-git init
-git add .
-git commit -m "Initial commit — TA Grid Bot"
-git branch -M main
-git remote add origin https://github.com/YOUR_USERNAME/ta-grid-bot.git
-git push -u origin main
+docker compose restart
 ```
 
-> ⚠️ Make sure `.gitignore` contains `.env` and `keys/` before pushing.
-> Your API keys must **never** touch GitHub.
-
----
-
-#### Step 2 — Create New Railway Project
-
-```
-1. Go to railway.app
-2. Click "New Project"
-3. Select "Deploy from GitHub repo"
-4. Authorize Railway to access your GitHub
-5. Select your "ta-grid-bot" repository
-6. Click "Deploy Now"
-```
-
-Railway will detect your `Dockerfile` automatically and start building.
-
----
-
-#### Step 3 — Add Your Environment Variables
-
-```
-1. In your Railway project → click your service
-2. Go to "Variables" tab
-3. Click "Raw Editor"
-4. Paste all your keys from .env.example:
-```
-
-```env
-BINANCE_API_KEY=your_real_key
-BINANCE_API_SECRET=your_real_secret
-BINANCE_TESTNET_API_KEY=your_testnet_key
-BINANCE_TESTNET_API_SECRET=your_testnet_secret
-OKX_API_KEY=your_okx_key
-OKX_API_SECRET=your_okx_secret
-OKX_PASSPHRASE=your_okx_passphrase
-OKX_DEMO_MODE=1
-TELEGRAM_BOT_TOKEN=your_telegram_token
-TELEGRAM_CHAT_ID=your_chat_id
-ENV=paper
-LOG_LEVEL=INFO
-GRID_CAPITAL_USDT=1000
-GRID_LEVELS=10
-MAX_DRAWDOWN_PCT=10
-MIN_USDT_RESERVE=100
-MAX_BTC_EXPOSURE_PCT=80
-```
-
-```
-5. Click "Save" → Railway automatically redeploys with your keys
-```
-
----
-
-#### Step 4 — Verify Deployment
-
-```
-1. Go to "Deployments" tab → status should show ✅ Active
-2. Click "View Logs" → you should see Hummingbot starting up
-3. Check your Telegram → bot sends 📡 startup alert
-```
-
----
-
-#### Step 5 — Monitor Your Bot
-
-Railway gives you everything in the browser — no terminal needed:
-
-| What | Where |
-|------|-------|
-| Live logs | Railway → Deployments → View Logs |
-| Restart bot | Railway → Deployments → Redeploy |
-| Update a key | Railway → Variables → edit value → auto-redeploys |
-| Push code update | `git push` → Railway redeploys automatically |
-| Telegram alerts | Your phone — all trade events sent in real time |
-
----
-
-### 🔁 Auto-Deploy on Code Changes
-
-Every time you improve your strategy and push to GitHub, Railway redeploys automatically:
-
-```bash
-# Make a change to your strategy
-nano hummingbot_files/scripts/ta_grid_btcusdt.py
-
-# Push to GitHub
-git add .
-git commit -m "Adjust RSI threshold to 32"
-git push
-
-# Railway detects the push → rebuilds → redeploys → bot restarts
-# Zero manual steps required
-```
-
----
-
-### 💰 Railway Pricing
-
-| Plan | Cost | What You Get |
-|------|------|--------------|
-| **Trial** | Free ($5 credits) | Good for first paper trading test |
-| **Hobby** | $5/month + usage | Always-on, ~$5–8/month total for a bot |
-| **Pro** | $20/month | Teams, more resources |
-
-> For a Hummingbot grid bot, the **Hobby plan at ~$5–8/month** is all you need.
-> That's less than AED 30/month to run a 24/7 automated trading system.
-
----
-
-### 🔐 Security on Railway
-
-| Risk | How Railway Handles It |
-|------|------------------------|
-| API keys exposure | Variables are encrypted at rest, never in GitHub |
-| Bot crashes | Auto-restarts immediately |
-| Code deployment | Only deploys from your private GitHub repo |
-| Access control | Login protected, 2FA available |
-
----
-
-### 📊 Paper → Live Transition on Railway
-
-When you're ready to go live, just update **one variable**:
-
-```
-Railway → Variables → ENV → change "paper" to "live"
-→ Save → auto-redeploys in live mode
-```
-
-No other changes needed. Same code, same setup — just real money now.
+No code changes needed — same strategy, real money.
 
 ---
 
 ## 🗺️ Roadmap
 
-**Phase 1 — Foundation**
-- [ ] Hummingbot v2 script structure
-- [ ] Bollinger Bands auto range-setting
-- [ ] ATR dynamic grid spacing
-- [ ] Paper trading on Binance testnet
+**Phase 1 — Foundation** ✅
+- [x] Hummingbot v2 script structure
+- [x] Bollinger Bands auto range-setting
+- [x] ATR dynamic grid spacing
+- [x] Paper trading on Binance testnet
 
-**Phase 2 — Intelligence**
-- [ ] RSI pause/resume filter
-- [ ] EMA 200 trend bias
-- [ ] Telegram alerts
-- [ ] Circuit breaker + position guard
+**Phase 2 — Intelligence** ✅
+- [x] RSI pause/resume filter + per-level RSI filtering
+- [x] EMA 200 trend bias
+- [x] Telegram alerts + interactive commands
+- [x] Circuit breaker + position guard
 
-**Phase 3 — Validation**
+**Phase 3 — Validation** ✅
+- [x] Unit tests (indicators, grid, circuit breaker)
+- [x] Paper trading on Binance
+- [x] Performance reporting (Telegram + dashboard)
+
+**Phase 4 — Production** ✅
+- [x] AWS EC2 deployment (Tokyo) via GitHub Actions
+- [x] Docker containerization
+- [x] Telegram startup/shutdown alerts
+
+**Phase 5 — Optimization** (current)
+- [ ] Monitor paper trading results (30+ days)
 - [ ] VectorBT parameter sweep
 - [ ] Walk-forward backtesting
-- [ ] 30-day paper trading gate
-- [ ] Performance reporting
+- [ ] Live micro-stake ($100–200)
 
-**Phase 4 — Production**
-- [ ] Railway deployment (GitHub → auto-deploy)
-- [ ] Environment variables configured on Railway
-- [ ] Telegram startup/shutdown alerts
-- [ ] Live micro-stake ($100)
-- [ ] Full capital scaling
-
-**Phase 5 — Expansion**
+**Phase 6 — Expansion**
 - [ ] ETH/USDT second grid
 - [ ] 4h + 1h multi-timeframe confluence
 - [ ] ML signal layer (FreqAI)
@@ -671,4 +601,4 @@ No other changes needed. Same code, same setup — just real money now.
 
 > ⚠️ **Disclaimer:** Personal use only on your own VARA-licensed Binance account. Not financial advice. Not licensed for managing third-party funds. Grid bots lose money when price drops sharply below the grid range — always use a circuit breaker and never deploy capital you cannot afford to lose.
 
-*Built with Claude Code CLI · Hummingbot v2 · Binance FZE VARA API · pandas_ta · Python 3.11 · Deployed on Railway*
+*Built with Claude Code CLI · Hummingbot v2 · Binance FZE VARA API · pandas_ta · Python 3.11 · Deployed on AWS EC2 (Tokyo)*

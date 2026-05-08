@@ -20,7 +20,8 @@ A normal grid bot operates "blind"—it just places 10 lines up and 10 lines dow
 
 *   **Dynamic Floors & Ceilings:** It uses the **Bollinger Bands (20, 2)** to automatically locate the current market range. It won't place orders randomly; it only places grids inside the mathematical support (Lower Band) and resistance (Upper Band).
 *   **Adaptive Spacing:** Market chop changing? The bot uses the **ATR (Average True Range)**. If Bitcoin is exploding in volatility, the bot spreads the orders out to avoid catching falling knives. If the market is completely flat, the bot tightens the orders up to catch microscopic bounces.
-*   **The Kill Switch:** If the market enters panic mode (`Price < EMA 200` or `RSI > 70`), the grid **pauses itself**, cancels all pending open orders, and waits for the danger to pass. 
+*   **The Kill Switch:** If the market enters panic mode (`Price < EMA 200` or `RSI > 70`), the grid **pauses itself**, cancels all pending open orders, and waits for the danger to pass.
+*   **RSI Level Filtering:** Even when the grid is ACTIVE, individual levels are filtered by RSI. Buy levels are skipped when `RSI > 60` (market already overbought) and sell levels are skipped when `RSI < 40` (market oversold, wait for bounce). This prevents placing counter-trend orders. 
 
 ---
 
@@ -35,7 +36,7 @@ Because the bot takes many micro-trades, the absolute biggest threat to your pro
 
 To maximize the bot's net yield, your profit strategy relies on three pillars:
 1.  **Fee Destruction (Binance BNB Discount):** You must purchase $15 of BNB and enable BNB fee payments in your Binance profile. This reduces your trading fee by 25% (down to `0.075%`). If you skip this, the exchange will consume a massive chunk of your gross profits.
-2.  **Wide vs. Tight Grids:** If you cram 50 orders extremely close together, your bot will fire 100 times a day—but your fees will be staggering, and the profit per trade will be microscopic. This strategy recommends **8 to 12 levels max** with an ATR spacing multiplier of `0.8` to force the bot to take *fewer, but highly profitable* quality trades.
+2.  **Wide vs. Tight Grids:** If you cram 50 orders extremely close together, your bot will fire 100 times a day—but your fees will be staggering, and the profit per trade will be microscopic. This strategy uses **6 levels** with an ATR spacing multiplier of `1.5` to force the bot to take *fewer, but highly profitable* quality trades. Each round-trip captures more spread, making it easier to beat fees.
 3.  **Active Peak Hours:** As noted in the Market Timing docs, the most dense pocket of algorithmic profit happens between **16:00 and 21:00 (GST)** when US and European volume overlap.
 
 ---

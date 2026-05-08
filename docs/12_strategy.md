@@ -15,22 +15,29 @@ The bot runs a **dynamic grid trading** strategy on BTC/USDT. Unlike static grid
 Grid trading profits from price oscillation within a range. The bot places limit buy orders below the current price and limit sell orders above it. Each time price bounces between levels, a round-trip completes:
 
 ```
-Sell 8 @ $105,600  ─┐
-Sell 7 @ $104,800   │  Sell zone (above mid)
-Sell 6 @ $104,000   │
+Sell 6 @ $103,500  ─┐
+Sell 5 @ $103,000   │  Sell zone (above mid)
+Sell 4 @ $102,500   │
+Sell 3 @ $102,000   │
+Sell 2 @ $101,500   │
+Sell 1 @ $101,000   │
                     │
-══════ $102,000 ════╪════  Mid price (Bollinger SMA)
+═══════ $100,000 ═══╪════  Mid price (Bollinger SMA)
                     │
-Buy  6 @ $100,000   │
-Buy  7 @ $99,200    │  Buy zone (below mid)
-Buy  8 @ $98,400   ─┘
+Buy  1 @ $99,000    │
+Buy  2 @ $98,000    │
+Buy  3 @ $97,000    │  Buy zone (below mid)
+Buy  4 @ $96,000    │
+Buy  5 @ $95,000    │
+Buy  6 @ $94,000   ─┘
 
-When price drops to $100,000 → BUY fills
-When price bounces to $104,000 → SELL fills
-Profit = ($104,000 - $100,000) × quantity - fees
+RSI > 60 → skip buy levels  |  RSI < 40 → skip sell levels
+When price drops to $98,000 → BUY fills
+When price bounces to $102,000 → SELL fills
+Profit = ($102,000 - $98,000) × quantity - fees
 ```
 
-Each grid level is spaced by **ATR × 0.8**, which adapts to current volatility. In calm markets, levels are closer together (more fills, smaller profit per trade). In volatile markets, levels spread apart (fewer fills, larger profit per trade).
+Each grid level is spaced by **ATR × 1.5**, which adapts to current volatility. In calm markets, levels are closer together (more fills, smaller profit per trade). In volatile markets, levels spread apart (fewer fills, larger profit per trade). The 1.5 multiplier ensures each round-trip captures enough spread to comfortably beat exchange fees.
 
 ---
 
@@ -94,10 +101,10 @@ ATR = EMA(TR, 14)
 **Purpose:** Sets grid spacing.
 
 ```
-Grid Spacing = ATR × 0.8
+Grid Spacing = ATR × 1.5
 ```
 
-ATR measures how much BTC moves in a typical hour. With a 0.8 multiplier, the grid is slightly tighter than the average move, increasing fill probability while still capturing meaningful profit per level.
+ATR measures how much BTC moves in a typical hour. With a 1.5 multiplier, the grid is wider than the average move, ensuring each round-trip captures enough spread to beat exchange fees. Fewer but more profitable trades.
 
 ---
 
@@ -137,9 +144,12 @@ The bot operates in three states with deterministic transitions:
 
 ### Grid Calculation
 ```
-For each level i (1 to 8):
-  Buy price  = BB Mid - (ATR × 0.8 × i)   [clamped to BB Lower]
-  Sell price = BB Mid + (ATR × 0.8 × i)   [clamped to BB Upper]
+For each level i (1 to 6):
+  Buy price  = BB Mid - (ATR × 1.5 × i)   [clamped to BB Lower]
+  Sell price = BB Mid + (ATR × 1.5 × i)   [clamped to BB Upper]
+
+  Buy level skipped if RSI > 60 (overbought)
+  Sell level skipped if RSI < 40 (oversold)
 
 Order size = (Capital - Reserve) / (2 × Levels) / Price
 ```
@@ -189,7 +199,7 @@ All parameters are in `config/strategy.yaml`:
 
 ```yaml
 grid:
-  levels: 10              # Orders per side (buy + sell)
+  levels: 6               # Orders per side (buy + sell)
   capital_usdt: 1000      # USDT allocated
   min_usdt_reserve: 100   # Minimum USDT to keep
   order_refresh_time: 60  # Seconds between order refresh
@@ -206,7 +216,7 @@ indicators:
     period: 200            # Trend filter
   atr:
     period: 14
-    spacing_multiplier: 0.8  # Grid spacing = ATR × this
+    spacing_multiplier: 1.5  # Grid spacing = ATR × this
 
 risk:
   max_drawdown_pct: 10     # Circuit breaker: peak drawdown
@@ -234,12 +244,16 @@ Environment variables override config values:
 |---------|-------------|
 | `/status` | Grid state, mode, uptime, pending orders |
 | `/pnl` | P&L summary — today, week, month, all-time with win rates |
+| `/price` | Current BTC/USDT price with RSI, EMA, Bollinger Bands |
+| `/trades` | Last 5 closed trades |
+| `/pending` | Open orders with prices and amounts |
+| `/system` | CPU, memory, disk usage |
+| `/fees` | Total fees paid today / this week / this month |
+| `/errors` | Recent errors from crash log |
+| `/logs` | Last 30 lines from today's bot log |
 | `/pause` | Manually pause grid trading |
 | `/resume` | Resume grid from manual pause |
 | `/reset` | Reset circuit breaker after halt |
-| `/trades` | Last 5 closed trades |
-| `/logs` | Last 30 lines from today's bot log |
-| `/errors` | Recent errors from crash log |
 | `/help` | Command reference |
 
 ### Dashboard
@@ -264,7 +278,7 @@ All logs persist in `./logs/` (Docker volume mount):
 ## Expected Behavior
 
 **Normal market (ranging):**
-- Grid places 8 buy + 8 sell levels within Bollinger Bands
+- Grid places 6 buy + 6 sell levels within Bollinger Bands
 - Price oscillates → fills occur → round-trip P&L captured
 - Grid recalculates hourly, shifting with the market
 

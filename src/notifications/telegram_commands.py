@@ -111,7 +111,7 @@ class TelegramCommandHandler:
         try:
             ping_text = (
                 "📡 <b>Telegram Command Handler Online</b>\n"
-                "Commands: /status /pnl /trades /pending /fees /system /clear /help"
+                "Commands: /status /pnl /price /trades /pending /fees /system /clear /help"
             )
             self._tg_post("sendMessage", {
                 "chat_id": self._chat_id,
@@ -134,6 +134,7 @@ class TelegramCommandHandler:
             "logs": self._cmd_logs,
             "errors": self._cmd_errors,
             "fees": self._cmd_fees,
+            "price": self._cmd_price,
             "system": self._cmd_server,
             "server": self._cmd_server,
             "clear": self._cmd_clear,
@@ -446,6 +447,65 @@ class TelegramCommandHandler:
             logger.error(f"Error in /fees: {e}")
             update.message.reply_text(f"⚠️ Error getting fee analysis: {e}")
 
+    def _cmd_price(self, update, context):
+        try:
+            logger.info("Telegram /price received")
+
+            # Fetch real-time price from Binance ticker
+            script = (
+                "from binance.client import Client\n"
+                "import json, sys\n"
+                "c = Client('', '')\n"
+                "t = c.get_symbol_ticker(symbol='BTCUSDT')\n"
+                "sys.stdout.write(t['price'])\n"
+            )
+            result = subprocess.run(
+                ["python", "-c", script],
+                capture_output=True, text=True, timeout=15,
+            )
+            if result.returncode != 0 or not result.stdout:
+                update.message.reply_text("⚠️ Could not fetch live price.")
+                return
+            live_price = float(result.stdout.strip())
+
+            # Get cached indicators for context
+            indicators = self.strategy.get_indicators_snapshot()
+
+            if not indicators or not indicators[0]:
+                update.message.reply_text(f"💲 <b>BTC/USDT</b>: ${live_price:,.2f}", parse_mode="HTML")
+                return
+
+            bb = indicators[0]
+            rsi = indicators[1]
+            ema = indicators[2]
+            atr = indicators[3]
+
+            bb_upper = bb.upper_band if bb else 0
+            bb_lower = bb.lower_band if bb else 0
+            bb_mid = bb.middle_band if bb else 0
+
+            pct_from_ema = ((live_price - ema) / ema * 100) if ema else 0
+            ema_emoji = "🟢" if pct_from_ema >= 0 else "🔴"
+            rsi_zone = "OVERBOUGHT" if rsi > 70 else "OVERSOLD" if rsi < 30 else "NEUTRAL"
+
+            update.message.reply_text(
+                f"₿ <b>BTC/USDT — LIVE</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"💲 <b>${live_price:,.2f}</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"📊 RSI (14): {rsi:.1f}  [{rsi_zone}]\n"
+                f"{ema_emoji} EMA 200: ${ema:,.0f}  ({pct_from_ema:+.1f}%)\n"
+                f"📏 ATR (14): ${atr:,.0f}\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"📈 BB Upper: ${bb_upper:,.0f}\n"
+                f"📊 BB Mid:   ${bb_mid:,.0f}\n"
+                f"📉 BB Lower: ${bb_lower:,.0f}",
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            logger.error(f"Error in /price: {e}")
+            update.message.reply_text(f"⚠️ Error getting price: {e}")
+
     def _cmd_server(self, update, context):
         try:
             logger.info("Telegram /server received")
@@ -522,6 +582,7 @@ class TelegramCommandHandler:
             "━━━━━━━━━━━━━━━━━━━━━━\n"
             "/status — Grid state, mode, uptime, pending orders\n"
             "/pnl — Today / week / month / all-time P&L\n"
+            "/price — Current BTC/USDT price with indicators\n"
             "/pause — Manually pause grid (cancel all orders)\n"
             "/resume — Resume grid trading\n"
             "/reset — Reset circuit breaker after halt\n"
