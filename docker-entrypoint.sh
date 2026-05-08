@@ -18,11 +18,14 @@ fi
 source /opt/conda/etc/profile.d/conda.sh
 conda activate hummingbot
 
-# Configure MQTT to connect to the mosquitto sidecar broker
+# Background: patch MQTT config once Hummingbot creates conf_client.yml.
+# The file is generated during quickstart startup, so we watch for it.
 CONF="/home/hummingbot/conf/conf_client.yml"
-if [ -f "$CONF" ]; then
+(
+    while [ ! -f "$CONF" ]; do sleep 0.5; done
     sed -i 's/mqtt_host: localhost/mqtt_host: mosquitto/' "$CONF"
     sed -i 's/mqtt_autostart: false/mqtt_autostart: true/' "$CONF"
-fi
+    echo "MQTT config patched: host=mosquitto, autostart=true"
+) &
 
 exec python ./bin/hummingbot_quickstart.py
