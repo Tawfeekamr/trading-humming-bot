@@ -29,4 +29,10 @@ if [ -f "$CONF" ]; then
     sed -i 's/mqtt_external_events: true/mqtt_external_events: false/' "$CONF"
 fi
 
+# Patch quickstart to NOT force mqtt_autostart=True in headless mode
+QUICKSTART="/home/hummingbot/bin/hummingbot_quickstart.py"
+if [ -f "$QUICKSTART" ]; then
+    sed -i 's/client_config_map.mqtt_bridge.mqtt_autostart = True/pass  # MQTT disabled for trading bot/' "$QUICKSTART"
+fi
+
 exec python ./bin/hummingbot_quickstart.py
