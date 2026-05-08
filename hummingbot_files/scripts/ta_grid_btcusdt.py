@@ -348,17 +348,16 @@ class TAGridBTCUSDT(StrategyV2Base):
             pass
 
     # ── Main Tick Loop ───────────────────────────────────────────────
-
-    def tick(self, timestamp: float):
-        self._tick_count += 1
-        if self._tick_count <= 5 or self._tick_count % 30 == 0:
-            connectors_ready = {name: c.ready for name, c in self.connectors.items()}
-            logger.info(f"tick #{self._tick_count}: connectors_ready={connectors_ready}")
-        super().tick(timestamp)
+    # NOTE: Do NOT override tick() — Cython dispatch (StrategyPyBase.c_tick)
+    # bypasses Python-level overrides and calls StrategyV2Base.tick() directly.
+    # All logic goes in on_tick() which IS properly dispatched via self.on_tick().
 
     def on_tick(self):
         try:
-            logger.info("on_tick fired")
+            self._tick_count += 1
+            if self._tick_count <= 5 or self._tick_count % 300 == 0:
+                connectors_ready = {name: c.ready for name, c in self.connectors.items()}
+                logger.info(f"on_tick #{self._tick_count}: connectors_ready={connectors_ready}")
             self._on_tick_inner()
         except Exception as e:
             import traceback
@@ -528,25 +527,11 @@ class TAGridBTCUSDT(StrategyV2Base):
                 buy_levels=[{"level": l["level"], "price": l["price"], "qty": l["quantity"]} for l in grid.buy_levels],
                 sell_levels=[{"level": l["level"], "price": l["price"], "qty": l["quantity"]} for l in grid.sell_levels],
             )
-            # Only clear dirty flag if orders were actually placed
-            try:
-                active_count = len(self.get_active_orders(self.exchange))
-            except Exception:
-                active_count = 0
-            if active_count > 0 or not self.state_machine.is_active:
-                self._grid_dirty = False
-            else:
-                logger.warning(f"Grid ACTIVE but 0 active orders after placement — will retry next tick")
-
-        # Safety net: if grid is active but has no orders, retry next tick
-        if self.state_machine.is_active and not self._grid_dirty:
-            try:
-                active_count = len(self.get_active_orders(self.exchange))
-            except Exception:
-                active_count = 0
-            if active_count == 0:
-                self._grid_dirty = True
-                logger.info("Grid ACTIVE with 0 orders — scheduling retry")
+            # Grid placed — clear dirty flag unconditionally.
+            # Do NOT re-check get_active_orders() here: Hummingbot's order
+            # tracking is async and won't reflect new orders immediately,
+            # causing an infinite cancel→place→retry loop.
+            self._grid_dirty = False
 
     # ── State Change Helpers ─────────────────────────────────────────
 
@@ -831,6 +816,7 @@ class TAGridBTCUSDT(StrategyV2Base):
             )
             self.journal.log_trade(trade)
             logger.info(f"BUY filled: {quantity} BTC @ ${price:,.2f} | Level {grid_level}")
+            self._grid_dirty = True  # Refresh grid after fill
 
         elif side == "SELL":
             gross_pnl = 0.0
@@ -949,6 +935,7 @@ class TAGridBTCUSDT(StrategyV2Base):
                 f"SELL filled: {quantity} BTC @ ${price:,.2f} | "
                 f"PnL: ${net_pnl:+.2f} | Level {grid_level}"
             )
+            self._grid_dirty = True  # Refresh grid after fill
 
     # ── Safe Telegram Error Helpers ────────────────────────────────────
 
@@ -992,6 +979,7 @@ class TAGridBTCUSDT(StrategyV2Base):
     # ── Graceful Shutdown ────────────────────────────────────────────
 
     def on_stop(self):
+        super().on_stop()
         if hasattr(self, "_sys_monitor"):
             self._sys_monitor.stop()
         if hasattr(self, "_telegram_commands"):
