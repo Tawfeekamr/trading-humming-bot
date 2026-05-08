@@ -50,8 +50,10 @@ class TestGridManager:
             bb=BBResult(upper=104_000, mid=100_000, lower=96_000),
             atr_value=500,
         )
-        # spacing = bb_range / (levels + 1) = 8000 / 5 = 1600
-        assert grid.spacing == 1600.0
+        # atr_spacing = 500 * 0.8 = 400
+        # max_spacing = (100000 - 96000) / 5 = 800
+        # spacing = min(400, 800) = 400
+        assert grid.spacing == 400.0
         # Buy level 1 (closest to mid): bb.lower + spacing * 4 = 96000 + 1600*4 = 102400
         # Wait, buys sorted descending — first buy is the one closest to mid
         # buy prices: 96000+1600*1=97600, 96000+1600*2=99200, 96000+1600*3=100800(>mid!), 96000+1600*4=102400(>mid!)
@@ -80,12 +82,15 @@ class TestGridManager:
         # All buys should be within BB bounds
         for level in grid.buy_levels:
             assert level["price"] >= 79_375
+            assert level["price"] < 79_858
         for level in grid.sell_levels:
             assert level["price"] <= 80_340
-        # Spacing should be BB_range / (levels + 1)
-        bb_range = 80_340 - 79_375
-        expected_spacing = bb_range / 9
-        assert abs(grid.spacing - round(expected_spacing, 2)) < 1
+            assert level["price"] > 79_858
+        # Spacing should be capped by BB bands
+        # atr_spacing = 324 * 0.8 = 259.2
+        # max_buy_spacing = (79858 - 79375) / 9 = 53.666...
+        expected_spacing = (79_858 - 79_375) / 9
+        assert abs(grid.spacing - round(expected_spacing, 2)) < 0.01
 
     def test_zero_atr_raises_error(self):
         gm = GridManager(levels=8, capital_usdt=200, min_reserve=50)

@@ -28,9 +28,17 @@ class GridManager:
         if atr_value <= 0:
             raise ValueError(f"atr_value must be positive, got {atr_value}")
 
-        # Use ATR-based spacing anchored at the mid price.
-        # This ensures buys are below mid and sells are above mid.
-        spacing = atr_value * self.spacing_multiplier
+        # 1. Calculate the desired spacing based on volatility (ATR).
+        atr_spacing = atr_value * self.spacing_multiplier
+        
+        # 2. Calculate the maximum allowed spacing to keep the grid within BB bands.
+        # We use (levels + 1) to ensure even the outermost level is within the band.
+        max_buy_spacing = (bb.mid - bb.lower) / (self.levels + 1)
+        max_sell_spacing = (bb.upper - bb.mid) / (self.levels + 1)
+        
+        # 3. Use the smaller of the two to ensure safety and logic.
+        buy_spacing = min(atr_spacing, max_buy_spacing)
+        sell_spacing = min(atr_spacing, max_sell_spacing)
         
         deployable = self.capital_usdt - self.min_reserve
         # Still divide by (levels * 2) to maintain the same conservative capital allocation
@@ -41,11 +49,11 @@ class GridManager:
 
         for i in range(1, self.levels + 1):
             # Buy levels: step DOWN from mid
-            buy_price = bb.mid - (spacing * i)
+            buy_price = bb.mid - (buy_spacing * i)
             buy_qty = order_value / buy_price
 
             # Sell levels: step UP from mid
-            sell_price = bb.mid + (spacing * i)
+            sell_price = bb.mid + (sell_spacing * i)
             sell_qty = order_value / sell_price
 
             buy_levels.append({
@@ -66,6 +74,6 @@ class GridManager:
         return GridLayout(
             buy_levels=buy_levels,
             sell_levels=sell_levels,
-            spacing=round(spacing, 2),
+            spacing=round(buy_spacing, 2),
             mid_price=bb.mid,
         )
