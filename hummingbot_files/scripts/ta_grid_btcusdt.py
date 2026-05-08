@@ -264,6 +264,7 @@ class TAGridBTCUSDT(StrategyV2Base):
             min_reserve=self.min_reserve,
             spacing_multiplier=self.atr_multiplier,
         )
+        self._base_capital = self.capital_usdt  # floor for auto-compound
         self.state_machine = GridStateMachine()
         self._grid_order_tracker = OrderTracker()
         self.circuit_breaker = CircuitBreaker(self.max_drawdown_pct, self.daily_loss_limit_pct)
@@ -583,6 +584,10 @@ class TAGridBTCUSDT(StrategyV2Base):
             elapsed = now_ts - self._last_grid_place_time
             if elapsed < self._min_grid_refresh_sec:
                 return  # Too soon — let existing orders work
+            # Auto-compound: use live equity (floor = base capital)
+            live_equity = self._estimate_equity(current_price)
+            compound_capital = max(live_equity, self._base_capital)
+            self.grid_manager.capital_usdt = compound_capital
             grid = self.grid_manager.calculate_grid(bb_result, atr_value)
             self._active_buy_spacing = grid.buy_spacing
             self._active_sell_spacing = grid.sell_spacing
@@ -590,7 +595,10 @@ class TAGridBTCUSDT(StrategyV2Base):
             self._last_grid_place_time = now_ts
             
             # Log exact grid info for transparency
-            logger.info(f"Grid updated: buy_spacing=${grid.buy_spacing:.2f}, sell_spacing=${grid.sell_spacing:.2f}")
+            logger.info(
+                f"Grid updated: buy_spacing=${grid.buy_spacing:.2f}, sell_spacing=${grid.sell_spacing:.2f} "
+                f"| compound_capital=${compound_capital:.2f} (base=${self._base_capital})"
+            )
 
             deployed = sum(l["price"] * l["quantity"] for l in grid.buy_levels)
             self.event_log.log("grid_recalculated",

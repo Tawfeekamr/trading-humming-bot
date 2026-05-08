@@ -227,6 +227,9 @@ class TelegramCommandHandler:
             mode = self.strategy.env.upper()
             cb_status = "🛑 HALTED" if self.circuit_breaker.halted else "✅ OK"
             pending = self.strategy.order_tracker.total_pending
+            base_capital = getattr(self.strategy, '_base_capital', self.strategy.capital_usdt)
+            compound = self.strategy.grid_manager.capital_usdt
+            growth_pct = ((compound - base_capital) / base_capital * 100) if base_capital > 0 else 0
 
             logger.info(f"Telegram /status response: state={state}, mode={mode}, cb={cb_status}, pending={pending}")
             update.message.reply_text(
@@ -236,7 +239,10 @@ class TelegramCommandHandler:
                 f"Mode: {mode}\n"
                 f"Circuit Breaker: {cb_status}\n"
                 f"⏱ Uptime: {hours}h {minutes}m {secs}s\n"
-                f"📋 Pending orders: {pending}",
+                f"📋 Pending orders: {pending}\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"💰 Base capital: ${base_capital:,.0f}\n"
+                f"📈 Compound: ${compound:,.2f} ({growth_pct:+.1f}%)",
                 parse_mode="HTML"
             )
         except Exception as e:
