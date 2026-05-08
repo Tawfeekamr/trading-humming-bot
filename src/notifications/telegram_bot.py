@@ -29,14 +29,28 @@ class TelegramBot:
         if not self.enabled:
             logger.warning("Telegram not configured — skipping alert")
             return
-        try:
-            await self.bot.send_message(
-                chat_id=self.chat_id,
-                text=message,
-                parse_mode=ParseMode.HTML,
-            )
-        except Exception as e:
-            logger.error(f"Telegram send failed: {e}")
+
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                await self.bot.send_message(
+                    chat_id=self.chat_id,
+                    text=message,
+                    parse_mode=ParseMode.HTML,
+                )
+                return
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    # Exponential backoff: 1s, 2s, 4s
+                    wait_time = 2 ** attempt
+                    await asyncio.sleep(wait_time)
+                    logger.warning(
+                        f"Telegram send retry {attempt + 1}/{max_retries}: {e}"
+                    )
+                else:
+                    logger.error(
+                        f"Telegram send failed after {max_retries} attempts: {e}"
+                    )
 
     async def alert_startup(self, env: str, capital: float) -> None:
         await self.send(

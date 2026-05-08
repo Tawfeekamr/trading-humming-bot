@@ -26,6 +26,5 @@ RUN chmod +x /home/hummingbot/docker-entrypoint.sh
 
 ENV SCRIPT_CONFIG=ta_grid_btcusdt.yml
 ENV HEADLESS_MODE=true
-ENV CONFIG_PASSWORD=tradingbot
 
 CMD ["/home/hummingbot/docker-entrypoint.sh"]

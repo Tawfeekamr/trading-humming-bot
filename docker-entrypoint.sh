@@ -23,10 +23,16 @@ conda activate hummingbot
 # MQTT reconnection loop blocks the asyncio event loop, preventing
 # the Binance connector from becoming ready. We skip MQTT entirely.
 APP="/home/hummingbot/hummingbot/client/hummingbot_application.py"
-if [ -f "$APP" ]; then
+if [ -f "$APP" ] && ! grep -q "MQTT check disabled for trading bot" "$APP"; then
+    cp "$APP" "$APP.bak"
     # Remove the MQTT validation check in run_headless
     sed -i '/if not self.client_config_map.mqtt_bridge.mqtt_autostart/,/raise RuntimeError("MQTT is required for headless mode")/c\            pass  # MQTT check disabled for trading bot' "$APP"
     # Keep MQTT autostart True so the code path doesn't crash elsewhere
+
+    # Verify the patch succeeded
+    if ! grep -q "MQTT check disabled for trading bot" "$APP"; then
+        echo "WARNING: MQTT patch failed - headless mode may not work"
+    fi
 fi
 
 exec python ./bin/hummingbot_quickstart.py

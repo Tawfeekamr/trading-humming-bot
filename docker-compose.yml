@@ -8,6 +8,7 @@ services:
     environment:
       - MQTT_BRIDGE_ENABLED=false
       - USE_MQTT=false
+      - CONFIG_PASSWORD=${CONFIG_PASSWORD:-changeme}
     volumes:
       - ./data:/home/hummingbot/data
       - ./logs:/home/hummingbot/logs

@@ -87,9 +87,13 @@ def run_sweep(df: pd.DataFrame):
 
         try:
             import vectorbt as vbt
+            # Realistic fees: 0.1% maker fee (standard, not BNB discount tier)
+            # Slippage: 5 basis points (0.05%) typical for BTC/USDT
             pf = vbt.Portfolio.from_signals(
                 close=close, entries=entries, exits=exits,
-                freq="1h", init_cash=200, fees=0.00075,
+                freq="1h", init_cash=200,
+                fees=0.001,  # 0.1% maker fee
+                slippage=0.0005,  # 5 bps slippage
             )
             stats = pf.stats()
             results.append({

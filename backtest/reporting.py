@@ -23,16 +23,26 @@ def compute_benchmark(close: pd.Series) -> pd.Series:
 
 def add_slippage(close: pd.Series, entries: pd.Series, exits: pd.Series,
                  slip_bps: float = 5.0) -> tuple[pd.Series, pd.Series]:
-    """Adjust entry/exit prices for slippage (in basis points).
-    Entries shifted up (pay more), exits shifted down (receive less).
-    Returns adjusted (entries, exits) boolean masks based on price thresholds.
+    """Adjust entry/exit signals for slippage (in basis points).
+
+    Note: For vectorbt Portfolio.from_signals, slippage is better modeled
+    by passing the `slippage` parameter directly to the constructor.
+    This function returns signals unchanged since vectorbt handles slippage
+    via its built-in slippage parameter.
+
+    Args:
+        close: Price series
+        entries: Boolean entry signals
+        exits: Boolean exit signals
+        slip_bps: Slippage in basis points (e.g., 5.0 = 0.05%)
+
+    Returns:
+        Tuple of (entries, exits) boolean masks (unchanged)
     """
     if slip_bps <= 0:
         return entries, exits
-    slip_factor = slip_bps / 10000
-    # For entries: effective buy price is higher, so only enter if close * (1+slip) still looks good
-    # For exits: effective sell price is lower, so only exit if close * (1-sip) still triggers
-    # Since entries/exits are boolean masks, we keep them as-is and note slippage cost separately
+    # Slippage is handled by vectorbt's slippage parameter in Portfolio.from_signals
+    # This function is kept for API compatibility but returns signals unchanged
     return entries, exits
 
 

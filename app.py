@@ -14,11 +14,14 @@ Shows:
 
 import os
 import sys
+import logging
 from pathlib import Path
 from datetime import datetime, timezone
 
 from dotenv import load_dotenv
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 import streamlit as st
 import pandas as pd
@@ -26,6 +29,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 import streamlit_authenticator as stauth
 import yaml
+import secrets
 from yaml import SafeLoader
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -62,9 +66,13 @@ def _check_auth():
     }
     cookie = {
         "name": "grid_bot_dashboard",
-        "key": os.environ.get("COOKIE_SECRET", "change-me-in-prod"),
+        "key": os.environ.get("COOKIE_SECRET") or secrets.token_hex(32),
         "expiry_days": 30,
     }
+
+    # Warn if using random cookie secret
+    if not os.environ.get("COOKIE_SECRET"):
+        logger.warning("COOKIE_SECRET not set — using random value. Sessions will not survive restarts.")
 
     authenticator = stauth.Authenticate(
         credentials=credentials,
