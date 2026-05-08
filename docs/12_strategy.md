@@ -1,0 +1,295 @@
+# Trading Strategy — TA-Enhanced BTC/USDT Grid Bot
+
+## Overview
+
+The bot runs a **dynamic grid trading** strategy on BTC/USDT. Unlike static grids that use fixed price levels, this strategy recalculates grid boundaries every hour using four technical indicators. The grid shifts to follow the market, pauses when conditions are unfavorable, and re-enters on oversold bounces.
+
+**Pair:** BTC/USDT
+**Timeframe:** 1-hour candles (fetches every 55 minutes)
+**Exchange:** Binance (paper trading or live)
+
+---
+
+## How Grid Trading Works
+
+Grid trading profits from price oscillation within a range. The bot places limit buy orders below the current price and limit sell orders above it. Each time price bounces between levels, a round-trip completes:
+
+```
+Sell 8 @ $105,600  ─┐
+Sell 7 @ $104,800   │  Sell zone (above mid)
+Sell 6 @ $104,000   │
+                    │
+══════ $102,000 ════╪════  Mid price (Bollinger SMA)
+                    │
+Buy  6 @ $100,000   │
+Buy  7 @ $99,200    │  Buy zone (below mid)
+Buy  8 @ $98,400   ─┘
+
+When price drops to $100,000 → BUY fills
+When price bounces to $104,000 → SELL fills
+Profit = ($104,000 - $100,000) × quantity - fees
+```
+
+Each grid level is spaced by **ATR × 0.8**, which adapts to current volatility. In calm markets, levels are closer together (more fills, smaller profit per trade). In volatile markets, levels spread apart (fewer fills, larger profit per trade).
+
+---
+
+## Technical Indicators
+
+### 1. Bollinger Bands (20, 2.0 std dev)
+
+```
+Upper = SMA(20) + 2 × σ
+Mid   = SMA(20)
+Lower = SMA(20) - 2 × σ
+```
+
+**Purpose:** Defines the grid's operating range.
+
+- Buy levels are placed between Mid and Lower Band
+- Sell levels are placed between Mid and Upper Band
+- No orders are placed outside the bands
+
+The bands expand during high volatility (wider grid) and contract during low volatility (tighter grid). This naturally adapts order spacing to market conditions.
+
+### 2. RSI (14-period, Wilder's smoothing)
+
+```
+RS = Average Gain(14) / Average Loss(14)
+RSI = 100 - (100 / (1 + RS))
+```
+
+**Purpose:** Momentum filter — controls grid state transitions.
+
+| RSI Value | Action |
+|-----------|--------|
+| Above 70 | Grid **PAUSED** — market is overbought, likely to pull back |
+| Below 35 | Grid **REACTIVATING** — market is oversold, bounce expected |
+| 35–70 | Grid **ACTIVE** — normal trading conditions |
+
+RSI prevents the grid from placing buy orders in a euphoric market (where price is likely to reverse down) and triggers re-entry after a selloff.
+
+### 3. EMA 200 (Exponential Moving Average)
+
+```
+EMA = price × (2/201) + EMA_prev × (1 - 2/201)
+```
+
+**Purpose:** Trend filter — only runs the grid in an uptrend.
+
+| Condition | Action |
+|-----------|--------|
+| Price above EMA200 | Grid allowed — market is in an uptrend |
+| Price below EMA200 | Grid **PAUSED** — market is bearish, avoid buying dips in a downtrend |
+
+This is the primary safety filter. BTC below EMA200 typically means extended bearish conditions where buying the dip is dangerous.
+
+### 4. ATR (14-period, Average True Range)
+
+```
+TR  = max(High - Low, |High - PrevClose|, |Low - PrevClose|)
+ATR = EMA(TR, 14)
+```
+
+**Purpose:** Sets grid spacing.
+
+```
+Grid Spacing = ATR × 0.8
+```
+
+ATR measures how much BTC moves in a typical hour. With a 0.8 multiplier, the grid is slightly tighter than the average move, increasing fill probability while still capturing meaningful profit per level.
+
+---
+
+## Grid State Machine
+
+The bot operates in three states with deterministic transitions:
+
+```
+                     RSI > 70 OR Price < EMA200
+       ACTIVE  ──────────────────────────────────────►  PAUSED
+          ▲                                               │
+          │               RSI < 35 AND Price ≤ BB Lower × 1.02
+          │   REACTIVATING ◄──────────────────────────────┘
+          │       │
+          └───────┘  RSI normalizes AND Price > EMA200
+```
+
+### ACTIVE
+- Full grid deployed — buy and sell orders placed
+- Profits from price oscillation within Bollinger range
+- This is the normal operating state
+
+### PAUSED
+- All orders cancelled, holding USDT
+- Triggers: RSI overbought (>70) or price below EMA200
+- Bot waits for re-entry signal
+
+### REACTIVATING
+- Transitional state — re-entering after oversold conditions
+- Triggers: RSI < 35 AND price near lower Bollinger Band
+- Grid redeployed at new (lower) levels
+- Returns to ACTIVE once conditions normalize
+
+---
+
+## Order Execution
+
+### Grid Calculation
+```
+For each level i (1 to 8):
+  Buy price  = BB Mid - (ATR × 0.8 × i)   [clamped to BB Lower]
+  Sell price = BB Mid + (ATR × 0.8 × i)   [clamped to BB Upper]
+
+Order size = (Capital - Reserve) / (2 × Levels) / Price
+```
+
+### Order Lifecycle
+1. Every tick (1 second), Hummingbot calls `on_tick()`
+2. Every 55 minutes, fresh candles are fetched and indicators recalculated
+3. If indicators changed, the grid is marked dirty
+4. Old orders are cancelled, new grid orders placed
+5. Hummingbot's connector handles order matching on the exchange
+
+### Round-Trip Tracking
+- Each BUY fill is stored with its indicator snapshot
+- When a SELL fills, the bot matches it to the corresponding BUY by grid level
+- If no exact level match, the oldest open BUY is used (FIFO)
+- Round-trip P&L = (Sell Price - Buy Price) × Quantity - Fees
+
+---
+
+## Risk Management
+
+### Circuit Breaker
+Halts all trading when portfolio drawdown exceeds safe limits.
+
+| Condition | Threshold | Action |
+|-----------|-----------|--------|
+| Peak-to-current drawdown | 10% | Halt + cancel all orders |
+| Daily loss from midnight | 5% | Halt + cancel all orders |
+
+Once halted, the bot stays stopped until manually reset via Telegram `/reset`. This prevents catastrophic losses during flash crashes or unexpected events.
+
+### Position Guard
+Blocks individual orders that would create dangerous exposure.
+
+| Rule | Default | Purpose |
+|------|---------|---------|
+| Max BTC exposure | 80% of equity | Don't go all-in on BTC |
+| Min USDT reserve | $50 (configurable) | Always keep dry powder |
+
+Each order is checked before placement. If it would violate either limit, the order is blocked and logged.
+
+---
+
+## Configuration
+
+All parameters are in `config/strategy.yaml`:
+
+```yaml
+grid:
+  levels: 10              # Orders per side (buy + sell)
+  capital_usdt: 1000      # USDT allocated
+  min_usdt_reserve: 100   # Minimum USDT to keep
+  order_refresh_time: 60  # Seconds between order refresh
+
+indicators:
+  bollinger:
+    period: 20
+    std_dev: 2.0
+  rsi:
+    period: 14
+    oversold: 35           # Reactivation threshold
+    overbought: 70         # Pause threshold
+  ema:
+    period: 200            # Trend filter
+  atr:
+    period: 14
+    spacing_multiplier: 0.8  # Grid spacing = ATR × this
+
+risk:
+  max_drawdown_pct: 10     # Circuit breaker: peak drawdown
+  daily_loss_limit_pct: 5  # Circuit breaker: daily loss
+  max_btc_exposure_pct: 80 # Position guard: max BTC allocation
+```
+
+Environment variables override config values:
+- `GRID_LEVELS`, `GRID_CAPITAL_USDT`, `MIN_USDT_RESERVE`
+- `MAX_DRAWDOWN_PCT`, `MAX_BTC_EXPOSURE_PCT`
+- `ENV` (paper/live)
+
+---
+
+## Monitoring
+
+### Telegram Alerts (automatic)
+- Bot startup/shutdown with mode and capital
+- Grid state changes with indicator values and trigger reason
+- Trade fills with full P&L breakdown
+- Crash and error alerts with traceback
+
+### Telegram Commands
+| Command | Description |
+|---------|-------------|
+| `/status` | Grid state, mode, uptime, pending orders |
+| `/pnl` | P&L summary — today, week, month, all-time with win rates |
+| `/pause` | Manually pause grid trading |
+| `/resume` | Resume grid from manual pause |
+| `/reset` | Reset circuit breaker after halt |
+| `/trades` | Last 5 closed trades |
+| `/logs` | Last 30 lines from today's bot log |
+| `/errors` | Recent errors from crash log |
+| `/help` | Command reference |
+
+### Dashboard
+Streamlit web app at `http://<server-ip>:8502` showing:
+- Live equity curve with daily P&L bars
+- Summary cards by period
+- Filterable trade history with CSV export
+- Best/worst trades ranking
+- Paper/Live mode indicator
+
+### Log Files
+All logs persist in `./logs/` (Docker volume mount):
+
+| File | Contents |
+|------|----------|
+| `bot_YYYY-MM-DD.log` | Full bot log (INFO+), daily rotation |
+| `crashes.log` | Errors only (ERROR+), quick debugging |
+| `events_YYYY-MM-DD.jsonl` | Structured events for analysis |
+
+---
+
+## Expected Behavior
+
+**Normal market (ranging):**
+- Grid places 8 buy + 8 sell levels within Bollinger Bands
+- Price oscillates → fills occur → round-trip P&L captured
+- Grid recalculates hourly, shifting with the market
+
+**Rising market (uptrend):**
+- Sell levels fill as price rises
+- Grid shifts upward on recalculation
+- New sell levels placed above, buy levels moved up
+- Bot captures upside through sequential sell fills
+
+**Overbought (RSI > 70):**
+- Grid pauses, all orders cancelled
+- Holds USDT until RSI normalizes
+- Prevents buying at the top
+
+**Bearish (price < EMA200):**
+- Grid pauses immediately
+- No buy orders in a downtrend
+- Waits for price to recover above EMA200
+
+**Oversold bounce (RSI < 35 + near BB Lower):**
+- Grid reactivates at lower levels
+- Buys near the bottom of the range
+- Captures the bounce as price recovers
+
+**Flash crash (drawdown > 10%):**
+- Circuit breaker halts everything
+- Requires manual `/reset` via Telegram
+- Prevents catastrophic losses
