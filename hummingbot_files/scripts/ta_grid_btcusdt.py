@@ -280,7 +280,7 @@ class TAGridBTCUSDT(StrategyV2Base):
 
         # Internal state
         self._peak_equity = self.capital_usdt
-        self._open_buys: dict[int, FillRecord] = {}
+        self._open_buys: dict[str, FillRecord] = {}  # Changed from dict[int, FillRecord] to dict[str, FillRecord] for order_id keying
         self._last_candle_time = None
         self._cached_indicators = None
         self._grid_dirty = True
@@ -501,7 +501,7 @@ class TAGridBTCUSDT(StrategyV2Base):
 
         equity = self._estimate_equity(current_price)
         self.circuit_breaker.update_peak(equity)
-        if self.circuit_breaker.check(equity):
+        if self.circuit_breaker.check(equity) or self.circuit_breaker.check_daily(equity):
             self._cancel_all_orders("circuit_breaker")
             drawdown_pct = ((self._peak_equity - equity) / self._peak_equity) * 100 if self._peak_equity > 0 else 0
             self.event_log.log("circuit_breaker",
@@ -566,6 +566,9 @@ class TAGridBTCUSDT(StrategyV2Base):
                 f"available: {list(self.connectors.keys())}"
             )
             return
+        if hasattr(connector, 'ready') and not connector.ready:
+            logger.warning(f"Connector '{self.exchange}' not ready — skipping grid placement")
+            return
 
         usdt_bal = self._get_usdt_balance()
         btc_bal = self._get_btc_balance()
@@ -602,6 +605,7 @@ class TAGridBTCUSDT(StrategyV2Base):
                 )
                 continue
             buys_placed += 1
+            order_id = f"buy_{level['level']}_{level['price']}"
             self.buy(
                 connector_name=self.exchange,
                 trading_pair=self.trading_pair,
@@ -609,6 +613,13 @@ class TAGridBTCUSDT(StrategyV2Base):
                 order_type=OrderType.LIMIT,
                 price=Decimal(str(level["price"])),
             )
+            self._grid_order_tracker.add(GridOrder(
+                order_id=order_id,
+                level=level["level"],
+                side=OrderSide.BUY,
+                price=level["price"],
+                quantity=level["quantity"],
+            ))
 
         sells_skipped_price = 0
         sells_blocked = 0
@@ -621,6 +632,7 @@ class TAGridBTCUSDT(StrategyV2Base):
                 sells_blocked += 1
                 continue
             sells_placed += 1
+            order_id = f"sell_{level['level']}_{level['price']}"
             self.sell(
                 connector_name=self.exchange,
                 trading_pair=self.trading_pair,
@@ -628,6 +640,13 @@ class TAGridBTCUSDT(StrategyV2Base):
                 order_type=OrderType.LIMIT,
                 price=Decimal(str(level["price"])),
             )
+            self._grid_order_tracker.add(GridOrder(
+                order_id=order_id,
+                level=level["level"],
+                side=OrderSide.SELL,
+                price=level["price"],
+                quantity=level["quantity"],
+            ))
 
         logger.info(
             f"Grid placement: buys={buys_placed} placed / {buys_skipped_price} above price / {buys_blocked} blocked | "
@@ -647,6 +666,7 @@ class TAGridBTCUSDT(StrategyV2Base):
                 reason=reason,
             )
             self.cancel(self.exchange, order.trading_pair, order.client_order_id)
+        self._grid_order_tracker.cancel_all()
 
     # ── Balance Helpers ──────────────────────────────────────────────
 
@@ -785,7 +805,7 @@ class TAGridBTCUSDT(StrategyV2Base):
         )
 
         if side == "BUY":
-            self._open_buys[grid_level] = FillRecord(
+            self._open_buys[order_id] = FillRecord(
                 order_id=order_id,
                 side=side,
                 price=price,
@@ -852,7 +872,12 @@ class TAGridBTCUSDT(StrategyV2Base):
             entry_ema = ema_val
             entry_atr = atr_val
 
-            matching_buy = self._open_buys.pop(grid_level, None)
+            # Try exact order_id match first (for paired fills)
+            matching_buy = self._open_buys.pop(order_id, None)
+            if not matching_buy and self._open_buys:
+                # FIFO: pop oldest buy (earliest timestamp)
+                oldest_id = min(self._open_buys, key=lambda k: self._open_buys[k].timestamp)
+                matching_buy = self._open_buys.pop(oldest_id)
             if matching_buy:
                 entry_price = matching_buy.price
                 entry_rsi = matching_buy.rsi
@@ -862,18 +887,6 @@ class TAGridBTCUSDT(StrategyV2Base):
                 entry_atr = matching_buy.atr
                 gross_pnl = (price - entry_price) * quantity
                 duration_min = int((time_mod.time() - matching_buy.timestamp) / 60)
-            else:
-                if self._open_buys:
-                    level, buy = next(iter(self._open_buys.items()))
-                    self._open_buys.pop(level)
-                    entry_price = buy.price
-                    entry_rsi = buy.rsi
-                    entry_bb_upper = buy.bb_upper
-                    entry_bb_lower = buy.bb_lower
-                    entry_ema = buy.ema_200
-                    entry_atr = buy.atr
-                    gross_pnl = (price - entry_price) * quantity
-                    duration_min = int((time_mod.time() - buy.timestamp) / 60)
 
             net_pnl = gross_pnl - fee
 
