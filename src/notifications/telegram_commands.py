@@ -96,9 +96,16 @@ class TelegramCommandHandler:
         so we use the async API directly.
         """
         try:
+            # Clear any stale webhook from previous sessions
             await self._app.initialize()
+            await self._app.bot.delete_webhook(drop_pending_updates=True)
+            logger.info("Telegram webhook cleared")
+
             await self._app.start()
-            await self._app.updater.start_polling(drop_pending_updates=True)
+            await asyncio.wait_for(
+                self._app.updater.start_polling(drop_pending_updates=True),
+                timeout=30,
+            )
 
             # Send startup ping
             ping_msg = (
@@ -114,6 +121,11 @@ class TelegramCommandHandler:
             # Keep the loop alive
             while True:
                 await asyncio.sleep(1)
+        except asyncio.TimeoutError:
+            logger.error("Telegram start_polling timed out after 30s — retrying in 10s")
+            await asyncio.sleep(10)
+            # Re-raise to let _run() restart the loop
+            raise
         except Exception as e:
             logger.error(f"Telegram _poll_forever crashed: {e}", exc_info=True)
 
@@ -346,32 +358,38 @@ class TelegramCommandHandler:
             data_dir = Path("data")
             cleared = []
 
-            # Clear log files
+            # Clear log files — remove and recreate so FileHandlers reset
             for f in log_dir.glob("bot_*.log"):
-                f.write_text("")
+                f.unlink(missing_ok=True)
+                f.touch()
                 cleared.append(f.name)
             for f in log_dir.glob("events_*.jsonl"):
-                f.write_text("")
+                f.unlink(missing_ok=True)
+                f.touch()
                 cleared.append(f.name)
             crash_file = log_dir / "crashes.log"
             if crash_file.exists():
-                crash_file.write_text("")
+                crash_file.unlink()
+                crash_file.touch()
                 cleared.append("crashes.log")
 
             # Clear state and journal
             state_file = data_dir / "grid_state.json"
             if state_file.exists():
+                state_file.unlink()
                 state_file.write_text("{}")
                 cleared.append("grid_state.json")
             journal_file = data_dir / "trades.json"
             if journal_file.exists():
+                journal_file.unlink()
                 journal_file.write_text("[]")
                 cleared.append("trades.json")
 
             # Clear strategy-specific log
             strat_log = log_dir / "logs_ta_grid_btcusdt.log"
             if strat_log.exists():
-                strat_log.write_text("")
+                strat_log.unlink()
+                strat_log.touch()
                 cleared.append(strat_log.name)
 
             self.event_log.log("logs_cleared", source="telegram", files=cleared)
