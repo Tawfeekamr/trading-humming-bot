@@ -480,9 +480,9 @@ class TelegramCommandHandler:
             ema = indicators[2]
             atr = indicators[3]
 
-            bb_upper = bb.upper_band if bb else 0
-            bb_lower = bb.lower_band if bb else 0
-            bb_mid = bb.middle_band if bb else 0
+            bb_upper = bb.upper if bb else 0
+            bb_lower = bb.lower if bb else 0
+            bb_mid = bb.mid if bb else 0
 
             pct_from_ema = ((live_price - ema) / ema * 100) if ema else 0
             ema_emoji = "🟢" if pct_from_ema >= 0 else "🔴"
