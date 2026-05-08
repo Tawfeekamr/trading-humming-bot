@@ -63,10 +63,17 @@ class TelegramCommandHandler:
         """Synchronous getUpdates-based polling loop using requests."""
         base_url = f"https://api.telegram.org/bot{self._token}"
         last_update_id = 0
+        print("[TELEGRAM-DEBUG] _poll_forever entered", flush=True)
         logger.info("Telegram _poll_forever: clearing webhook...")
 
         # Yield to let main thread release GIL before making HTTP calls
-        time.sleep(0.5)
+        try:
+            print("[TELEGRAM-DEBUG] About to sleep 0.5s", flush=True)
+            time.sleep(0.5)
+            print("[TELEGRAM-DEBUG] Sleep done, about to call deleteWebhook", flush=True)
+        except Exception as e:
+            print(f"[TELEGRAM-DEBUG] Sleep failed: {e}", flush=True)
+            logger.error(f"Telegram sleep failed: {e}")
         logger.info("Telegram _poll_forever: about to call deleteWebhook...")
 
         # Clear webhook
