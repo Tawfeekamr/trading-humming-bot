@@ -54,6 +54,7 @@ class TelegramCommandHandler:
         """Runs the telegram polling loop directly (synchronous)."""
         try:
             logger.info("Telegram _run: starting synchronous polling...")
+            logger.info(f"Telegram _run: thread={threading.current_thread().name} alive={threading.current_thread().is_alive()}")
             self._poll_forever()
         except Exception as e:
             logger.error(f"Telegram polling thread crashed: {e}", exc_info=True)
@@ -64,14 +65,17 @@ class TelegramCommandHandler:
         last_update_id = 0
         logger.info("Telegram _poll_forever: clearing webhook...")
 
+        # Yield to let main thread release GIL before making HTTP calls
+        time.sleep(0.5)
+
         # Clear webhook
         try:
-            requests.get(
+            resp = requests.get(
                 f"{base_url}/deleteWebhook",
                 params={"drop_pending_updates": True},
                 timeout=10,
             )
-            logger.info("Telegram webhook cleared")
+            logger.info(f"Telegram webhook cleared: {resp.status_code}")
         except Exception as e:
             logger.warning(f"Telegram deleteWebhook failed: {e}")
 
