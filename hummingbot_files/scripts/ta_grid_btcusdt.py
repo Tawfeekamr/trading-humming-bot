@@ -292,6 +292,8 @@ class TAGridBTCUSDT(StrategyV2Base):
         self._overtrading_alerted_today: str = ""
         self._state_lock = threading.Lock()  # protects _manual_pause, _cached_indicators, _open_buys
         self._tick_count = 0
+        self._last_grid_place_time = 0  # timestamp of last grid placement
+        self._min_grid_refresh_sec = 300  # 5 min minimum between grid refreshes
 
         self.event_log.log("bot_started", mode=self.env, capital=self.capital_usdt,
                            levels=self.levels, testnet=self.is_testnet)
@@ -513,8 +515,13 @@ class TAGridBTCUSDT(StrategyV2Base):
             return
 
         if self._grid_dirty:
+            now_ts = time_mod.time()
+            elapsed = now_ts - self._last_grid_place_time
+            if elapsed < self._min_grid_refresh_sec:
+                return  # Too soon — let existing orders work
             grid = self.grid_manager.calculate_grid(bb_result, atr_value)
             self._place_grid_orders(grid, current_price)
+            self._last_grid_place_time = now_ts
 
             deployed = sum(l["price"] * l["quantity"] for l in grid.buy_levels)
             self.event_log.log("grid_recalculated",
@@ -527,10 +534,6 @@ class TAGridBTCUSDT(StrategyV2Base):
                 buy_levels=[{"level": l["level"], "price": l["price"], "qty": l["quantity"]} for l in grid.buy_levels],
                 sell_levels=[{"level": l["level"], "price": l["price"], "qty": l["quantity"]} for l in grid.sell_levels],
             )
-            # Grid placed — clear dirty flag unconditionally.
-            # Do NOT re-check get_active_orders() here: Hummingbot's order
-            # tracking is async and won't reflect new orders immediately,
-            # causing an infinite cancel→place→retry loop.
             self._grid_dirty = False
 
     # ── State Change Helpers ─────────────────────────────────────────
