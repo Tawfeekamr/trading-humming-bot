@@ -2,8 +2,7 @@ import os
 import time
 import logging
 import threading
-import urllib.request
-import urllib.parse
+import requests
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
@@ -60,17 +59,17 @@ class TelegramCommandHandler:
             logger.error(f"Telegram polling thread crashed: {e}", exc_info=True)
 
     def _poll_forever(self):
-        """Synchronous getUpdates-based polling loop."""
-        import json as _json
-
+        """Synchronous getUpdates-based polling loop using requests."""
         base_url = f"https://api.telegram.org/bot{self._token}"
         last_update_id = 0
         logger.info("Telegram _poll_forever: clearing webhook...")
 
         # Clear webhook
         try:
-            urllib.request.urlopen(
-                f"{base_url}/deleteWebhook?drop_pending_updates=true", timeout=10
+            requests.get(
+                f"{base_url}/deleteWebhook",
+                params={"drop_pending_updates": True},
+                timeout=10,
             )
             logger.info("Telegram webhook cleared")
         except Exception as e:
@@ -82,14 +81,11 @@ class TelegramCommandHandler:
                 "📡 <b>Telegram Command Handler Online</b>\n"
                 "Commands: /status /pnl /trades /pending /fees /system /clear /help"
             )
-            ping_data = urllib.parse.urlencode({
-                "chat_id": self._chat_id,
-                "text": ping_text,
-                "parse_mode": "HTML",
-            }).encode()
-            urllib.request.urlopen(urllib.request.Request(
-                f"{base_url}/sendMessage", data=ping_data
-            ), timeout=10)
+            requests.post(
+                f"{base_url}/sendMessage",
+                data={"chat_id": self._chat_id, "text": ping_text, "parse_mode": "HTML"},
+                timeout=10,
+            )
             logger.info("Telegram startup ping sent")
         except Exception as e:
             logger.warning(f"Telegram startup ping failed: {e}")
@@ -117,13 +113,16 @@ class TelegramCommandHandler:
         # Poll loop
         while True:
             try:
-                url = (
-                    f"{base_url}/getUpdates"
-                    f"?offset={last_update_id + 1}&timeout=30"
-                    f"&allowed_updates=%5B%22message%22%5D"
+                resp = requests.get(
+                    f"{base_url}/getUpdates",
+                    params={
+                        "offset": last_update_id + 1,
+                        "timeout": 30,
+                        "allowed_updates": '["message"]',
+                    },
+                    timeout=35,
                 )
-                resp = urllib.request.urlopen(url, timeout=35)
-                data = _json.loads(resp.read())
+                data = resp.json()
 
                 for update in data.get("result", []):
                     last_update_id = update["update_id"]
@@ -147,15 +146,11 @@ class TelegramCommandHandler:
 
     def _send_message(self, chat_id: str, text: str, parse_mode: str = ""):
         """Send a message to Telegram chat."""
-        data = urllib.parse.urlencode({
-            "chat_id": chat_id,
-            "text": text,
-            "parse_mode": parse_mode,
-        }).encode()
-        urllib.request.urlopen(urllib.request.Request(
+        requests.post(
             f"https://api.telegram.org/bot{self._token}/sendMessage",
-            data=data,
-        ), timeout=10)
+            data={"chat_id": chat_id, "text": text, "parse_mode": parse_mode},
+            timeout=10,
+        )
 
     def _dispatch(self, handler, chat_id: str, msg: dict):
         """Call a command handler and send the reply text back."""
@@ -166,15 +161,15 @@ class TelegramCommandHandler:
                 self.text = msg_dict.get("text", "")
                 self._chat_id = cid
             def reply_text(self, text, **kw):
-                data = urllib.parse.urlencode({
-                    "chat_id": self._chat_id,
-                    "text": text,
-                    "parse_mode": kw.get("parse_mode", ""),
-                }).encode()
-                urllib.request.urlopen(urllib.request.Request(
+                requests.post(
                     f"https://api.telegram.org/bot{token}/sendMessage",
-                    data=data,
-                ), timeout=10)
+                    data={
+                        "chat_id": self._chat_id,
+                        "text": text,
+                        "parse_mode": kw.get("parse_mode", ""),
+                    },
+                    timeout=10,
+                )
 
         class _MockUpdate:
             def __init__(self, msg_dict, cid):
