@@ -655,8 +655,17 @@ class TAGridBTCUSDT(StrategyV2Base):
         sells_placed = 0
         buys_skipped_price = 0
         buys_blocked = 0
+        buys_skipped_rsi = 0
+
+        # Get current RSI for level filtering
+        indicators = self._cached_indicators
+        current_rsi = indicators[1] if indicators else None
 
         for level in grid.buy_levels:
+            # Skip buys when RSI is high — market already overbought
+            if current_rsi and current_rsi > 60:
+                buys_skipped_rsi += 1
+                continue
             if level["price"] >= current_price:
                 buys_skipped_price += 1
                 continue
@@ -693,7 +702,12 @@ class TAGridBTCUSDT(StrategyV2Base):
 
         sells_skipped_price = 0
         sells_blocked = 0
+        sells_skipped_rsi = 0
         for level in grid.sell_levels:
+            # Skip sells when RSI is low — market oversold, wait for bounce
+            if current_rsi and current_rsi < 40:
+                sells_skipped_rsi += 1
+                continue
             if level["price"] <= current_price:
                 sells_skipped_price += 1
                 continue
@@ -719,8 +733,10 @@ class TAGridBTCUSDT(StrategyV2Base):
                 ))
 
         logger.info(
-            f"Grid placement: buys={buys_placed} placed / {buys_skipped_price} above price / {buys_blocked} blocked | "
-            f"sells={sells_placed} placed / {sells_skipped_price} below price / {sells_blocked} blocked"
+            f"Grid placement: buys={buys_placed} placed / {buys_skipped_price} above price / {buys_blocked} blocked / {buys_skipped_rsi} rsi_skip | "
+            f"sells={sells_placed} placed / {sells_skipped_price} below price / {sells_blocked} blocked / {sells_skipped_rsi} rsi_skip | "
+            f"rsi={current_rsi:.1f}" if current_rsi else
+            f"Grid placement: buys={buys_placed} placed / sells={sells_placed} placed"
         )
 
     def _cancel_all_orders(self, reason: str = "grid_refresh"):
