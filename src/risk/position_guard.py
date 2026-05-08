@@ -1,3 +1,8 @@
+import logging
+
+logger = logging.getLogger(__name__)
+
+
 class PositionGuard:
     def __init__(self, max_btc_exposure_pct: float = 80.0,
                  min_usdt_reserve: float = 50.0, total_capital: float = 200.0):
@@ -14,6 +19,11 @@ class PositionGuard:
     def can_place_order(self, current_btc: float, btc_price: float,
                         current_usdt: float, order_usdt: float,
                         equity: float = 0.0) -> bool:
+        # Reject negative or zero order amounts
+        if order_usdt <= 0:
+            logger.warning(f"Rejected order with non-positive amount: {order_usdt}")
+            return False
+
         if (current_usdt - order_usdt) < self.min_usdt_reserve:
             return False
         base = equity if equity > 0 else self.total_capital
