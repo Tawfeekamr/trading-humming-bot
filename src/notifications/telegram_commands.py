@@ -67,6 +67,7 @@ class TelegramCommandHandler:
 
         # Yield to let main thread release GIL before making HTTP calls
         time.sleep(0.5)
+        logger.info("Telegram _poll_forever: about to call deleteWebhook...")
 
         # Clear webhook
         try:
