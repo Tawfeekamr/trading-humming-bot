@@ -4,6 +4,7 @@ import json
 import logging
 import threading
 import subprocess
+import urllib.parse
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
@@ -63,7 +64,7 @@ class TelegramCommandHandler:
         """HTTP GET to Telegram API via subprocess to avoid thread deadlock."""
         url = f"https://api.telegram.org/bot{self._token}/{path}"
         if params:
-            qs = "&".join(f"{k}={v}" for k, v in params.items())
+            qs = urllib.parse.urlencode(params)
             url = f"{url}?{qs}"
         script = (
             "import urllib.request, json, sys\n"
@@ -74,21 +75,25 @@ class TelegramCommandHandler:
             ["python", "-c", script],
             capture_output=True, text=True, timeout=timeout + 10,
         )
+        if result.returncode != 0 and result.stderr:
+            logger.warning(f"Telegram GET failed: {result.stderr.strip()}")
         return json.loads(result.stdout) if result.stdout else {}
 
     def _tg_post(self, path, data, timeout=10):
         """HTTP POST to Telegram API via subprocess to avoid thread deadlock."""
         url = f"https://api.telegram.org/bot{self._token}/{path}"
-        encoded = "&".join(f"{k}={v}" for k, v in data.items())
+        encoded = urllib.parse.urlencode(data)
         script = (
-            "import urllib.request, sys\n"
+            "import urllib.request\n"
             f"req = urllib.request.Request({url!r}, data={encoded!r}.encode())\n"
             f"urllib.request.urlopen(req, timeout={timeout})\n"
         )
-        subprocess.run(
+        result = subprocess.run(
             ["python", "-c", script],
             capture_output=True, text=True, timeout=timeout + 10,
         )
+        if result.returncode != 0 and result.stderr:
+            logger.warning(f"Telegram POST failed: {result.stderr.strip()}")
 
     def _poll_forever(self):
         """Synchronous getUpdates-based polling loop using subprocess curl."""
