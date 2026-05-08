@@ -73,7 +73,7 @@ from src.indicators.ema import EMA
 from src.indicators.atr import ATR
 from src.grid.grid_manager import GridManager
 from src.grid.grid_state import GridStateMachine, GridState
-from src.grid.order_tracker import OrderTracker
+from src.grid.order_tracker import OrderTracker, GridOrder
 from src.risk.circuit_breaker import CircuitBreaker
 from src.risk.position_guard import PositionGuard
 from src.data.candle_feed import CandleFeed
