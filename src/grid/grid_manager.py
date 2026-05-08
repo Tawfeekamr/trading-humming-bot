@@ -28,24 +28,27 @@ class GridManager:
         if atr_value <= 0:
             raise ValueError(f"atr_value must be positive, got {atr_value}")
 
-        spacing = atr_value * self.spacing_multiplier
+        bb_range = bb.upper - bb.lower
+        if bb_range <= 0:
+            raise ValueError(f"BB range must be positive, got {bb_range}")
+
         deployable = self.capital_usdt - self.min_reserve
         order_value = deployable / (self.levels * 2)
+
+        # Spread levels evenly across the BB range.
+        # Each level gets an equal slice of the band.
+        spacing = bb_range / (self.levels + 1)
 
         buy_levels = []
         sell_levels = []
 
         for i in range(1, self.levels + 1):
-            buy_price = bb.mid - spacing * i
-            buy_price = max(buy_price, bb.lower)
-            if buy_price == bb.lower and i > 1:
-                break
+            # Buy levels: from BB lower upward
+            buy_price = bb.lower + spacing * i
             buy_qty = order_value / buy_price
 
-            sell_price = bb.mid + spacing * i
-            sell_price = min(sell_price, bb.upper)
-            if sell_price == bb.upper and i > 1:
-                break
+            # Sell levels: from BB upper downward
+            sell_price = bb.upper - spacing * i
             sell_qty = order_value / sell_price
 
             buy_levels.append({
@@ -59,9 +62,13 @@ class GridManager:
                 "level": i,
             })
 
+        # Sort buys descending (closest to mid first) and sells ascending
+        buy_levels.sort(key=lambda l: l["price"], reverse=True)
+        sell_levels.sort(key=lambda l: l["price"])
+
         return GridLayout(
             buy_levels=buy_levels,
             sell_levels=sell_levels,
-            spacing=spacing,
+            spacing=round(spacing, 2),
             mid_price=bb.mid,
         )
