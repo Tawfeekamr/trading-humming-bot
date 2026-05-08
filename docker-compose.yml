@@ -14,14 +14,14 @@ services:
       - ./logs:/home/hummingbot/logs
       - ./.env:/home/hummingbot/.env
 
-  dashboard:
-    build:
-      context: .
-      dockerfile: Dockerfile.dashboard
-    env_file: .env.docker
-    restart: unless-stopped
-    ports:
-      - "8502:8502"
-    volumes:
-      - ./data:/app/data
-      - ./.env:/app/.env
+  # dashboard:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile.dashboard
+  #   env_file: .env.docker
+  #   restart: unless-stopped
+  #   ports:
+  #     - "8502:8502"
+  #   volumes:
+  #     - ./data:/app/data
+  #     - ./.env:/app/.env
