@@ -19,3 +19,4 @@ services:
       - ./data:/home/hummingbot/data
       - ./logs:/home/hummingbot/logs
       - ./.env:/home/hummingbot/.env
+      - ./config:/home/hummingbot/config:ro
