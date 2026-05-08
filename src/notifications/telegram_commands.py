@@ -1,8 +1,9 @@
 import os
 import time
+import json
 import logging
 import threading
-import requests
+import subprocess
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
@@ -54,36 +55,40 @@ class TelegramCommandHandler:
         """Runs the telegram polling loop directly (synchronous)."""
         try:
             logger.info("Telegram _run: starting synchronous polling...")
-            logger.info(f"Telegram _run: thread={threading.current_thread().name} alive={threading.current_thread().is_alive()}")
             self._poll_forever()
         except Exception as e:
             logger.error(f"Telegram polling thread crashed: {e}", exc_info=True)
 
-    def _poll_forever(self):
-        """Synchronous getUpdates-based polling loop using requests."""
-        base_url = f"https://api.telegram.org/bot{self._token}"
-        last_update_id = 0
-        print("[TELEGRAM-DEBUG] _poll_forever entered", flush=True)
-        logger.info("Telegram _poll_forever: clearing webhook...")
+    def _tg_get(self, path, params=None, timeout=35):
+        """HTTP GET to Telegram API using subprocess curl to avoid thread blocking."""
+        url = f"https://api.telegram.org/bot{self._token}/{path}"
+        cmd = ["curl", "-sS", "--max-time", str(timeout)]
+        if params:
+            for k, v in params.items():
+                cmd.extend(["-d", f"{k}={v}"])
+        cmd.append(url)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 5)
+        return json.loads(result.stdout) if result.stdout else {}
 
-        # Yield to let main thread release GIL before making HTTP calls
-        try:
-            print("[TELEGRAM-DEBUG] About to sleep 0.5s", flush=True)
-            time.sleep(0.5)
-            print("[TELEGRAM-DEBUG] Sleep done, about to call deleteWebhook", flush=True)
-        except Exception as e:
-            print(f"[TELEGRAM-DEBUG] Sleep failed: {e}", flush=True)
-            logger.error(f"Telegram sleep failed: {e}")
-        logger.info("Telegram _poll_forever: about to call deleteWebhook...")
+    def _tg_post(self, path, data, timeout=10):
+        """HTTP POST to Telegram API using subprocess curl."""
+        url = f"https://api.telegram.org/bot{self._token}/{path}"
+        cmd = ["curl", "-sS", "--max-time", str(timeout), "-X", "POST"]
+        for k, v in data.items():
+            cmd.extend(["-d", f"{k}={v}"])
+        cmd.append(url)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 5)
+        return json.loads(result.stdout) if result.stdout else {}
+
+    def _poll_forever(self):
+        """Synchronous getUpdates-based polling loop using subprocess curl."""
+        last_update_id = 0
+        logger.info("Telegram _poll_forever: clearing webhook...")
 
         # Clear webhook
         try:
-            resp = requests.get(
-                f"{base_url}/deleteWebhook",
-                params={"drop_pending_updates": True},
-                timeout=10,
-            )
-            logger.info(f"Telegram webhook cleared: {resp.status_code}")
+            resp = self._tg_get("deleteWebhook", {"drop_pending_updates": "true"}, timeout=10)
+            logger.info(f"Telegram webhook cleared: {resp}")
         except Exception as e:
             logger.warning(f"Telegram deleteWebhook failed: {e}")
 
@@ -93,11 +98,11 @@ class TelegramCommandHandler:
                 "📡 <b>Telegram Command Handler Online</b>\n"
                 "Commands: /status /pnl /trades /pending /fees /system /clear /help"
             )
-            requests.post(
-                f"{base_url}/sendMessage",
-                data={"chat_id": self._chat_id, "text": ping_text, "parse_mode": "HTML"},
-                timeout=10,
-            )
+            self._tg_post("sendMessage", {
+                "chat_id": self._chat_id,
+                "text": ping_text,
+                "parse_mode": "HTML",
+            })
             logger.info("Telegram startup ping sent")
         except Exception as e:
             logger.warning(f"Telegram startup ping failed: {e}")
@@ -125,16 +130,11 @@ class TelegramCommandHandler:
         # Poll loop
         while True:
             try:
-                resp = requests.get(
-                    f"{base_url}/getUpdates",
-                    params={
-                        "offset": last_update_id + 1,
-                        "timeout": 30,
-                        "allowed_updates": '["message"]',
-                    },
-                    timeout=35,
-                )
-                data = resp.json()
+                data = self._tg_get("getUpdates", {
+                    "offset": str(last_update_id + 1),
+                    "timeout": "30",
+                    "allowed_updates": '["message"]',
+                })
 
                 for update in data.get("result", []):
                     last_update_id = update["update_id"]
@@ -158,30 +158,26 @@ class TelegramCommandHandler:
 
     def _send_message(self, chat_id: str, text: str, parse_mode: str = ""):
         """Send a message to Telegram chat."""
-        requests.post(
-            f"https://api.telegram.org/bot{self._token}/sendMessage",
-            data={"chat_id": chat_id, "text": text, "parse_mode": parse_mode},
-            timeout=10,
-        )
+        self._tg_post("sendMessage", {
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": parse_mode,
+        })
 
     def _dispatch(self, handler, chat_id: str, msg: dict):
         """Call a command handler and send the reply text back."""
-        token = self._token
+        handler_self = self
 
         class _MockMessage:
             def __init__(self, msg_dict, cid):
                 self.text = msg_dict.get("text", "")
                 self._chat_id = cid
             def reply_text(self, text, **kw):
-                requests.post(
-                    f"https://api.telegram.org/bot{token}/sendMessage",
-                    data={
-                        "chat_id": self._chat_id,
-                        "text": text,
-                        "parse_mode": kw.get("parse_mode", ""),
-                    },
-                    timeout=10,
-                )
+                handler_self._tg_post("sendMessage", {
+                    "chat_id": self._chat_id,
+                    "text": text,
+                    "parse_mode": kw.get("parse_mode", ""),
+                })
 
         class _MockUpdate:
             def __init__(self, msg_dict, cid):
