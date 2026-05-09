@@ -110,7 +110,7 @@ data "aws_ami" "amazon_linux_2023" {
 
 resource "aws_instance" "bot_server" {
   ami           = data.aws_ami.amazon_linux_2023.id
-  instance_type = "t3.medium"
+  instance_type = "t3.small"
   subnet_id     = aws_subnet.public_subnet.id
 
   vpc_security_group_ids = [aws_security_group.bot_sg.id]
@@ -172,7 +172,7 @@ resource "aws_sns_topic_subscription" "billing_email" {
 resource "aws_budgets_budget" "monthly_cost" {
   name              = "trading-bot-monthly"
   budget_type       = "COST"
-  limit_amount      = "40"
+  limit_amount      = "25"
   limit_unit        = "USD"
   time_unit         = "MONTHLY"
   time_period_start = "2026-05-01_00:00"

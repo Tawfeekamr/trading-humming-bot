@@ -287,9 +287,11 @@ class TelegramCommandHandler:
             price = indicators[4] if indicators else 0
 
             usdt = strategy._get_usdt_balance()
-            btc = strategy._get_btc_balance()
-            btc_value = btc * price if price else 0
-            equity = usdt + btc_value
+            base = strategy._get_base_balance()
+            base_value = base * price if price else 0
+            equity = usdt + base_value
+            base_asset = getattr(strategy, 'base_asset', 'SOL')
+            display_pair = getattr(strategy, 'display_pair', 'SOL/USDT')
 
             mode = strategy.env.upper()
             base = getattr(strategy, '_base_capital', strategy.capital_usdt)
@@ -300,7 +302,7 @@ class TelegramCommandHandler:
                 f"💰 <b>Account Balance</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"💵 USDT: ${usdt:,.2f}\n"
-                f"₿ BTC:  {btc:.8f} (${btc_value:,.2f})\n"
+                f"◎ {base_asset}:  {base:.4f} (${base_value:,.2f})\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"📊 Equity: ${equity:,.2f}\n"
                 f"Mode: {mode}\n"
@@ -551,13 +553,15 @@ class TelegramCommandHandler:
     def _cmd_price(self, update, context):
         try:
             logger.info("Telegram /price received")
+            binance_symbol = getattr(self.strategy, 'binance_symbol', 'SOLUSDT')
+            display_pair = getattr(self.strategy, 'display_pair', 'SOL/USDT')
 
             # Fetch real-time price from Binance ticker
             script = (
                 "from binance.client import Client\n"
                 "import json, sys\n"
                 "c = Client('', '')\n"
-                "t = c.get_symbol_ticker(symbol='BTCUSDT')\n"
+                f"t = c.get_symbol_ticker(symbol='{binance_symbol}')\n"
                 "sys.stdout.write(t['price'])\n"
             )
             result = subprocess.run(
@@ -573,7 +577,7 @@ class TelegramCommandHandler:
             indicators = self.strategy.get_indicators_snapshot()
 
             if not indicators or not indicators[0]:
-                update.message.reply_text(f"💲 <b>BTC/USDT</b>: ${live_price:,.2f}", parse_mode="HTML")
+                update.message.reply_text(f"💲 <b>{display_pair}</b>: ${live_price:,.2f}", parse_mode="HTML")
                 return
 
             bb = indicators[0]
@@ -590,7 +594,7 @@ class TelegramCommandHandler:
             rsi_zone = "OVERBOUGHT" if rsi > 70 else "OVERSOLD" if rsi < 30 else "NEUTRAL"
 
             update.message.reply_text(
-                f"₿ <b>BTC/USDT — LIVE</b>\n"
+                f"◎ <b>{display_pair} — LIVE</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"💲 <b>${live_price:,.2f}</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -649,7 +653,8 @@ class TelegramCommandHandler:
                 cleared.append("grid_state.json")
 
             # Clear strategy-specific log
-            strat_log = log_dir / "logs_ta_grid_btcusdt.log"
+            script_name = getattr(self.strategy, 'script_file_name', 'ta_grid_btcusdt.py').replace('.py', '')
+            strat_log = log_dir / f"logs_{script_name}.log"
             if strat_log.exists():
                 strat_log.unlink()
                 strat_log.touch()
@@ -673,14 +678,16 @@ class TelegramCommandHandler:
 
     def _cmd_help(self, update, context):
         logger.info("Telegram /help received")
+        base_asset = getattr(self.strategy, 'base_asset', 'SOL')
+        display_pair = getattr(self.strategy, 'display_pair', 'SOL/USDT')
         update.message.reply_text(
             "📖 <b>Available Commands</b>\n"
             "━━━━━━━━━━━━━━━━━━━━━━\n"
             "/status — Grid state, mode, uptime, pending orders\n"
             "/pnl — Today / week / month / all-time P&L\n"
-            "/balance — USDT, BTC, equity, and grid capital\n"
+            f"/balance — USDT, {base_asset}, equity, and grid capital\n"
             "/capital <amount> — Update grid capital (no redeploy)\n"
-            "/price — Current BTC/USDT price with indicators\n"
+            f"/price — Current {display_pair} price with indicators\n"
             "/pause — Manually pause grid (cancel all orders)\n"
             "/resume — Resume grid trading\n"
             "/reset — Reset circuit breaker after halt\n"

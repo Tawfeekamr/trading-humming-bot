@@ -7,7 +7,7 @@ logger = logging.getLogger(__name__)
 
 
 class CandleFeed:
-    def __init__(self, symbol: str = "BTCUSDT", interval: str = "1h",
+    def __init__(self, symbol: str = "SOLUSDT", interval: str = "1h",
                  testnet: bool = False):
         self.symbol = symbol
         self.interval = interval

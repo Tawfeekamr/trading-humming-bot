@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from backtest.reporting import compute_benchmark, monte_carlo_simulation, BacktestResult, format_report
 
 
-def fetch_data(symbol: str = "BTCUSDT", start: str = "2025-01-01",
+def fetch_data(symbol: str = "SOLUSDT", start: str = "2025-01-01",
                end: str = "2026-04-30") -> pd.DataFrame:
     try:
         import vectorbt as vbt
@@ -88,7 +88,7 @@ def run_sweep(df: pd.DataFrame):
         try:
             import vectorbt as vbt
             # Realistic fees: 0.1% maker fee (standard, not BNB discount tier)
-            # Slippage: 5 basis points (0.05%) typical for BTC/USDT
+            # Slippage: 5 basis points (0.05%) typical for SOL/USDT
             pf = vbt.Portfolio.from_signals(
                 close=close, entries=entries, exits=exits,
                 freq="1h", init_cash=200,
@@ -143,7 +143,7 @@ def run_sweep(df: pd.DataFrame):
 
 
 if __name__ == "__main__":
-    print("Fetching BTC/USDT 1h data...")
+    print("Fetching SOL/USDT 1h data...")
     df = fetch_data()
     print(f"Data shape: {df.shape}")
     results = run_sweep(df)

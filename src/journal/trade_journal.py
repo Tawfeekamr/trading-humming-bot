@@ -20,7 +20,7 @@ DB_PATH = Path("data/trade_journal.db")
 @dataclass
 class Trade:
     timestamp: str            # ISO format: "2026-04-04 14:00:00"
-    pair: str                 # "BTC/USDT"
+    pair: str                 # "SOL/USDT"
     side: str                 # "BUY" | "SELL"
     entry_price: float
     exit_price: float

@@ -34,11 +34,11 @@ def components(tmp_path):
 def uptrend_candles():
     np.random.seed(42)
     n = 250
-    trend = np.linspace(0, 5000, n)
-    noise = np.random.normal(0, 300, n)
-    close = pd.Series(100_000 + trend + noise)
-    high = close + np.random.uniform(100, 500, n)
-    low = close - np.random.uniform(100, 500, n)
+    trend = np.linspace(0, 8, n)
+    noise = np.random.normal(0, 0.5, n)
+    close = pd.Series(170 + trend + noise)
+    high = close + np.random.uniform(0.1, 1.0, n)
+    low = close - np.random.uniform(0.1, 1.0, n)
     return high, low, close
 
 
@@ -76,7 +76,7 @@ class TestFullTickPipeline:
         journal = components["journal"]
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         trade = Trade(
-            timestamp=ts, pair="BTC/USDT", side="SELL",
+            timestamp=ts, pair="SOL/USDT", side="SELL",
             entry_price=100_000, exit_price=100_050, quantity=0.001,
             gross_pnl=0.05, fee=0.015, net_pnl=0.035,
             grid_level=1, duration_min=60,
@@ -92,7 +92,7 @@ class TestFullTickPipeline:
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         for i in range(20):
             journal.log_trade(Trade(
-                timestamp=ts, pair="BTC/USDT", side="SELL",
+                timestamp=ts, pair="SOL/USDT", side="SELL",
                 entry_price=100_000, exit_price=100_005, quantity=0.001,
                 gross_pnl=0.005, fee=0.015, net_pnl=-0.010,
                 grid_level=i % 5, duration_min=30,

@@ -52,13 +52,13 @@ class TelegramBot:
                         f"Telegram send failed after {max_retries} attempts: {e}"
                     )
 
-    async def alert_startup(self, env: str, capital: float) -> None:
+    async def alert_startup(self, env: str, capital: float, display_pair: str = "SOL/USDT") -> None:
         await self.send(
             f"🟢 <b>Grid Bot STARTED</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
             f"🌐 Mode: {env.upper()}\n"
             f"💰 Capital: ${capital:,.0f} USDT\n"
-            f"📊 Pair: BTC/USDT\n"
+            f"📊 Pair: {display_pair}\n"
             f"⏰ Time: {self._now()} UTC"
         )
 

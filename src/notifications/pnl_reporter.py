@@ -43,7 +43,7 @@ class PnLReporter:
             f"⏱ Duration:    {trade.duration_min} min\n"
             f"🔵 Entry:      ${trade.entry_price:,.2f}\n"
             f"🔵 Exit:       ${trade.exit_price:,.2f}\n"
-            f"📦 Qty:        {trade.quantity} BTC\n"
+            f"📦 Qty:        {trade.quantity}\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
             f"💰 Gross PnL:  {sign}${trade.gross_pnl:.2f}\n"
             f"💸 Fee:        -${abs(trade.fee):.2f}\n"
@@ -63,7 +63,7 @@ class PnLReporter:
 
         sign = "+" if (s["net_pnl"] or 0) >= 0 else ""
         msg = (
-            f"⏰ <b>Hourly Report — BTC/USDT</b>\n"
+            f"⏰ <b>Hourly Report — SOL/USDT</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
             f"📊 Trades:     {s['total_trades']}  "
             f"(✅{s['winning']} / ❌{s['losing']})\n"
@@ -155,7 +155,7 @@ class PnLReporter:
 
     async def alert_grid_activated(self, price, bb_lower, bb_upper, rsi, spacing):
         await self._send(
-            f"🟢 <b>Grid ACTIVATED — BTC/USDT</b>\n"
+            f"🟢 <b>Grid ACTIVATED — SOL/USDT</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
             f"💵 Price:    ${price:,.2f}\n"
             f"📐 Range:    ${bb_lower:,.0f} → ${bb_upper:,.0f}\n"
@@ -165,7 +165,7 @@ class PnLReporter:
 
     async def alert_grid_paused(self, price, reason, rsi):
         await self._send(
-            f"⏸️ <b>Grid PAUSED — BTC/USDT</b>\n"
+            f"⏸️ <b>Grid PAUSED — SOL/USDT</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
             f"💵 Price:   ${price:,.2f}\n"
             f"⚠️ Reason:  {reason}\n"

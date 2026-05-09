@@ -1,5 +1,5 @@
 """
-ta_grid_btcusdt.py — TA-Enhanced BTC/USDT Grid Bot
+ta_grid_btcusdt.py — TA-Enhanced SOL/USDT Grid Bot
 Hummingbot v2 StrategyV2Base implementation.
 
 Start: start --script ta_grid_btcusdt.py
@@ -56,6 +56,7 @@ def _global_exception_handler(exc_type, exc_value, exc_tb):
 
 import sys
 sys.excepthook = _global_exception_handler
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from typing import Dict, Optional
 from dataclasses import dataclass as dataclass_fills
 from typing import Optional as Optional_fills
@@ -63,10 +64,6 @@ import time as time_mod
 
 import pandas as pd
 import yaml
-
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from src.indicators.bollinger import BollingerBands
 from src.indicators.rsi import RSI
@@ -121,6 +118,7 @@ class FillRecord:
     ema_200: float
     atr: float
     grid_state: str
+    fee: float = 0.0
 
 
 class TAGridConfig(StrategyV2ConfigBase):
@@ -134,13 +132,14 @@ class TAGridConfig(StrategyV2ConfigBase):
 
     # Exchange configuration
     exchange: str = Field(default="binance_paper_trade")
-    trading_pair: str = Field(default="BTC-USDT")
+    trading_pair: str = Field(default="SOL-USDT")
 
     # Grid parameters
     levels: int = Field(default=8)
     capital_usdt: float = Field(default=200.0)
     min_reserve: float = Field(default=50.0)
     order_refresh_time: int = Field(default=60)
+    step_size: float = Field(default=0.01)
 
     # Bollinger Bands
     bb_period: int = Field(default=20)
@@ -161,7 +160,7 @@ class TAGridConfig(StrategyV2ConfigBase):
     # Risk management
     max_drawdown_pct: float = Field(default=10.0)
     daily_loss_limit_pct: float = Field(default=5.0)
-    max_btc_exposure_pct: float = Field(default=80.0)
+    max_base_exposure_pct: float = Field(default=80.0)
 
     # Environment
     env: str = Field(default="paper")
@@ -175,11 +174,11 @@ class TAGridConfig(StrategyV2ConfigBase):
         return markets
 
 
-class TAGridBTCUSDT(StrategyV2Base):
+class TAGridSOLUSDT(StrategyV2Base):
     """
     TA-Enhanced Grid Bot strategy for Hummingbot v2.
     Uses Bollinger Bands, RSI, EMA 200, and ATR to dynamically
-    manage a grid of buy/sell orders on BTC/USDT.
+    manage a grid of buy/sell orders on the configured pair.
     """
 
     @staticmethod
@@ -218,6 +217,7 @@ class TAGridBTCUSDT(StrategyV2Base):
         self.capital_usdt = float(os.environ.get("GRID_CAPITAL_USDT", grid_cfg.get("capital_usdt", config.capital_usdt)))
         self.min_reserve = float(os.environ.get("MIN_USDT_RESERVE", grid_cfg.get("min_usdt_reserve", config.min_reserve)))
         self.order_refresh_time = grid_cfg.get("order_refresh_time", config.order_refresh_time)
+        self.step_size = float(grid_cfg.get("step_size", config.step_size))
 
         # Indicator config
         bb_cfg = ind_cfg.get("bollinger", {})
@@ -236,7 +236,7 @@ class TAGridBTCUSDT(StrategyV2Base):
         # Risk config
         self.max_drawdown_pct = float(os.environ.get("MAX_DRAWDOWN_PCT", risk_cfg.get("max_drawdown_pct", config.max_drawdown_pct)))
         self.daily_loss_limit_pct = risk_cfg.get("daily_loss_limit_pct", config.daily_loss_limit_pct)
-        self.max_btc_exposure_pct = float(os.environ.get("MAX_BTC_EXPOSURE_PCT", risk_cfg.get("max_btc_exposure_pct", config.max_btc_exposure_pct)))
+        self.max_base_exposure_pct = float(os.environ.get("MAX_BASE_EXPOSURE_PCT", risk_cfg.get("max_base_exposure_pct", config.max_base_exposure_pct)))
 
         # Environment
         self.env = os.environ.get("ENV", config.env)
@@ -245,6 +245,9 @@ class TAGridBTCUSDT(StrategyV2Base):
         # Exchange and trading pair from config
         self.exchange = config.exchange
         self.trading_pair = config.trading_pair
+        self.base_asset = self.trading_pair.split("-")[0]  # e.g. "SOL"
+        self.binance_symbol = self.trading_pair.replace("-", "")  # e.g. "SOLUSDT"
+        self.display_pair = self.trading_pair.replace("-", "/")  # e.g. "SOL/USDT"
 
         # Call parent constructor (required for v2)
         super().__init__(connectors, config)
@@ -262,6 +265,7 @@ class TAGridBTCUSDT(StrategyV2Base):
             levels=self.levels,
             capital_usdt=self.capital_usdt,
             min_reserve=self.min_reserve,
+            step_size=self.step_size,
             spacing_multiplier=self.atr_multiplier,
         )
         self._base_capital = self.capital_usdt  # floor for auto-compound
@@ -269,11 +273,13 @@ class TAGridBTCUSDT(StrategyV2Base):
         self.state_machine = GridStateMachine()
         self._grid_order_tracker = OrderTracker()
         self.circuit_breaker = CircuitBreaker(self.max_drawdown_pct, self.daily_loss_limit_pct)
+        self.circuit_breaker.set_peak_equity(self.capital_usdt)
+        self.circuit_breaker.set_start_of_day_equity(self.capital_usdt)
         self.position_guard = PositionGuard(
-            self.max_btc_exposure_pct, self.min_reserve, self.capital_usdt
+            self.max_base_exposure_pct, self.min_reserve, self.capital_usdt
         )
         self.candle_feed = CandleFeed(
-            symbol="BTCUSDT",
+            symbol=self.binance_symbol,
             interval="1h",
             testnet=self.is_testnet,
         )
@@ -311,7 +317,7 @@ class TAGridBTCUSDT(StrategyV2Base):
             f"rsi_ob={self.rsi_overbought} rsi_os={self.rsi_oversold} "
             f"ema={self.ema_period} atr={self.atr_period}*{self.atr_multiplier} "
             f"max_dd={self.max_drawdown_pct}% daily_loss={self.daily_loss_limit_pct}% "
-            f"max_exposure={self.max_btc_exposure_pct}% fee={self._fee_rate*100:.4f}%"
+            f"max_exposure={self.max_base_exposure_pct}% fee={self._fee_rate*100:.4f}%"
         )
         logger.info(
             f"Components: telegram_token={'SET' if os.environ.get('TELEGRAM_BOT_TOKEN') else 'NOT SET'} "
@@ -321,7 +327,7 @@ class TAGridBTCUSDT(StrategyV2Base):
 
         # Fee tier auto-detection
         try:
-            fee_info = self.candle_feed.client.get_trade_fee(symbol="BTCUSDT")
+            fee_info = self.candle_feed.client.get_trade_fee(symbol=self.binance_symbol)
             if fee_info and len(fee_info) > 0:
                 maker_fee = float(fee_info[0].get("makerCommission", 0.00075))
                 if maker_fee > 0:
@@ -359,12 +365,13 @@ class TAGridBTCUSDT(StrategyV2Base):
         self._load_state()
 
     def _save_state(self):
-        """Persist open positions to a JSON file."""
+        """Persist open positions to a JSON file (atomic write)."""
         try:
             if not self._state_file.parent.exists():
                 self._state_file.parent.mkdir(parents=True, exist_ok=True)
-            
+
             data = {
+                "last_sod_reset": self._last_sod_reset,
                 "open_buys": {
                     order_id: {
                         "order_id": fill.order_id,
@@ -378,12 +385,15 @@ class TAGridBTCUSDT(StrategyV2Base):
                         "bb_lower": fill.bb_lower,
                         "ema_200": fill.ema_200,
                         "atr": fill.atr,
-                        "grid_state": fill.grid_state
+                        "grid_state": fill.grid_state,
+                        "fee": fill.fee,
                     } for order_id, fill in self._open_buys.items()
                 }
             }
-            with open(self._state_file, "w") as f:
+            tmp = self._state_file.with_suffix('.tmp')
+            with open(tmp, "w") as f:
                 json.dump(data, f, indent=2)
+            os.replace(tmp, self._state_file)
             logger.debug(f"State saved: {len(self._open_buys)} open positions")
         except Exception as e:
             logger.error(f"Failed to save state: {e}")
@@ -394,6 +404,7 @@ class TAGridBTCUSDT(StrategyV2Base):
             if self._state_file.exists():
                 with open(self._state_file, "r") as f:
                     data = json.load(f)
+                    self._last_sod_reset = data.get("last_sod_reset", "")
                     raw_buys = data.get("open_buys", {})
                     for order_id, d in raw_buys.items():
                         self._open_buys[order_id] = FillRecord(
@@ -408,7 +419,8 @@ class TAGridBTCUSDT(StrategyV2Base):
                             bb_lower=d["bb_lower"],
                             ema_200=d["ema_200"],
                             atr=d["atr"],
-                            grid_state=d["grid_state"]
+                            grid_state=d["grid_state"],
+                            fee=d.get("fee", 0.0),
                         )
                 logger.info(f"Restored {len(self._open_buys)} open positions from {self._state_file}")
         except Exception as e:
@@ -492,6 +504,10 @@ class TAGridBTCUSDT(StrategyV2Base):
             except Exception as e:
                 logger.error(f"Candle fetch failed: {e}")
                 self._safe_telegram_error("candle_fetch", str(e))
+                return
+
+            if df.empty or len(df) < self.bb_period:
+                logger.warning("Insufficient candle data, skipping tick")
                 return
 
             closes = df["close"]
@@ -656,13 +672,13 @@ class TAGridBTCUSDT(StrategyV2Base):
             return
 
         usdt_bal = self._get_usdt_balance()
-        btc_bal = self._get_btc_balance()
+        base_bal = self._get_base_balance()
         equity = self._estimate_equity(current_price)
-        exposure_pct = self.position_guard.btc_exposure_pct(btc_bal, current_price, equity)
+        exposure_pct = self.position_guard.base_exposure_pct(base_bal, current_price, equity)
 
         logger.info(
             f"Placing grid: {len(grid.buy_levels)} buy / {len(grid.sell_levels)} sell levels | "
-            f"price=${current_price:,.0f} usdt=${usdt_bal:.2f} btc={btc_bal:.8f} "
+            f"price=${current_price:,.2f} usdt=${usdt_bal:.2f} {self.base_asset.lower()}={base_bal:.4f} "
             f"equity=${equity:.2f} exposure={exposure_pct:.0f}%"
         )
 
@@ -686,8 +702,8 @@ class TAGridBTCUSDT(StrategyV2Base):
                 continue
             order_usdt = level["price"] * level["quantity"]
             if not self.position_guard.can_place_order(
-                current_btc=btc_bal,
-                btc_price=current_price,
+                current_base=base_bal,
+                base_price=current_price,
                 current_usdt=usdt_bal,
                 order_usdt=order_usdt,
                 equity=equity,
@@ -726,8 +742,8 @@ class TAGridBTCUSDT(StrategyV2Base):
             if level["price"] <= current_price:
                 sells_skipped_price += 1
                 continue
-            btc_balance = self._get_btc_balance()
-            if level["quantity"] > btc_balance:
+            base_balance = self._get_base_balance()
+            if level["quantity"] > base_balance:
                 sells_blocked += 1
                 continue
             sells_placed += 1
@@ -768,6 +784,7 @@ class TAGridBTCUSDT(StrategyV2Base):
             )
             self.cancel(self.exchange, order.trading_pair, order.client_order_id)
         self._grid_order_tracker.cancel_all()
+        self._grid_order_tracker.clear_history()
 
     # ── Balance Helpers ──────────────────────────────────────────────
 
@@ -780,17 +797,17 @@ class TAGridBTCUSDT(StrategyV2Base):
             return 0.0
         return float(balance.available if hasattr(balance, 'available') else balance)
 
-    def _get_btc_balance(self) -> float:
+    def _get_base_balance(self) -> float:
         connector = self.connectors.get(self.exchange)
         if not connector:
             return 0.0
-        balance = getattr(connector, "get_balance", lambda x: None)("BTC")
+        balance = getattr(connector, "get_balance", lambda x: None)(self.base_asset)
         if balance is None:
             return 0.0
         return float(balance.available if hasattr(balance, 'available') else balance)
 
-    def _estimate_equity(self, btc_price: float) -> float:
-        return self._get_usdt_balance() + (self._get_btc_balance() * btc_price)
+    def _estimate_equity(self, base_price: float) -> float:
+        return self._get_usdt_balance() + (self._get_base_balance() * base_price)
 
     def _send_daily_report(self, equity: float):
         """Send daily P&L summary to Telegram at midnight UTC."""
@@ -849,7 +866,7 @@ class TAGridBTCUSDT(StrategyV2Base):
 
         if new_state == GridState.ACTIVE:
             msg = (
-                f"🟢 <b>Grid ACTIVATED — BTC/USDT</b>\n"
+                f"🟢 <b>Grid ACTIVATED — {self.display_pair}</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"💵 Price: ${price:,.2f}\n"
                 f"📐 Range: ${bb.lower:,.0f} → ${bb.upper:,.0f}\n"
@@ -859,7 +876,7 @@ class TAGridBTCUSDT(StrategyV2Base):
             )
         elif new_state == GridState.PAUSED:
             msg = (
-                f"⏸️ <b>Grid PAUSED — BTC/USDT</b>\n"
+                f"⏸️ <b>Grid PAUSED — {self.display_pair}</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"💵 Price: ${price:,.2f}\n"
                 f"📊 RSI: {rsi:.1f}  |  EMA200: ${ema:,.0f}\n"
@@ -868,7 +885,7 @@ class TAGridBTCUSDT(StrategyV2Base):
             )
         elif new_state == GridState.REACTIVATING:
             msg = (
-                f"🔄 <b>Grid REACTIVATING — BTC/USDT</b>\n"
+                f"🔄 <b>Grid REACTIVATING — {self.display_pair}</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"💵 Price: ${price:,.2f}\n"
                 f"📐 New range: ${bb.lower:,.0f} → ${bb.upper:,.0f}\n"
@@ -946,9 +963,9 @@ class TAGridBTCUSDT(StrategyV2Base):
 
         fee_est = quantity * price * self._fee_rate
         usdt_bal = self._get_usdt_balance()
-        btc_bal = self._get_btc_balance()
+        base_bal = self._get_base_balance()
         equity = self._estimate_equity(price)
-        exposure_pct = self.position_guard.btc_exposure_pct(btc_bal, price, equity)
+        exposure_pct = self.position_guard.base_exposure_pct(base_bal, price, equity)
 
         self.event_log.log("trade_filled",
             side=side,
@@ -962,7 +979,7 @@ class TAGridBTCUSDT(StrategyV2Base):
             ema_200=round(ema_val, 2),
             atr=round(atr_val, 2),
             usdt_balance=round(usdt_bal, 2),
-            btc_balance=round(btc_bal, 8),
+            base_balance=round(base_bal, 4),
             equity=round(equity, 2),
         )
 
@@ -980,11 +997,12 @@ class TAGridBTCUSDT(StrategyV2Base):
                 ema_200=ema_val,
                 atr=atr_val,
                 grid_state=grid_state_val,
+                fee=fee_est,
             )
             self._save_state()
             trade = Trade(
                 timestamp=pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d %H:%M:%S"),
-                pair="BTC/USDT",
+                pair=self.display_pair,
                 side="BUY",
                 entry_price=price,
                 exit_price=price,
@@ -1002,15 +1020,15 @@ class TAGridBTCUSDT(StrategyV2Base):
                 grid_state=grid_state_val,
             )
             self.journal.log_trade(trade)
-            logger.info(f"BUY filled: {quantity} BTC @ ${price:,.2f} | Level {grid_level}")
+            logger.info(f"BUY filled: {quantity} {self.base_asset} @ ${price:,.2f} | Level {grid_level}")
             self._grid_dirty = True  # Refresh grid after fill
 
             # Telegram notification for BUY fills
             buy_msg = (
-                f"📈 <b>BUY Filled — BTC/USDT</b>\n"
+                f"📈 <b>BUY Filled — {self.display_pair}</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"💵 Price: ${price:,.2f}\n"
-                f"📦 Qty: {quantity} BTC\n"
+                f"📦 Qty: {quantity} {self.base_asset}\n"
                 f"📊 Level {grid_level}  |  RSI: {rsi_val:.1f}\n"
                 f"📏 Spacing: ${self._active_buy_spacing:,.0f}\n"
                 f"💸 Fee: -${fee_est:.2f}\n"
@@ -1045,14 +1063,15 @@ class TAGridBTCUSDT(StrategyV2Base):
                 entry_atr = matching_buy.atr
                 gross_pnl = (price - entry_price) * quantity
                 duration_min = int((time_mod.time() - matching_buy.timestamp) / 60)
-                net_pnl = gross_pnl - fee
+                total_fee = matching_buy.fee + fee
+                net_pnl = gross_pnl - total_fee
 
                 self.event_log.log("round_trip_closed",
                     entry_price=round(entry_price, 2),
                     exit_price=round(price, 2),
                     quantity=quantity,
                     gross_pnl=round(gross_pnl, 4),
-                    fee=round(fee, 4),
+                    fee=round(total_fee, 4),
                     net_pnl=round(net_pnl, 4),
                     duration_min=duration_min,
                     grid_level=grid_level,
@@ -1072,13 +1091,13 @@ class TAGridBTCUSDT(StrategyV2Base):
 
                 trade = Trade(
                     timestamp=pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d %H:%M:%S"),
-                    pair="BTC/USDT",
+                    pair=self.display_pair,
                     side="SELL",
                     entry_price=entry_price,
                     exit_price=price,
                     quantity=quantity,
                     gross_pnl=round(gross_pnl, 4),
-                    fee=round(fee, 4),
+                    fee=round(total_fee, 4),
                     net_pnl=round(net_pnl, 4),
                     grid_level=grid_level,
                     duration_min=duration_min,
@@ -1096,16 +1115,16 @@ class TAGridBTCUSDT(StrategyV2Base):
                 pnl_sign = "+" if net_pnl >= 0 else ""
 
                 telegram_msg = (
-                    f"{'💚' if net_pnl >= 0 else '🔴'} <b>Trade Closed — BTC/USDT</b>\n"
+                    f"{'💚' if net_pnl >= 0 else '🔴'} <b>Trade Closed — {self.display_pair}</b>\n"
                     f"━━━━━━━━━━━━━━━━━━━━━━\n"
                     f"📉 SELL  |  Grid Level {grid_level}\n"
                     f"⏱ Duration:    {duration_min} min\n"
                     f"🔵 Entry:      ${entry_price:,.2f}\n"
                     f"🔵 Exit:       ${price:,.2f}\n"
-                    f"📦 Qty:        {quantity} BTC\n"
+                    f"📦 Qty:        {quantity} {self.base_asset}\n"
                     f"━━━━━━━━━━━━━━━━━━━━━━\n"
                     f"💰 Gross PnL:  {pnl_sign}${gross_pnl:.2f}\n"
-                    f"💸 Fee:        -${fee:.2f}\n"
+                    f"💸 Fee:        -${total_fee:.2f}\n"
                     f"<b>📊 Net PnL:   {pnl_sign}${net_pnl:.2f}</b>\n"
                     f"━━━━━━━━━━━━━━━━━━━━━━\n"
                     f"📉 RSI: {entry_rsi:.1f} → {rsi_val:.1f}\n"
@@ -1123,17 +1142,17 @@ class TAGridBTCUSDT(StrategyV2Base):
                     rsi=rsi_val, bb_upper=bb_upper, bb_lower=bb_lower,
                     ema_200=ema_val, atr=atr_val,
                     usdt_balance=round(usdt_bal, 2),
-                    btc_balance=round(btc_bal, 8),
+                    base_balance=round(base_bal, 4),
                     equity=round(equity, 2),
                     note="unmatched_sell_no_open_buy",
                 )
 
                 telegram_msg = (
-                    f"⚠️ <b>SELL Filled (unmatched) — BTC/USDT</b>\n"
+                    f"⚠️ <b>SELL Filled (unmatched) — {self.display_pair}</b>\n"
                     f"━━━━━━━━━━━━━━━━━━━━━━\n"
                     f"📉 SELL  |  Grid Level {grid_level}\n"
                     f"💵 Price: ${price:,.2f}\n"
-                    f"📦 Qty: {quantity} BTC\n"
+                    f"📦 Qty: {quantity} {self.base_asset}\n"
                     f"💸 Fee: -${fee:.2f}\n"
                     f"━━━━━━━━━━━━━━━━━━━━━━\n"
                     f"📉 RSI: {rsi_val:.1f}  |  ATR: ${atr_val:,.0f}\n"
@@ -1150,7 +1169,7 @@ class TAGridBTCUSDT(StrategyV2Base):
             except RuntimeError:
                 pass
 
-            logger.info(f"SELL filled: {quantity} BTC @ ${price:,.2f} | Level {grid_level}")
+            logger.info(f"SELL filled: {quantity} {self.base_asset} @ ${price:,.2f} | Level {grid_level}")
             self._grid_dirty = True
 
     # ── Safe Telegram Error Helpers ────────────────────────────────────
@@ -1195,6 +1214,7 @@ class TAGridBTCUSDT(StrategyV2Base):
     # ── Graceful Shutdown ────────────────────────────────────────────
 
     def on_stop(self):
+        self._save_state()
         super().on_stop()
         if hasattr(self, "_sys_monitor"):
             self._sys_monitor.stop()

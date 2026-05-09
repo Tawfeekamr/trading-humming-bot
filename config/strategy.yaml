@@ -1,19 +1,20 @@
 # ════════════════════════════════════════════════════════════════════
-#  TA-Enhanced BTC/USDT Grid Bot — Strategy Configuration
+#  TA-Enhanced SOL/USDT Grid Bot — Strategy Configuration
 #  All non-secret settings live here. Loaded by the strategy script.
 # ════════════════════════════════════════════════════════════════════
 
 # ── Pair & Exchange ───────────────────────────────────────────────
-pair: "BTC-USDT"
+pair: "SOL-USDT"
 exchange: "binance"
 timeframe: "1h"
 
 # ── Grid Parameters ───────────────────────────────────────────────
 grid:
-  levels: 6                   # Orders on each side of mid price
+  levels: 3                   # Orders on each side of mid price
   capital_usdt: 1000          # Total USDT allocated
   min_usdt_reserve: 100       # Always keep this in reserve
   order_refresh_time: 60      # Seconds between order refresh
+  step_size: 0.01             # Exchange quantity precision (SOL=0.01, BTC=0.00001, ETH=0.001)
 
 # ── Indicator Settings ────────────────────────────────────────────
 indicators:
@@ -49,7 +50,7 @@ rules:
 risk:
   max_drawdown_pct: 10        # Bot halts if portfolio drops this % from peak
   daily_loss_limit_pct: 5     # Circuit breaker if -5% in 24h
-  max_btc_exposure_pct: 80    # Never deploy more than 80% capital in BTC
+  max_base_exposure_pct: 80    # Never deploy more than 80% capital in base asset
 
 # ── Dashboard ─────────────────────────────────────────────────────
 dashboard:

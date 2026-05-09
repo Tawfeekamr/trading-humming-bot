@@ -12,11 +12,11 @@ class WebSocketFeed:
     BINANCE_WS = "wss://stream.binance.com:9443/ws"
     BINANCE_WS_TESTNET = "wss://testnet.binance.vision/ws"
 
-    # BTC sanity bounds: 0 < price < 1,000,000
+    # Price sanity bounds: covers all reasonable crypto prices (BTC ~$100K, alts ~$0.01–$1K)
     MIN_PRICE = 0
     MAX_PRICE = 1_000_000
 
-    def __init__(self, symbol: str = "btcusdt", testnet: bool = False,
+    def __init__(self, symbol: str = "solusdt", testnet: bool = False,
                  on_price_update: Optional[Callable[[float], None]] = None,
                  max_retries: int = 50):
         self.symbol = symbol.lower()
@@ -52,7 +52,7 @@ class WebSocketFeed:
             logger.warning(f"WebSocket price is not finite: {price}")
             return None
 
-        # Check price is positive and within BTC sanity range
+        # Check price is positive and within sanity range
         if not (self.MIN_PRICE < price < self.MAX_PRICE):
             logger.warning(f"WebSocket price out of valid range [{self.MIN_PRICE}, {self.MAX_PRICE}]: {price}")
             return None

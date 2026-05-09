@@ -11,7 +11,7 @@ def journal(tmp_path):
 def _trade(journal, gross_pnl, fee, net_pnl, hours_ago=0):
     ts = (datetime.now(timezone.utc) - timedelta(hours=hours_ago)).strftime("%Y-%m-%d %H:%M:%S")
     journal.log_trade(Trade(
-        timestamp=ts, pair="BTC/USDT", side="SELL",
+        timestamp=ts, pair="SOL/USDT", side="SELL",
         entry_price=100_000, exit_price=100_050, quantity=0.001,
         gross_pnl=gross_pnl, fee=fee, net_pnl=net_pnl,
         grid_level=1, duration_min=60,

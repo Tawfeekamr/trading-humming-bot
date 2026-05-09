@@ -96,9 +96,6 @@ ta-grid-bot/
 │   ├── journal/
 │   │   └── trade_journal.py      # SQLite logger — every trade stored
 │   │
-│   ├── dashboard/
-│   │   └── app.py                # Streamlit P&L dashboard (web UI)
-│   │
 │   └── notifications/
 │       ├── telegram_bot.py       # Grid state alerts
 │       ├── telegram_commands.py  # Interactive Telegram commands (/status, /pnl, etc.)
@@ -380,7 +377,7 @@ Lower BB ──── 🟢 BUY  order 6   ($94,000)
 
 ---
 
-## 📊 P&L Tracking — 2 Systems
+## 📊 P&L Tracking
 
 Both systems run simultaneously. They serve different purposes and complement each other.
 
@@ -427,32 +424,6 @@ RSI: 42.3  |  Grid: ACTIVE
 |--------|------|
 | Per-trade alert | Instantly after every close |
 | Daily summary | Auto-sent at midnight UTC (trades, P&L, fees, equity growth) |
-
----
-
-### 2. 🌐 Streamlit Web Dashboard (Live Browser UI)
-
-Open in any browser or on your phone. Shows everything visually.
-
-**What's on the dashboard:**
-- 6 summary cards: Today / Week / Month / All-Time PnL + total trades + win rate
-- Equity curve chart (7 / 14 / 30 / 60 / 90 day periods)
-- Trade history table — every trade color-coded green ✅ or red ❌
-- Filter trades by Side (BUY/SELL) and Result (profit/loss)
-- Top 5 best trades and top 5 worst trades
-- Full period breakdown table (hour / day / week / month / all-time)
-
-**Run locally:**
-```bash
-streamlit run src/dashboard/app.py
-# Opens at http://localhost:8501
-```
-
-**Deploy on EC2 (alongside bot):**
-```bash
-# Dashboard runs inside the same Docker container on EC2
-# Accessible at http://<ec2-ip>:8501
-```
 
 ---
 
@@ -608,7 +579,7 @@ No code changes needed — same strategy, real money.
 **Phase 3 — Validation** ✅
 - [x] Unit tests (indicators, grid, circuit breaker)
 - [x] Paper trading on Binance
-- [x] Performance reporting (Telegram + dashboard)
+- [x] Performance reporting (Telegram alerts + commands)
 
 **Phase 4 — Production** ✅
 - [x] AWS EC2 deployment (Tokyo) via GitHub Actions

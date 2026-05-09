@@ -288,14 +288,6 @@ Order sizes recalculate on the next grid refresh (within 1 hour).
 | `/clear` | Clear logs and grid state (preserves trade history) |
 | `/help` | Command reference |
 
-### Dashboard
-Streamlit web app at `http://<server-ip>:8502` showing:
-- Live equity curve with daily P&L bars
-- Summary cards by period
-- Filterable trade history with CSV export
-- Best/worst trades ranking
-- Paper/Live mode indicator
-
 ### Log Files
 All logs persist in `./logs/` (Docker volume mount):
 

@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from backtest.reporting import compute_benchmark, monte_carlo_simulation
 
 
-def fetch_data(symbol: str = "BTCUSDT", start: str = "2024-01-01",
+def fetch_data(symbol: str = "SOLUSDT", start: str = "2024-01-01",
                end: str = "2026-04-30") -> pd.DataFrame:
     try:
         import vectorbt as vbt
@@ -131,7 +131,7 @@ def walk_forward_test(df: pd.DataFrame, train_months: int = 6,
 
 
 if __name__ == "__main__":
-    print("Fetching BTC/USDT historical data...")
+    print("Fetching SOL/USDT historical data...")
     df = fetch_data()
     print(f"Data: {df.shape[0]} rows from {df.index[0]} to {df.index[-1]}")
     results = walk_forward_test(df)

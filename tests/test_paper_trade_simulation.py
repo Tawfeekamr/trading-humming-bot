@@ -80,7 +80,7 @@ def generate_market_scenario(base_price, n_bars, scenario="uptrend"):
     return high, low, close
 
 
-def simulate_tick(bot, high, low, close, usdt_balance, btc_balance, btc_price):
+def simulate_tick(bot, high, low, close, usdt_balance, base_balance, base_price):
     """Simulate one tick of the bot. Returns (new_state, grid, equity)."""
     bb_result = bot["bb"].calculate(close)
     rsi_value = bot["rsi"].calculate(close)
@@ -90,7 +90,7 @@ def simulate_tick(bot, high, low, close, usdt_balance, btc_balance, btc_price):
     if any(v is None for v in [bb_result, rsi_value, ema_value, atr_value]):
         return None, None, None
 
-    equity = usdt_balance + (btc_balance * btc_price)
+    equity = usdt_balance + (base_balance * base_price)
 
     # Initialize circuit breaker if not done
     if bot["cb"]._peak_equity == 0:
@@ -107,12 +107,12 @@ def simulate_tick(bot, high, low, close, usdt_balance, btc_balance, btc_price):
     # Evaluate state
     prev_state = bot["sm"].state
     new_state = bot["sm"].evaluate(
-        price=btc_price, rsi=rsi_value, ema_200=ema_value,
+        price=base_price, rsi=rsi_value, ema_200=ema_value,
         bb_lower=bb_result.lower, bb_upper=bb_result.upper,
     )
 
     # Check circuit breaker
-    equity = usdt_balance + (btc_balance * btc_price)
+    equity = usdt_balance + (base_balance * base_price)
     bot["cb"].update_peak(equity)
     if bot["cb"].check(equity) or bot["cb"].check_daily(equity):
         bot["tracker"].cancel_all()
@@ -125,10 +125,10 @@ def simulate_tick(bot, high, low, close, usdt_balance, btc_balance, btc_price):
 
         # Track orders in OrderTracker (fix #2 verification)
         for level in grid.buy_levels:
-            if level["price"] < btc_price:
+            if level["price"] < base_price:
                 order_usdt = level["price"] * level["quantity"]
                 if bot["pg"].can_place_order(
-                    current_btc=btc_balance, btc_price=btc_price,
+                    current_base=base_balance, base_price=base_price,
                     current_usdt=usdt_balance, order_usdt=order_usdt,
                     equity=equity,
                 ):
@@ -141,7 +141,7 @@ def simulate_tick(bot, high, low, close, usdt_balance, btc_balance, btc_price):
                     ))
 
         for level in grid.sell_levels:
-            if level["price"] > btc_price and level["quantity"] <= btc_balance:
+            if level["price"] > base_price and level["quantity"] <= base_balance:
                 bot["tracker"].add(GridOrder(
                     order_id=f"sell_L{level['level']}_{level['price']}",
                     level=level["level"],
@@ -160,12 +160,12 @@ class TestPaperTradeSimulation:
 
     def test_uptrend_activates_grid_and_places_orders(self, bot):
         """In a clear uptrend, bot should activate and place grid orders."""
-        high, low, close = generate_market_scenario(100_000, 250, "uptrend")
+        high, low, close = generate_market_scenario(170, 250, "uptrend")
         price = float(close.iloc[-1])
 
         state, grid, equity = simulate_tick(
             bot, high, low, close,
-            usdt_balance=150, btc_balance=0.0005, btc_price=price,
+            usdt_balance=150, base_balance=0.5, base_price=price,
         )
 
         assert state in (GridState.ACTIVE, GridState.REACTIVATING)
@@ -176,12 +176,12 @@ class TestPaperTradeSimulation:
 
     def test_downtrend_pauses_grid(self, bot):
         """In a downtrend (price below EMA200), bot should pause."""
-        high, low, close = generate_market_scenario(100_000, 250, "downtrend")
+        high, low, close = generate_market_scenario(170, 250, "downtrend")
         price = float(close.iloc[-1])
 
         state, grid, equity = simulate_tick(
             bot, high, low, close,
-            usdt_balance=150, btc_balance=0.0005, btc_price=price,
+            usdt_balance=150, base_balance=0.5, base_price=price,
         )
 
         # Price likely below EMA200 → PAUSED
@@ -210,7 +210,7 @@ class TestPaperTradeSimulation:
 
     def test_zero_atr_rejected(self, bot):
         """Zero ATR should be rejected (Fix #10)."""
-        bb_result = bot["bb"].calculate(pd.Series([100_000] * 30))
+        bb_result = bot["bb"].calculate(pd.Series([170] * 30))
         if bb_result is None:
             pytest.skip("BB returned None for constant prices")
 
@@ -221,7 +221,7 @@ class TestPaperTradeSimulation:
         """NaN in candle data should not crash indicators (Fix #11)."""
         # Series with NaN interspersed — RSI drops NaN via diff().dropna()
         # so it still calculates on valid rows. The fix ensures no NaN propagates.
-        closes = pd.Series([100_000] * 20 + [float('nan')] * 5 + [101_000] * 10)
+        closes = pd.Series([170] * 20 + [float('nan')] * 5 + [175] * 10)
         rsi = bot["rsi"].calculate(closes)
         # RSI may return a value (NaN rows dropped) or None — either is fine
         # The key assertion: it should NOT return NaN or crash
@@ -232,10 +232,10 @@ class TestPaperTradeSimulation:
     def test_position_guard_blocks_overexposure(self, bot):
         """Position guard should block orders exceeding exposure limit."""
         # 80% exposure limit, 200 capital
-        # BTC held: 0.0015 BTC @ $100,000 = $150 = 75% exposure
-        # New $30 order → $180 = 90% exposure → BLOCKED
+        # SOL held: 1.0 SOL @ $170 = $170 = 85% exposure
+        # New $30 order → $200 = 100% exposure → BLOCKED
         assert not bot["pg"].can_place_order(
-            current_btc=0.0015, btc_price=100_000,
+            current_base=1.0, base_price=170,
             current_usdt=60, order_usdt=30,
             equity=200,
         )
@@ -244,7 +244,7 @@ class TestPaperTradeSimulation:
         """Position guard should block orders that leave USDT below reserve."""
         # Only $60 USDT, order is $20, would leave $40 < $50 reserve
         assert not bot["pg"].can_place_order(
-            current_btc=0.0005, btc_price=100_000,
+            current_base=0.3, base_price=170,
             current_usdt=60, order_usdt=20,
             equity=200,
         )
@@ -252,12 +252,12 @@ class TestPaperTradeSimulation:
     def test_negative_order_rejected(self, bot):
         """Negative/zero order amounts should be rejected."""
         assert not bot["pg"].can_place_order(
-            current_btc=0.001, btc_price=100_000,
+            current_base=0.5, base_price=170,
             current_usdt=150, order_usdt=-10,
             equity=200,
         )
         assert not bot["pg"].can_place_order(
-            current_btc=0.001, btc_price=100_000,
+            current_base=0.5, base_price=170,
             current_usdt=150, order_usdt=0,
             equity=200,
         )
@@ -269,9 +269,9 @@ class TestPaperTradeSimulation:
 
         # Simulate 3 buys at different prices/times
         buys = [
-            {"order_id": "buy_1", "price": 99_000, "qty": 0.001, "ts_offset": 0},
-            {"order_id": "buy_2", "price": 98_000, "qty": 0.001, "ts_offset": 300},
-            {"order_id": "buy_3", "price": 97_000, "qty": 0.001, "ts_offset": 600},
+            {"order_id": "buy_1", "price": 168, "qty": 0.5, "ts_offset": 0},
+            {"order_id": "buy_2", "price": 166, "qty": 0.5, "ts_offset": 300},
+            {"order_id": "buy_3", "price": 164, "qty": 0.5, "ts_offset": 600},
         ]
 
         # Track open buys by order_id
@@ -285,7 +285,7 @@ class TestPaperTradeSimulation:
             }
 
         # SELL fill arrives with unknown order_id → should match oldest (buy_1)
-        sell_order_id = "sell_unknown_100500"
+        sell_order_id = "sell_unknown_175"
         matching = open_buys.pop(sell_order_id, None)
         if not matching and open_buys:
             # FIFO: pop oldest
@@ -293,17 +293,17 @@ class TestPaperTradeSimulation:
             matching = open_buys.pop(oldest_id)
 
         assert matching is not None
-        # buy_3 has ts_offset=600 → timestamp = now-600 (oldest) → price 97_000
-        assert matching["price"] == 97_000  # Should match buy_3 (oldest)
+        # buy_3 has ts_offset=600 → timestamp = now-600 (oldest) → price 164
+        assert matching["price"] == 164  # Should match buy_3 (oldest)
 
     def test_order_tracker_integration(self, bot):
         """OrderTracker should track placed orders correctly (Fix #2)."""
         tracker = bot["tracker"]
 
         # Place buy orders
-        tracker.add(GridOrder("buy_1", 1, OrderSide.BUY, 99_000, 0.001))
-        tracker.add(GridOrder("buy_2", 2, OrderSide.BUY, 98_000, 0.001))
-        tracker.add(GridOrder("sell_1", 1, OrderSide.SELL, 101_000, 0.001))
+        tracker.add(GridOrder("buy_1", 1, OrderSide.BUY, 168, 0.5))
+        tracker.add(GridOrder("buy_2", 2, OrderSide.BUY, 166, 0.5))
+        tracker.add(GridOrder("sell_1", 1, OrderSide.SELL, 172, 0.5))
 
         assert tracker.total_pending == 3
 
@@ -326,8 +326,8 @@ class TestPaperTradeSimulation:
             try:
                 for _ in range(100):
                     sm.evaluate(
-                        price=101_000, rsi=50, ema_200=100_000,
-                        bb_lower=95_000, bb_upper=105_000,
+                        price=172, rsi=50, ema_200=170,
+                        bb_lower=165, bb_upper=175,
                     )
             except Exception as e:
                 errors.append(e)
@@ -347,10 +347,10 @@ class TestPaperTradeSimulation:
             mock_client = MagicMock()
             mock_client_cls.return_value = mock_client
             mock_client.get_klines.side_effect = Exception("API timeout")
-            
-            feed = CandleFeed(symbol="BTCUSDT", interval="1h")
+
+            feed = CandleFeed(symbol="SOLUSDT", interval="1h")
             df = feed.fetch_candles(limit=200)
-            
+
             assert isinstance(df, pd.DataFrame)
             assert len(df) == 0
 
@@ -367,11 +367,11 @@ class TestPaperTradeSimulation:
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
         # Phase 1: Uptrend → grid should activate
-        high, low, close = generate_market_scenario(100_000, 250, "uptrend")
+        high, low, close = generate_market_scenario(170, 250, "uptrend")
         price = float(close.iloc[-1])
         state, grid, equity = simulate_tick(
             bot, high, low, close,
-            usdt_balance=150, btc_balance=0.0005, btc_price=price,
+            usdt_balance=150, base_balance=0.5, base_price=price,
         )
         assert state in (GridState.ACTIVE, GridState.REACTIVATING)
         assert grid is not None
@@ -384,14 +384,14 @@ class TestPaperTradeSimulation:
             tracker.mark_filled(fill.order_id)
 
             trade = Trade(
-                timestamp=ts, pair="BTC/USDT", side="BUY",
+                timestamp=ts, pair="SOL/USDT", side="BUY",
                 entry_price=fill.price, exit_price=fill.price,
                 quantity=fill.quantity, gross_pnl=0.0,
                 fee=fill.quantity * fill.price * 0.001,
                 net_pnl=-(fill.quantity * fill.price * 0.001),
                 grid_level=fill.level, duration_min=0,
-                rsi=55, bb_upper=105_000, bb_lower=95_000,
-                ema_200=100_000, atr=800, grid_state="ACTIVE",
+                rsi=55, bb_upper=180, bb_lower=160,
+                ema_200=170, atr=5, grid_state="ACTIVE",
             )
             journal.log_trade(trade)
 
@@ -406,13 +406,13 @@ class TestPaperTradeSimulation:
             fee = fill.quantity * fill.price * 0.001
 
             trade = Trade(
-                timestamp=ts, pair="BTC/USDT", side="SELL",
+                timestamp=ts, pair="SOL/USDT", side="SELL",
                 entry_price=buy_price, exit_price=fill.price,
                 quantity=fill.quantity, gross_pnl=round(gross_pnl, 4),
                 fee=round(fee, 4), net_pnl=round(gross_pnl - fee, 4),
                 grid_level=fill.level, duration_min=60,
-                rsi=65, bb_upper=105_000, bb_lower=95_000,
-                ema_200=100_000, atr=800, grid_state="ACTIVE",
+                rsi=65, bb_upper=180, bb_lower=160,
+                ema_200=170, atr=5, grid_state="ACTIVE",
             )
             journal.log_trade(trade)
 
@@ -433,7 +433,7 @@ class TestPaperTradeSimulation:
     def test_real_binance_candle_data(self, bot):
         """Fetch real candle data from Binance and run pipeline (integration test)."""
         try:
-            feed = CandleFeed(symbol="BTCUSDT", interval="1h")
+            feed = CandleFeed(symbol="SOLUSDT", interval="1h")
             df = feed.fetch_candles(limit=250)
         except Exception as e:
             pytest.skip(f"Binance API unavailable: {e}")
