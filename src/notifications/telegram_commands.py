@@ -229,6 +229,9 @@ class TelegramCommandHandler:
             mode = self.strategy.env.upper()
             cb_status = "🛑 HALTED" if self.circuit_breaker.halted else "✅ OK"
             pending = self.strategy.order_tracker.total_pending
+            levels = self.strategy.levels
+            spacing_buy = getattr(self.strategy, '_active_buy_spacing', 0)
+            spacing_sell = getattr(self.strategy, '_active_sell_spacing', 0)
             base_capital = getattr(self.strategy, '_base_capital', self.strategy.capital_usdt)
             compound = self.strategy.grid_manager.capital_usdt
             growth_pct = ((compound - base_capital) / base_capital * 100) if base_capital > 0 else 0
@@ -241,6 +244,9 @@ class TelegramCommandHandler:
                 f"Mode: {mode}\n"
                 f"Circuit Breaker: {cb_status}\n"
                 f"⏱ Uptime: {hours}h {minutes}m {secs}s\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"📐 Grid: {levels} buy + {levels} sell levels\n"
+                f"📏 Spacing: ${spacing_buy:.0f} (buy) / ${spacing_sell:.0f} (sell)\n"
                 f"📋 Pending orders: {pending}\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"💰 Base capital: ${base_capital:,.0f}\n"
