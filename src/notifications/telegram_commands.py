@@ -111,7 +111,7 @@ class TelegramCommandHandler:
         try:
             ping_text = (
                 "📡 <b>Telegram Command Handler Online</b>\n"
-                "Commands: /status /pnl /price /trades /pending /fees /system /clear /help"
+                "Commands: /status /pnl /balance /capital /price /trades /pending /fees /system /clear /help"
             )
             self._tg_post("sendMessage", {
                 "chat_id": self._chat_id,
@@ -126,6 +126,8 @@ class TelegramCommandHandler:
         commands = {
             "status": self._cmd_status,
             "pnl": self._cmd_pnl,
+            "balance": self._cmd_balance,
+            "capital": self._cmd_capital,
             "pause": self._cmd_pause,
             "resume": self._cmd_resume,
             "reset": self._cmd_reset,
@@ -270,6 +272,93 @@ class TelegramCommandHandler:
         except Exception as e:
             logger.error(f"Error in /pnl: {e}")
             update.message.reply_text(f"⚠️ Error getting P&L: {e}")
+
+    def _cmd_balance(self, update, context):
+        try:
+            logger.info("Telegram /balance received")
+            strategy = self.strategy
+            indicators = strategy.get_indicators_snapshot()
+            price = indicators[4] if indicators else 0
+
+            usdt = strategy._get_usdt_balance()
+            btc = strategy._get_btc_balance()
+            btc_value = btc * price if price else 0
+            equity = usdt + btc_value
+
+            mode = strategy.env.upper()
+            base = getattr(strategy, '_base_capital', strategy.capital_usdt)
+            compound = strategy.grid_manager.capital_usdt
+            growth_pct = ((compound - base) / base * 100) if base > 0 else 0
+
+            update.message.reply_text(
+                f"💰 <b>Account Balance</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"💵 USDT: ${usdt:,.2f}\n"
+                f"₿ BTC:  {btc:.8f} (${btc_value:,.2f})\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"📊 Equity: ${equity:,.2f}\n"
+                f"Mode: {mode}\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"📐 Grid capital: ${compound:,.2f} ({growth_pct:+.1f}%)\n"
+                f"📏 Base capital: ${base:,.0f}\n"
+                f"💡 Change: /capital &lt;amount&gt;",
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            logger.error(f"Error in /balance: {e}")
+            update.message.reply_text(f"⚠️ Error getting balance: {e}")
+
+    def _cmd_capital(self, update, context):
+        try:
+            text = update.message.text.strip()
+            parts = text.split()
+
+            if len(parts) < 2:
+                base = getattr(self.strategy, '_base_capital', self.strategy.capital_usdt)
+                update.message.reply_text(
+                    f"📐 Current base capital: ${base:,.0f}\n"
+                    f"Usage: /capital &lt;amount&gt;\n"
+                    f"Example: /capital 2000",
+                    parse_mode="HTML"
+                )
+                return
+
+            try:
+                new_capital = float(parts[1].replace(",", ""))
+            except ValueError:
+                update.message.reply_text("⚠️ Invalid amount. Example: /capital 2000")
+                return
+
+            if new_capital < 100:
+                update.message.reply_text("⚠️ Minimum capital is $100.")
+                return
+
+            old_capital = getattr(self.strategy, '_base_capital', self.strategy.capital_usdt)
+            self.strategy._base_capital = new_capital
+            self.strategy.capital_usdt = new_capital
+            self.strategy.grid_manager.capital_usdt = new_capital
+            self.strategy.position_guard.total_capital = new_capital
+            self.strategy._grid_dirty = True
+
+            self.event_log.log("capital_updated",
+                old_capital=old_capital,
+                new_capital=new_capital,
+                source="telegram",
+            )
+            logger.info(f"Telegram /capital: ${old_capital:,.0f} → ${new_capital:,.0f}")
+
+            update.message.reply_text(
+                f"✅ <b>Capital Updated</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"Before: ${old_capital:,.0f}\n"
+                f"Now:    ${new_capital:,.0f}\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"Grid will recalculate on next refresh.",
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            logger.error(f"Error in /capital: {e}")
+            update.message.reply_text(f"⚠️ Error updating capital: {e}")
 
     def _cmd_pause(self, update, context):
         try:
@@ -583,6 +672,8 @@ class TelegramCommandHandler:
             "━━━━━━━━━━━━━━━━━━━━━━\n"
             "/status — Grid state, mode, uptime, pending orders\n"
             "/pnl — Today / week / month / all-time P&L\n"
+            "/balance — USDT, BTC, equity, and grid capital\n"
+            "/capital <amount> — Update grid capital (no redeploy)\n"
             "/price — Current BTC/USDT price with indicators\n"
             "/pause — Manually pause grid (cancel all orders)\n"
             "/resume — Resume grid trading\n"
