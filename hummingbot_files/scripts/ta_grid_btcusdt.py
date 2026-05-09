@@ -265,6 +265,7 @@ class TAGridBTCUSDT(StrategyV2Base):
             spacing_multiplier=self.atr_multiplier,
         )
         self._base_capital = self.capital_usdt  # floor for auto-compound
+        self._initial_equity = None  # captured on first grid placement
         self.state_machine = GridStateMachine()
         self._grid_order_tracker = OrderTracker()
         self.circuit_breaker = CircuitBreaker(self.max_drawdown_pct, self.daily_loss_limit_pct)
@@ -584,9 +585,14 @@ class TAGridBTCUSDT(StrategyV2Base):
             elapsed = now_ts - self._last_grid_place_time
             if elapsed < self._min_grid_refresh_sec:
                 return  # Too soon — let existing orders work
-            # Auto-compound: use live equity (floor = base capital)
+            # Auto-compound: scale base capital by equity growth ratio
+            # This works in both paper ($180K starting) and live ($1K starting)
             live_equity = self._estimate_equity(current_price)
-            compound_capital = max(live_equity, self._base_capital)
+            if self._initial_equity is None:
+                self._initial_equity = live_equity
+            growth_ratio = live_equity / self._initial_equity if self._initial_equity > 0 else 1.0
+            compound_capital = self._base_capital * growth_ratio
+            compound_capital = max(compound_capital, self._base_capital)
             self.grid_manager.capital_usdt = compound_capital
             grid = self.grid_manager.calculate_grid(bb_result, atr_value)
             self._active_buy_spacing = grid.buy_spacing
@@ -597,7 +603,7 @@ class TAGridBTCUSDT(StrategyV2Base):
             # Log exact grid info for transparency
             logger.info(
                 f"Grid updated: buy_spacing=${grid.buy_spacing:.2f}, sell_spacing=${grid.sell_spacing:.2f} "
-                f"| compound_capital=${compound_capital:.2f} (base=${self._base_capital})"
+                f"| compound=${compound_capital:.2f} (base=${self._base_capital} growth={growth_ratio:.4f})"
             )
 
             deployed = sum(l["price"] * l["quantity"] for l in grid.buy_levels)
