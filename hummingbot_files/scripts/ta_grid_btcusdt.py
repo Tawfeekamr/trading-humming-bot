@@ -289,7 +289,8 @@ class TAGridSOLUSDT(StrategyV2Base):
 
         # Internal state
         self._peak_equity = self.capital_usdt
-        self._open_buys: dict[str, FillRecord] = {}  # Changed from dict[int, FillRecord] to dict[str, FillRecord] for order_id keying
+        self._open_buys: dict[str, FillRecord] = {}
+        self._unmatched_sells: dict[str, FillRecord] = {}  # sells waiting for a buy to match
         self._last_candle_time = None
         self._cached_indicators = None
         self._grid_dirty = True
@@ -388,13 +389,30 @@ class TAGridSOLUSDT(StrategyV2Base):
                         "grid_state": fill.grid_state,
                         "fee": fill.fee,
                     } for order_id, fill in self._open_buys.items()
+                },
+                "unmatched_sells": {
+                    order_id: {
+                        "order_id": fill.order_id,
+                        "side": fill.side,
+                        "price": fill.price,
+                        "quantity": fill.quantity,
+                        "grid_level": fill.grid_level,
+                        "timestamp": fill.timestamp,
+                        "rsi": fill.rsi,
+                        "bb_upper": fill.bb_upper,
+                        "bb_lower": fill.bb_lower,
+                        "ema_200": fill.ema_200,
+                        "atr": fill.atr,
+                        "grid_state": fill.grid_state,
+                        "fee": fill.fee,
+                    } for order_id, fill in self._unmatched_sells.items()
                 }
             }
             tmp = self._state_file.with_suffix('.tmp')
             with open(tmp, "w") as f:
                 json.dump(data, f, indent=2)
             os.replace(tmp, self._state_file)
-            logger.debug(f"State saved: {len(self._open_buys)} open positions")
+            logger.debug(f"State saved: {len(self._open_buys)} open buys, {len(self._unmatched_sells)} unmatched sells")
         except Exception as e:
             logger.error(f"Failed to save state: {e}")
 
@@ -422,9 +440,56 @@ class TAGridSOLUSDT(StrategyV2Base):
                             grid_state=d["grid_state"],
                             fee=d.get("fee", 0.0),
                         )
-                logger.info(f"Restored {len(self._open_buys)} open positions from {self._state_file}")
+                    raw_unmatched = data.get("unmatched_sells", {})
+                    for order_id, d in raw_unmatched.items():
+                        self._unmatched_sells[order_id] = FillRecord(
+                            order_id=d["order_id"],
+                            side=d["side"],
+                            price=d["price"],
+                            quantity=d["quantity"],
+                            grid_level=d["grid_level"],
+                            timestamp=d["timestamp"],
+                            rsi=d["rsi"],
+                            bb_upper=d["bb_upper"],
+                            bb_lower=d["bb_lower"],
+                            ema_200=d["ema_200"],
+                            atr=d["atr"],
+                            grid_state=d["grid_state"],
+                            fee=d.get("fee", 0.0),
+                        )
+                logger.info(f"Restored {len(self._open_buys)} open buys, {len(self._unmatched_sells)} unmatched sells from {self._state_file}")
         except Exception as e:
             logger.error(f"Failed to load state: {e}")
+
+    def _cleanup_orphans(self):
+        """Evict orphaned entries older than 7 days."""
+        now = time_mod.time()
+        ttl = 86400 * 7
+        changed = False
+
+        for oid in [k for k, f in self._unmatched_sells.items() if (now - f.timestamp) > ttl]:
+            fill = self._unmatched_sells.pop(oid)
+            logger.warning(f"Orphaned unmatched sell evicted: {fill.order_id} price=${fill.price:,.2f} qty={fill.quantity} age={int((now - fill.timestamp) / 3600)}h")
+            self.event_log.log("orphan_evicted", side="SELL", order_id=fill.order_id, price=fill.price, quantity=fill.quantity, age_hours=int((now - fill.timestamp) / 3600))
+            trade = Trade(
+                timestamp=pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d %H:%M:%S"),
+                pair=self.display_pair, side="SELL", entry_price=fill.price, exit_price=fill.price,
+                quantity=fill.quantity, gross_pnl=0.0, fee=fill.fee, net_pnl=-fill.fee,
+                grid_level=fill.grid_level, duration_min=int((now - fill.timestamp) / 60),
+                rsi=fill.rsi, bb_upper=fill.bb_upper, bb_lower=fill.bb_lower,
+                ema_200=fill.ema_200, atr=fill.atr, grid_state=fill.grid_state,
+            )
+            self.journal.log_trade(trade)
+            changed = True
+
+        for oid in [k for k, f in self._open_buys.items() if (now - f.timestamp) > ttl]:
+            fill = self._open_buys.pop(oid)
+            logger.warning(f"Orphaned open buy evicted: {fill.order_id} price=${fill.price:,.2f} qty={fill.quantity} age={int((now - fill.timestamp) / 3600)}h")
+            self.event_log.log("orphan_evicted", side="BUY", order_id=fill.order_id, price=fill.price, quantity=fill.quantity, age_hours=int((now - fill.timestamp) / 3600))
+            changed = True
+
+        if changed:
+            self._save_state()
 
     # ── Main Tick Loop ───────────────────────────────────────────────
     # NOTE: Do NOT override tick() — Cython dispatch (StrategyPyBase.c_tick)
@@ -437,6 +502,8 @@ class TAGridSOLUSDT(StrategyV2Base):
             if self._tick_count <= 5 or self._tick_count % 300 == 0:
                 connectors_ready = {name: c.ready for name, c in self.connectors.items()}
                 logger.info(f"on_tick #{self._tick_count}: connectors_ready={connectors_ready}")
+                if self._tick_count % 300 == 0:
+                    self._cleanup_orphans()
             self._on_tick_inner()
         except Exception as e:
             import traceback
@@ -984,7 +1051,7 @@ class TAGridSOLUSDT(StrategyV2Base):
         )
 
         if side == "BUY":
-            self._open_buys[order_id] = FillRecord(
+            buy_fill = FillRecord(
                 order_id=order_id,
                 side=side,
                 price=price,
@@ -999,48 +1066,141 @@ class TAGridSOLUSDT(StrategyV2Base):
                 grid_state=grid_state_val,
                 fee=fee_est,
             )
-            self._save_state()
-            trade = Trade(
-                timestamp=pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d %H:%M:%S"),
-                pair=self.display_pair,
-                side="BUY",
-                entry_price=price,
-                exit_price=price,
-                quantity=quantity,
-                gross_pnl=0.0,
-                fee=fee_est,
-                net_pnl=-fee_est,
-                grid_level=grid_level,
-                duration_min=0,
-                rsi=rsi_val,
-                bb_upper=bb_upper,
-                bb_lower=bb_lower,
-                ema_200=ema_val,
-                atr=atr_val,
-                grid_state=grid_state_val,
-            )
-            self.journal.log_trade(trade)
-            logger.info(f"BUY filled: {quantity} {self.base_asset} @ ${price:,.2f} | Level {grid_level}")
-            self._grid_dirty = True  # Refresh grid after fill
 
-            # Telegram notification for BUY fills
-            buy_msg = (
-                f"📈 <b>BUY Filled — {self.display_pair}</b>\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"💵 Price: ${price:,.2f}\n"
-                f"📦 Qty: {quantity} {self.base_asset}\n"
-                f"📊 Level {grid_level}  |  RSI: {rsi_val:.1f}\n"
-                f"📏 Spacing: ${self._active_buy_spacing:,.0f}\n"
-                f"💸 Fee: -${fee_est:.2f}\n"
-                f"🏦 Equity: ${equity:,.2f}  |  Exposure: {exposure_pct:.0f}%\n"
-                f"🌐 Mode: {self.env.upper()}"
-            )
-            try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    loop.create_task(self.telegram.send(buy_msg))
-            except RuntimeError:
-                pass
+            # Check for a waiting unmatched sell to pair with
+            matching_sell = self._unmatched_sells.pop(order_id, None)
+            if not matching_sell and self._unmatched_sells:
+                oldest_sell_id = min(self._unmatched_sells, key=lambda k: self._unmatched_sells[k].timestamp)
+                matching_sell = self._unmatched_sells.pop(oldest_sell_id)
+
+            if matching_sell:
+                # Reverse match: sell filled before buy — compute round-trip PnL
+                entry_price = matching_sell.price
+                exit_price = price
+                gross_pnl = (entry_price - exit_price) * quantity
+                duration_min = int((time_mod.time() - matching_sell.timestamp) / 60)
+                total_fee = matching_sell.fee + fee_est
+                net_pnl = gross_pnl - total_fee
+
+                self.event_log.log("round_trip_closed",
+                    entry_price=round(entry_price, 2),
+                    exit_price=round(exit_price, 2),
+                    quantity=quantity,
+                    gross_pnl=round(gross_pnl, 4),
+                    fee=round(total_fee, 4),
+                    net_pnl=round(net_pnl, 4),
+                    duration_min=duration_min,
+                    grid_level=grid_level,
+                    entry_rsi=round(matching_sell.rsi, 2),
+                    exit_rsi=round(rsi_val, 2),
+                    entry_bb_lower=round(matching_sell.bb_lower, 2),
+                    entry_bb_upper=round(matching_sell.bb_upper, 2),
+                    exit_bb_lower=round(bb_lower, 2),
+                    exit_bb_upper=round(bb_upper, 2),
+                    entry_ema=round(matching_sell.ema_200, 2),
+                    exit_ema=round(ema_val, 2),
+                    entry_atr=round(matching_sell.atr, 2),
+                    exit_atr=round(atr_val, 2),
+                    equity=round(equity, 2),
+                    exposure_pct=round(exposure_pct, 1),
+                    match_direction="sell_first",
+                )
+
+                trade = Trade(
+                    timestamp=pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d %H:%M:%S"),
+                    pair=self.display_pair,
+                    side="SELL",
+                    entry_price=entry_price,
+                    exit_price=exit_price,
+                    quantity=quantity,
+                    gross_pnl=round(gross_pnl, 4),
+                    fee=round(total_fee, 4),
+                    net_pnl=round(net_pnl, 4),
+                    grid_level=grid_level,
+                    duration_min=duration_min,
+                    rsi=rsi_val,
+                    bb_upper=bb_upper,
+                    bb_lower=bb_lower,
+                    ema_200=ema_val,
+                    atr=atr_val,
+                    grid_state=grid_state_val,
+                )
+                self.journal.log_trade(trade)
+
+                pending = self._grid_order_tracker.total_pending
+                pnl_sign = "+" if net_pnl >= 0 else ""
+                telegram_msg = (
+                    f"{'💚' if net_pnl >= 0 else '🔴'} <b>Trade Closed (SELL-first) — {self.display_pair}</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"📈 BUY closed SELL position  |  Grid Level {grid_level}\n"
+                    f"⏱ Duration:    {duration_min} min\n"
+                    f"🔵 Entry (SELL): ${entry_price:,.2f}\n"
+                    f"🔵 Exit (BUY):  ${exit_price:,.2f}\n"
+                    f"📦 Qty:         {quantity} {self.base_asset}\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"💰 Gross PnL:   {pnl_sign}${gross_pnl:.2f}\n"
+                    f"💸 Fee:         -${total_fee:.2f}\n"
+                    f"<b>📊 Net PnL:    {pnl_sign}${net_pnl:.2f}</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"🏦 Equity: ${equity:,.2f}  |  Exposure: {exposure_pct:.0f}%\n"
+                    f"Grid: {grid_state_val}  |  Pending: {pending} orders\n"
+                    f"🌐 Mode: {self.env.upper()}"
+                )
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        loop.create_task(self.telegram.send(telegram_msg))
+                except RuntimeError:
+                    pass
+
+                logger.info(f"REVERSE MATCH: SELL@${entry_price:,.2f} -> BUY@${exit_price:,.2f} | PnL=${net_pnl:.2f} | Level {grid_level}")
+            else:
+                # Normal path: no unmatched sell waiting — buffer this buy
+                self._open_buys[order_id] = buy_fill
+
+                trade = Trade(
+                    timestamp=pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d %H:%M:%S"),
+                    pair=self.display_pair,
+                    side="BUY",
+                    entry_price=price,
+                    exit_price=price,
+                    quantity=quantity,
+                    gross_pnl=0.0,
+                    fee=fee_est,
+                    net_pnl=-fee_est,
+                    grid_level=grid_level,
+                    duration_min=0,
+                    rsi=rsi_val,
+                    bb_upper=bb_upper,
+                    bb_lower=bb_lower,
+                    ema_200=ema_val,
+                    atr=atr_val,
+                    grid_state=grid_state_val,
+                )
+                self.journal.log_trade(trade)
+
+                buy_msg = (
+                    f"📈 <b>BUY Filled — {self.display_pair}</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"💵 Price: ${price:,.2f}\n"
+                    f"📦 Qty: {quantity} {self.base_asset}\n"
+                    f"📊 Level {grid_level}  |  RSI: {rsi_val:.1f}\n"
+                    f"📏 Spacing: ${self._active_buy_spacing:,.0f}\n"
+                    f"💸 Fee: -${fee_est:.2f}\n"
+                    f"🏦 Equity: ${equity:,.2f}  |  Exposure: {exposure_pct:.0f}%\n"
+                    f"🌐 Mode: {self.env.upper()}"
+                )
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        loop.create_task(self.telegram.send(buy_msg))
+                except RuntimeError:
+                    pass
+
+                logger.info(f"BUY filled: {quantity} {self.base_asset} @ ${price:,.2f} | Level {grid_level}")
+
+            self._save_state()
+            self._grid_dirty = True
 
         elif side == "SELL":
             fee = fee_est
@@ -1135,8 +1295,25 @@ class TAGridSOLUSDT(StrategyV2Base):
                     f"🌐 Mode: {self.env.upper()}"
                 )
             else:
-                # Unmatched sell (no prior buy filled) — log as standalone fill
-                self.event_log.log("trade_filled",
+                # No open buy to match — buffer as unmatched sell
+                self._unmatched_sells[order_id] = FillRecord(
+                    order_id=order_id,
+                    side="SELL",
+                    price=price,
+                    quantity=quantity,
+                    grid_level=grid_level,
+                    timestamp=time_mod.time(),
+                    rsi=rsi_val,
+                    bb_upper=bb_upper,
+                    bb_lower=bb_lower,
+                    ema_200=ema_val,
+                    atr=atr_val,
+                    grid_state=grid_state_val,
+                    fee=fee,
+                )
+                self._save_state()
+
+                self.event_log.log("sell_buffered",
                     side="SELL", price=price, quantity=quantity,
                     grid_level=grid_level, fee_estimate=round(fee, 4),
                     rsi=rsi_val, bb_upper=bb_upper, bb_lower=bb_lower,
@@ -1144,22 +1321,19 @@ class TAGridSOLUSDT(StrategyV2Base):
                     usdt_balance=round(usdt_bal, 2),
                     base_balance=round(base_bal, 4),
                     equity=round(equity, 2),
-                    note="unmatched_sell_no_open_buy",
+                    unmatched_sell_count=len(self._unmatched_sells),
                 )
 
                 telegram_msg = (
-                    f"⚠️ <b>SELL Filled (unmatched) — {self.display_pair}</b>\n"
+                    f"🟡 <b>SELL Filled (buffered, awaiting BUY match) — {self.display_pair}</b>\n"
                     f"━━━━━━━━━━━━━━━━━━━━━━\n"
                     f"📉 SELL  |  Grid Level {grid_level}\n"
                     f"💵 Price: ${price:,.2f}\n"
                     f"📦 Qty: {quantity} {self.base_asset}\n"
                     f"💸 Fee: -${fee:.2f}\n"
+                    f"🔄 Buffered sells awaiting match: {len(self._unmatched_sells)}\n"
                     f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"📉 RSI: {rsi_val:.1f}  |  ATR: ${atr_val:,.0f}\n"
-                    f"📐 BB: ${bb_lower:,.0f} – ${bb_upper:,.0f}\n"
-                    f"📏 Spacing: ${self._active_sell_spacing:,.0f}\n"
                     f"🏦 Equity: ${equity:,.2f}  |  Exposure: {exposure_pct:.0f}%\n"
-                    f"Grid: {grid_state_val}  |  Pending: {self._grid_order_tracker.total_pending} orders\n"
                     f"🌐 Mode: {self.env.upper()}"
                 )
             try:
