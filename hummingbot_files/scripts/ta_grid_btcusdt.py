@@ -444,7 +444,7 @@ class TAGridBTCUSDT(StrategyV2Base):
 
         now = pd.Timestamp.now(tz="UTC")
 
-        # Start-of-day equity reset
+        # Start-of-day equity reset + daily report
         today_str = now.strftime("%Y-%m-%d")
         if self._last_sod_reset != today_str:
             equity = self._estimate_equity(
@@ -454,6 +454,7 @@ class TAGridBTCUSDT(StrategyV2Base):
             self._last_sod_reset = today_str
             self.event_log.log("daily_reset", equity=round(equity, 2))
             logger.info(f"Start-of-day equity reset: ${equity:.2f}")
+            self._send_daily_report(equity)
 
         # Overtrading check (once per day)
         if self._overtrading_alerted_today != today_str:
@@ -790,6 +791,47 @@ class TAGridBTCUSDT(StrategyV2Base):
 
     def _estimate_equity(self, btc_price: float) -> float:
         return self._get_usdt_balance() + (self._get_btc_balance() * btc_price)
+
+    def _send_daily_report(self, equity: float):
+        """Send daily P&L summary to Telegram at midnight UTC."""
+        try:
+            s = self.journal.summary_today()
+            sw = self.journal.summary_this_week()
+            sm = self.journal.summary_this_month()
+
+            def fmt(val):
+                sign = "+" if (val or 0) >= 0 else ""
+                return f"{sign}${val:.2f}" if val else "$0.00"
+
+            base = getattr(self, '_base_capital', self.capital_usdt)
+            growth_pct = ((equity - base) / base * 100) if base > 0 else 0
+
+            msg = (
+                f"📅 <b>Daily Report — {pd.Timestamp.now(tz='UTC').strftime('%b %d, %Y')}</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"📊 Trades: {s['total_trades']}  "
+                f"(✅{s['winning']} / ❌{s['losing']})  "
+                f"Win: {s['win_rate']}%\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"💰 Gross: {fmt(s['gross_pnl'])}\n"
+                f"💸 Fees:  -${abs(s['total_fees']):.2f}\n"
+                f"📈 <b>Net Today: {fmt(s['net_pnl'])}</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"📆 Week:  {fmt(sw['net_pnl'])}\n"
+                f"🗓 Month: {fmt(sm['net_pnl'])}\n"
+                f"🏦 Equity: ${equity:,.2f} ({growth_pct:+.1f}% vs base)\n"
+                f"🌐 Mode: {self.env.upper()}"
+            )
+
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    loop.create_task(self.telegram.send(msg))
+            except RuntimeError:
+                pass
+            logger.info(f"Daily report sent: pnl={fmt(s['net_pnl'])} trades={s['total_trades']}")
+        except Exception as e:
+            logger.error(f"Failed to send daily report: {e}")
 
     # ── Notifications ────────────────────────────────────────────────
 
