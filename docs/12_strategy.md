@@ -231,29 +231,61 @@ Environment variables override config values:
 
 ---
 
+## Auto-Compound & Capital Management
+
+### Auto-Compound
+
+The bot automatically reinvests profits by scaling order sizes based on equity growth:
+
+```
+compound_capital = base_capital × (current_equity / initial_equity)
+```
+
+- **At startup:** base capital captured, initial equity snapshot taken
+- **On each grid refresh:** growth ratio calculated, compound capital updated
+- **Floor protected:** never goes below your original base capital
+- **Paper trading safe:** growth ratio normalizes regardless of starting balance ($180K paper vs $1K live)
+
+### Updating Capital
+
+No redeploy needed. Change grid capital directly from Telegram:
+
+```
+/capital 5000       → sets grid to $5,000
+/capital 25000      → sets grid to $25,000
+```
+
+Order sizes recalculate on the next grid refresh (within 1 hour).
+
+---
+
 ## Monitoring
 
 ### Telegram Alerts (automatic)
 - Bot startup/shutdown with mode and capital
 - Grid state changes with indicator values and trigger reason
 - Trade fills with full P&L breakdown
+- Daily P&L report auto-sent at midnight UTC (trades, win rate, P&L, fees, equity)
 - Crash and error alerts with traceback
 
 ### Telegram Commands
 | Command | Description |
 |---------|-------------|
-| `/status` | Grid state, mode, uptime, pending orders |
+| `/status` | Grid state, mode, uptime, levels, spacing, capital |
 | `/pnl` | P&L summary — today, week, month, all-time with win rates |
-| `/price` | Current BTC/USDT price with RSI, EMA, Bollinger Bands |
+| `/balance` | USDT, BTC, equity, and grid capital with growth % |
+| `/capital <amount>` | Update grid capital on the fly (no redeploy needed) |
+| `/price` | Live BTC/USDT price from Binance + RSI, EMA, Bollinger Bands |
 | `/trades` | Last 5 closed trades |
 | `/pending` | Open orders with prices and amounts |
-| `/system` | CPU, memory, disk usage |
 | `/fees` | Total fees paid today / this week / this month |
+| `/system` | CPU, memory, disk usage |
 | `/errors` | Recent errors from crash log |
 | `/logs` | Last 30 lines from today's bot log |
 | `/pause` | Manually pause grid trading |
 | `/resume` | Resume grid from manual pause |
 | `/reset` | Reset circuit breaker after halt |
+| `/clear` | Clear logs and grid state (preserves trade history) |
 | `/help` | Command reference |
 
 ### Dashboard

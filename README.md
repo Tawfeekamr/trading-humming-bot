@@ -213,6 +213,42 @@ risk:
 
 ---
 
+## 📈 Auto-Compound & Capital Management
+
+### Auto-Compound
+
+The bot automatically reinvests profits by scaling order sizes based on equity growth:
+
+```
+compound_capital = base_capital × (current_equity / initial_equity)
+```
+
+- **At startup:** base capital = $1,000, initial equity captured
+- **As profits grow:** compound capital increases, order sizes get bigger
+- **Floor protected:** never goes below your original base capital
+- **Works in paper and live** — growth ratio normalizes regardless of starting balance
+
+### Updating Capital
+
+No redeploy needed. Change grid capital directly from Telegram:
+
+```
+/capital 5000       → sets grid to $5,000
+/capital 25000       → sets grid to $25,000
+```
+
+Order sizes recalculate on the next grid refresh (within 1 hour).
+
+### Expected Returns
+
+| Capital | Order size | Daily (normal) | Monthly | Yearly (compounded) |
+|---------|-----------|----------------|---------|---------------------|
+| $1K | $75 | $2-3 | $60-90 | ~$1,100 |
+| $10K | $750 | $20-30 | $600-900 | ~$11,000 |
+| $25K | $1,875 | $50-75 | $1,500-2,250 | ~$27,000 |
+
+---
+
 ## 🚀 Installation & Setup
 
 ### 1. Install Hummingbot
@@ -319,15 +355,17 @@ Lower BB ──── 🟢 BUY  order 6   ($94,000)
 | Buy order filled | 💚 | Price, qty, grid level |
 | Sell order filled | 🔴 | Price, qty, PnL for that level |
 | Circuit breaker | 🚨 | Drawdown %, bot halted |
-| Daily summary | 📊 | Total trades, PnL, fees, grid efficiency |
+| Daily P&L report | 📅 | Auto-sent at midnight UTC — trades, win rate, P&L, fees, equity |
 
 ### Commands (interactive)
 
 | Command | Description |
 |---------|-------------|
-| `/status` | Grid state, mode, uptime, pending orders |
+| `/status` | Grid state, mode, uptime, levels, spacing, capital |
 | `/pnl` | P&L summary — today, week, month, all-time with win rates |
-| `/price` | Current BTC/USDT price with RSI, EMA, Bollinger Bands |
+| `/balance` | USDT, BTC, equity, and grid capital with growth % |
+| `/capital <amount>` | Update grid capital on the fly (no redeploy needed) |
+| `/price` | Live BTC/USDT price from Binance + RSI, EMA, Bollinger Bands |
 | `/trades` | Last 5 closed trades |
 | `/pending` | Open orders with prices and amounts |
 | `/system` | CPU, memory, disk usage |
@@ -337,6 +375,7 @@ Lower BB ──── 🟢 BUY  order 6   ($94,000)
 | `/pause` | Manually pause grid trading |
 | `/resume` | Resume grid from manual pause |
 | `/reset` | Reset circuit breaker after halt |
+| `/clear` | Clear logs and grid state (preserves trade history) |
 | `/help` | Command reference |
 
 ---
@@ -349,7 +388,7 @@ Both systems run simultaneously. They serve different purposes and complement ea
 
 ### 1. 📱 Telegram Alerts (Real-Time)
 
-Every trade fires an instant alert to your phone. Hourly, daily, and monthly summaries are scheduled automatically.
+Every trade fires an instant alert to your phone. A daily P&L summary is auto-sent at midnight UTC.
 
 **Per-trade alert (every close):**
 ```
@@ -387,9 +426,7 @@ RSI: 42.3  |  Grid: ACTIVE
 | Report | When |
 |--------|------|
 | Per-trade alert | Instantly after every close |
-| Hourly summary | Top of every hour (if trades exist) |
-| Daily summary | 00:00 UTC every day |
-| Monthly summary | 1st of every month |
+| Daily summary | Auto-sent at midnight UTC (trades, P&L, fees, equity growth) |
 
 ---
 
