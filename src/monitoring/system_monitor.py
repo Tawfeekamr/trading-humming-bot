@@ -57,7 +57,7 @@ class SystemStats:
             f"💾 Disk: {disk_bar} {self.disk_percent:.0f}%{disk_flag}\n"
             f"        {self.disk_used_gb:.1f} / {self.disk_total_gb:.1f} GB\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"💰 Est. cost: ~$30/mo (t3.medium Tokyo)\n"
+            f"💰 Est. cost: ~$15/mo (t3.small Tokyo)\n"
             f"⚠️ Alert threshold: {ALERT_THRESHOLD:.0f}%"
         )
 

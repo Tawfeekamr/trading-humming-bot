@@ -287,28 +287,27 @@ class TelegramCommandHandler:
             price = indicators[4] if indicators else 0
 
             usdt = strategy._get_usdt_balance()
-            base = strategy._get_base_balance()
-            base_value = base * price if price else 0
+            base_bal = strategy._get_base_balance()
+            base_value = base_bal * price if price else 0
             equity = usdt + base_value
             base_asset = getattr(strategy, 'base_asset', 'SOL')
-            display_pair = getattr(strategy, 'display_pair', 'SOL/USDT')
 
             mode = strategy.env.upper()
-            base = getattr(strategy, '_base_capital', strategy.capital_usdt)
+            base_cap = getattr(strategy, '_base_capital', strategy.capital_usdt)
             compound = strategy.grid_manager.capital_usdt
-            growth_pct = ((compound - base) / base * 100) if base > 0 else 0
+            growth_pct = ((compound - base_cap) / base_cap * 100) if base_cap > 0 else 0
 
             update.message.reply_text(
                 f"💰 <b>Account Balance</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"💵 USDT: ${usdt:,.2f}\n"
-                f"◎ {base_asset}:  {base:.4f} (${base_value:,.2f})\n"
+                f"◎ {base_asset}:  {base_bal:.4f} (${base_value:,.2f})\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"📊 Equity: ${equity:,.2f}\n"
                 f"Mode: {mode}\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"📐 Grid capital: ${compound:,.2f} ({growth_pct:+.1f}%)\n"
-                f"📏 Base capital: ${base:,.0f}\n"
+                f"📏 Base capital: ${base_cap:,.0f}\n"
                 f"💡 Change: /capital &lt;amount&gt;",
                 parse_mode="HTML"
             )
@@ -424,7 +423,7 @@ class TelegramCommandHandler:
                 ts = t.get("timestamp", "")
                 price = t.get("exit_price", 0)
                 side = t.get("side", "?")
-                lines.append(f"{emoji} {side} @ ${price:,.0f}  {sign}${pnl:.2f}  {ts[:16]}")
+                lines.append(f"{emoji} {side} @ ${price:,.2f}  {sign}${pnl:.2f}  {ts[:16]}")
 
             update.message.reply_text("\n".join(lines), parse_mode="HTML")
         except Exception as e:
@@ -451,14 +450,14 @@ class TelegramCommandHandler:
                 lines.append(f"📈 <b>BUY ({len(buys)})</b>")
                 for o in buys:
                     val = o.price * o.quantity
-                    lines.append(f"  L{o.level}: ${o.price:,.2f} × {o.quantity:.8f} (${val:.2f})")
+                    lines.append(f"  L{o.level}: ${o.price:,.2f} × {o.quantity:.4f} (${val:.2f})")
 
             if sells:
                 sells.sort(key=lambda o: o.price)
                 lines.append(f"📉 <b>SELL ({len(sells)})</b>")
                 for o in sells:
                     val = o.price * o.quantity
-                    lines.append(f"  L{o.level}: ${o.price:,.2f} × {o.quantity:.8f} (${val:.2f})")
+                    lines.append(f"  L{o.level}: ${o.price:,.2f} × {o.quantity:.4f} (${val:.2f})")
 
             lines.append("━━━━━━━━━━━━━━━━━━━━━━")
             total_buy = sum(o.price * o.quantity for o in buys)
@@ -599,12 +598,12 @@ class TelegramCommandHandler:
                 f"💲 <b>${live_price:,.2f}</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"📊 RSI (14): {rsi:.1f}  [{rsi_zone}]\n"
-                f"{ema_emoji} EMA 200: ${ema:,.0f}  ({pct_from_ema:+.1f}%)\n"
-                f"📏 ATR (14): ${atr:,.0f}\n"
+                f"{ema_emoji} EMA 200: ${ema:,.2f}  ({pct_from_ema:+.1f}%)\n"
+                f"📏 ATR (14): ${atr:,.2f}\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"📈 BB Upper: ${bb_upper:,.0f}\n"
-                f"📊 BB Mid:   ${bb_mid:,.0f}\n"
-                f"📉 BB Lower: ${bb_lower:,.0f}",
+                f"📈 BB Upper: ${bb_upper:,.2f}\n"
+                f"📊 BB Mid:   ${bb_mid:,.2f}\n"
+                f"📉 BB Lower: ${bb_lower:,.2f}",
                 parse_mode="HTML"
             )
         except Exception as e:
