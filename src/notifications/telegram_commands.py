@@ -111,7 +111,8 @@ class TelegramCommandHandler:
         try:
             ping_text = (
                 "📡 <b>Telegram Command Handler Online</b>\n"
-                "Commands: /status /pnl /balance /capital /price /trades /pending /fees /system /clear /help"
+                "Commands: /status /pnl /balance /capital /price /trades /pending /fees /system /clear /help\n"
+                "Trend: /trend_status /trend_capital /trend_pnl /trend_close /trend_history"
             )
             self._tg_post("sendMessage", {
                 "chat_id": self._chat_id,
@@ -141,6 +142,11 @@ class TelegramCommandHandler:
             "server": self._cmd_server,
             "clear": self._cmd_clear,
             "help": self._cmd_help,
+            "trend_status": self._cmd_trend_status,
+            "trend_capital": self._cmd_trend_capital,
+            "trend_pnl": self._cmd_trend_pnl,
+            "trend_close": self._cmd_trend_close,
+            "trend_history": self._cmd_trend_history,
         }
 
         logger.info("Telegram command handler online — raw polling active")
@@ -675,6 +681,154 @@ class TelegramCommandHandler:
             logger.error(f"Error in /clear: {e}")
             update.message.reply_text(f"⚠️ Error clearing logs: {e}")
 
+    # ── Trend Commands ────────────────────────────────────────────
+
+    def _cmd_trend_status(self, update, context):
+        try:
+            logger.info("Telegram /trend_status received")
+            strategy = self.strategy
+            if not hasattr(strategy, '_trend_manager') or strategy._trend_manager is None:
+                update.message.reply_text("Trend engine not active")
+                return
+
+            tm = strategy._trend_manager
+            pm = strategy._position_manager
+            lines = ["TREND ENGINE", chr(9473) * 33]
+            positions = pm.get_all_positions()
+            lines.append(f"Open positions: {len(positions)}/{pm._max_positions}")
+
+            for pos in positions:
+                current = getattr(strategy, '_last_price', pos.entry_price)
+                pnl_pct = (current - pos.entry_price) / pos.entry_price * 100 if current and pos.entry_price else 0
+                lines.append(f"  {pos.amount:.2f} SOL @ ${pos.entry_price:.2f} | SL ${pos.stop_loss:.2f} TP ${pos.take_profit:.2f}")
+                lines.append(f"  P&L: {pnl_pct:+.1f}% | Trail: ${pos.trailing_stop:.2f}")
+
+            lines.append(f"Capital: ${pm._capital:.2f}")
+
+            if hasattr(strategy, '_last_trend_score') and strategy._last_trend_score:
+                score = strategy._last_trend_score
+                lines.append(f"Signal score: {score.total}/7")
+                for d in score.details:
+                    lines.append(f"  +{d['points']} {d['signal']}: {d['note']}")
+
+            update.message.reply_text("\n".join(lines))
+        except Exception as e:
+            logger.error(f"Error in /trend_status: {e}")
+            update.message.reply_text(f"⚠️ Error getting trend status: {e}")
+
+    def _cmd_trend_capital(self, update, context):
+        try:
+            logger.info("Telegram /trend_capital received")
+            strategy = self.strategy
+            if not hasattr(strategy, '_position_manager') or strategy._position_manager is None:
+                update.message.reply_text("Trend engine not active")
+                return
+
+            text = update.message.text.strip()
+            parts = text.split()
+
+            if len(parts) < 2:
+                update.message.reply_text(
+                    f"Current trend capital: ${strategy._position_manager._capital:.2f}\n"
+                    f"Usage: /trend_capital <amount>"
+                )
+                return
+
+            try:
+                amount = float(parts[1].replace(",", ""))
+            except ValueError:
+                update.message.reply_text("Invalid amount. Usage: /trend_capital 2000")
+                return
+
+            if amount < 0:
+                update.message.reply_text("Capital must be >= 0")
+                return
+
+            old = strategy._position_manager._capital
+            strategy._position_manager._capital = amount
+            self.event_log.log("trend_capital_updated", old=old, new=amount)
+            logger.info(f"Telegram /trend_capital: ${old:.2f} → ${amount:.2f}")
+
+            update.message.reply_text(
+                f"✅ Trend capital updated\n"
+                f"Before: ${old:.2f}\n"
+                f"Now: ${amount:.2f}"
+            )
+        except Exception as e:
+            logger.error(f"Error in /trend_capital: {e}")
+            update.message.reply_text(f"⚠️ Error updating trend capital: {e}")
+
+    def _cmd_trend_pnl(self, update, context):
+        try:
+            logger.info("Telegram /trend_pnl received")
+            strategy = self.strategy
+            if not hasattr(strategy, '_trend_journal') or strategy._trend_journal is None:
+                update.message.reply_text("Trend engine not active")
+                return
+
+            journal = strategy._trend_journal
+            summary = journal.summary()
+            perf = journal.performance()
+
+            lines = ["TREND P&L", chr(9473) * 33]
+            lines.append(f"Total trades: {summary['total_trades']}")
+            lines.append(f"Win rate: {summary['win_rate']:.1f}% ({summary['wins']}W / {summary['losses']}L)")
+            lines.append(f"Total P&L: ${summary['total_pnl']:.2f}")
+            lines.append(f"Profit factor: {perf['profit_factor']:.2f}")
+            lines.append(f"Avg win: ${perf['avg_win']:.2f} | Avg loss: ${perf['avg_loss']:.2f}")
+            lines.append(f"Avg duration: {perf['avg_duration']:.0f} min")
+
+            update.message.reply_text("\n".join(lines))
+        except Exception as e:
+            logger.error(f"Error in /trend_pnl: {e}")
+            update.message.reply_text(f"⚠️ Error getting trend P&L: {e}")
+
+    def _cmd_trend_close(self, update, context):
+        try:
+            logger.info("Telegram /trend_close received")
+            strategy = self.strategy
+            if not hasattr(strategy, '_position_manager') or strategy._position_manager is None:
+                update.message.reply_text("Trend engine not active")
+                return
+
+            pm = strategy._position_manager
+            positions = pm.get_all_positions()
+
+            if not positions:
+                update.message.reply_text("No open trend positions")
+                return
+
+            strategy._trend_force_close = True
+            logger.info(f"Telegram /trend_close — closing {len(positions)} position(s)")
+            update.message.reply_text(f"Closing {len(positions)} trend position(s) on next tick...")
+        except Exception as e:
+            logger.error(f"Error in /trend_close: {e}")
+            update.message.reply_text(f"⚠️ Error closing trend positions: {e}")
+
+    def _cmd_trend_history(self, update, context):
+        try:
+            logger.info("Telegram /trend_history received")
+            strategy = self.strategy
+            if not hasattr(strategy, '_trend_journal') or strategy._trend_journal is None:
+                update.message.reply_text("Trend engine not active")
+                return
+
+            trades = strategy._trend_journal.recent_trades(limit=10)
+
+            if not trades:
+                update.message.reply_text("No trend trades yet")
+                return
+
+            lines = ["TREND HISTORY", chr(9473) * 33]
+            for t in trades:
+                emoji = "+" if t["pnl"] >= 0 else "-"
+                lines.append(f"{emoji} {t['side']} {t['amount']:.1f}@${t['entry_price']:.2f}->${t['exit_price']:.2f} | ${t['pnl']:+.2f} ({t['exit_reason']})")
+
+            update.message.reply_text("\n".join(lines))
+        except Exception as e:
+            logger.error(f"Error in /trend_history: {e}")
+            update.message.reply_text(f"⚠️ Error getting trend history: {e}")
+
     def _cmd_help(self, update, context):
         logger.info("Telegram /help received")
         base_asset = getattr(self.strategy, 'base_asset', 'SOL')
@@ -697,6 +851,11 @@ class TelegramCommandHandler:
             "/logs — Last 30 lines from today's bot log\n"
             "/errors — Recent errors and crashes\n"
             "/clear — Clear logs and grid state (keeps trade history)\n"
+            "/trend_status — Trend engine status and positions\n"
+            "/trend_capital <amount> — Update trend trading capital\n"
+            "/trend_pnl — Trend strategy P&L report\n"
+            "/trend_close — Force close all trend positions\n"
+            "/trend_history — Recent trend trade history\n"
             "/help — This message",
             parse_mode="HTML"
         )
