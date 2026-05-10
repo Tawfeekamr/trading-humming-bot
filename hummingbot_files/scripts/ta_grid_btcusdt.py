@@ -801,6 +801,13 @@ class TAGridSOLUSDT(StrategyV2Base):
         sells_skipped_price = 0
         sells_blocked = 0
         sells_skipped_rsi = 0
+        sells_skipped_no_position = 0
+
+        # Only place as many sells as we have open positions (buys + buffered sells) to close.
+        # Selling without a position to close creates unmatched fills that accumulate forever.
+        available_positions = len(self._open_buys) + len(self._unmatched_sells)
+        sells_remaining = available_positions
+
         for level in grid.sell_levels:
             # Skip sells when RSI is low — market oversold, wait for bounce
             if current_rsi and current_rsi < 40:
@@ -809,10 +816,14 @@ class TAGridSOLUSDT(StrategyV2Base):
             if level["price"] <= current_price:
                 sells_skipped_price += 1
                 continue
+            if sells_remaining <= 0:
+                sells_skipped_no_position += 1
+                continue
             base_balance = self._get_base_balance()
             if level["quantity"] > base_balance:
                 sells_blocked += 1
                 continue
+            sells_remaining -= 1
             sells_placed += 1
             client_order_id = self.sell(
                 connector_name=self.exchange,
@@ -832,9 +843,9 @@ class TAGridSOLUSDT(StrategyV2Base):
 
         logger.info(
             f"Grid placement: buys={buys_placed} placed / {buys_skipped_price} above price / {buys_blocked} blocked / {buys_skipped_rsi} rsi_skip | "
-            f"sells={sells_placed} placed / {sells_skipped_price} below price / {sells_blocked} blocked / {sells_skipped_rsi} rsi_skip | "
-            f"rsi={current_rsi:.1f}" if current_rsi else
-            f"Grid placement: buys={buys_placed} placed / sells={sells_placed} placed"
+            f"sells={sells_placed} placed / {sells_skipped_price} below price / {sells_blocked} blocked / {sells_skipped_rsi} rsi_skip / {sells_skipped_no_position} no_position | "
+            f"open_buys={len(self._open_buys)} unmatched_sells={len(self._unmatched_sells)} | "
+            + (f"rsi={current_rsi:.1f}" if current_rsi else f"rsi=N/A")
         )
 
     def _cancel_all_orders(self, reason: str = "grid_refresh"):
