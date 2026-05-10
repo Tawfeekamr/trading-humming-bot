@@ -55,3 +55,26 @@ risk:
 # ── Dashboard ─────────────────────────────────────────────────────
 dashboard:
   port: 8501
+
+# ── Trend Engine ──────────────────────────────────────────────
+trend:
+  enabled: true
+  capital: 0                    # Set via /trend_capital (0 = disabled)
+  ema_fast: 20
+  ema_slow: 50
+  ema_trend: 200
+  rsi_period: 14
+  rsi_min: 40
+  rsi_max: 70
+  min_signal_score: 3
+  confirmation_ticks: 2
+  risk_per_trade_pct: 2.0
+  max_position_pct: 25.0
+  max_positions: 2
+  trailing_stop_pct: 1.5
+  trailing_activation_pct: 1.5
+  rr_ratio: 2.0
+  sl_buffer_pct: 0.2
+  max_drawdown_pct: 10.0
+  daily_loss_limit_pct: 5.0
+  timeframe: "1h"

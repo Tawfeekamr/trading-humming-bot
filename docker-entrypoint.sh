@@ -18,6 +18,9 @@ fi
 source /opt/conda/etc/profile.d/conda.sh
 conda activate hummingbot
 
+# Use the dual-engine strategy script
+export SCRIPT_CONFIG=ta_grid_trend_conf.yml
+
 # Pre-create conf_client.yml so Hummingbot reads our MQTT settings on first load.
 # If the file already exists (recreated container but mounted conf), patch it.
 CONF="/home/hummingbot/conf/conf_client.yml"
