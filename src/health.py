@@ -8,14 +8,29 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
-_bot_state = {"status": "starting", "grid_state": "UNKNOWN", "last_tick": None}
+_bot_state = {
+    "status": "starting",
+    "grid_state": "UNKNOWN",
+    "trend_state": "UNKNOWN",
+    "trend_positions": 0,
+    "last_signal_score": 0,
+    "last_tick": None,
+}
 _state_lock = threading.Lock()
 
 
-def update_health(grid_state: str = "ACTIVE") -> None:
+def update_health(
+    grid_state: str = "ACTIVE",
+    trend_healthy: bool = True,
+    trend_positions: int = 0,
+    last_signal_score: float = 0,
+) -> None:
     with _state_lock:
         _bot_state["status"] = "ok"
         _bot_state["grid_state"] = grid_state
+        _bot_state["trend_state"] = "ACTIVE" if trend_healthy else "HALTED"
+        _bot_state["trend_positions"] = trend_positions
+        _bot_state["last_signal_score"] = last_signal_score
         _bot_state["last_tick"] = datetime.now(timezone.utc).isoformat()
 
 

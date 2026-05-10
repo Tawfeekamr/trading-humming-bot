@@ -231,9 +231,8 @@ class TAGridTrendStrategy(StrategyV2Base):
 
         # Update health status
         update_health(
-            strategy="trend",
-            healthy=not self._trend_breaker.halted,
-            positions=self._position_manager.open_count,
+            trend_healthy=not self._trend_breaker.halted,
+            trend_positions=self._position_manager.open_count,
             last_signal_score=self._last_trend_score.total if self._last_trend_score else 0,
         )
 
