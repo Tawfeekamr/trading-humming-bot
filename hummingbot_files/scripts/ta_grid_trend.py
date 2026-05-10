@@ -62,7 +62,7 @@ from src.risk.circuit_breaker import CircuitBreaker
 from src.health import update_health, set_halted, start_health_server
 from src.notifications.telegram_bot import TelegramBot
 from src.notifications.telegram_commands import TelegramCommandHandler
-from src.notifications.event_log import EventLogger
+from src.logging.event_logger import EventLogger
 
 try:
     from hummingbot.strategy.strategy_v2_base import StrategyV2Base, StrategyV2ConfigBase
