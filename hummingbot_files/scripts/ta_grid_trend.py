@@ -60,6 +60,9 @@ from src.trend.trend_journal import TrendJournal
 from src.indicators.atr import ATR
 from src.risk.circuit_breaker import CircuitBreaker
 from src.health import update_health, set_halted, start_health_server
+from src.notifications.telegram_bot import TelegramBot
+from src.notifications.telegram_commands import TelegramCommandHandler
+from src.notifications.event_log import EventLogger
 
 try:
     from hummingbot.strategy.strategy_v2_base import StrategyV2Base, StrategyV2ConfigBase
@@ -187,6 +190,19 @@ class TAGridTrendStrategy(StrategyV2Base):
         trend_state_path = Path("data/trend_state.json")
         if trend_state_path.exists():
             self._position_manager.load_state(trend_state_path)
+
+        # Telegram — shared bot instance, command handler with this strategy
+        self.telegram = TelegramBot()
+        self._event_log = EventLogger(log_dir="logs")
+        self._telegram_commands = TelegramCommandHandler(
+            journal=None,
+            state_machine=None,
+            circuit_breaker=self._trend_breaker,
+            position_guard=None,
+            event_logger=self._event_log,
+            strategy=self,
+        )
+        self._telegram_commands.start()
 
         logger.info(f"Trend engine initialized: capital=${self._position_manager._capital:.2f}, enabled={self._trend_enabled}")
         _logger.info(f"Dual-engine strategy started on {self.exchange} {self.trading_pair}")

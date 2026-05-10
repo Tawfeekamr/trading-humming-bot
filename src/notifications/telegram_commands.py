@@ -224,8 +224,20 @@ class TelegramCommandHandler:
         sign = "+" if val >= 0 else ""
         return f"{sign}${val:.2f}"
 
+    def _require_grid(self, update):
+        """Return True if grid components are available, else send message and return False."""
+        if self.journal is not None and self.state_machine is not None:
+            return True
+        update.message.reply_text(
+            "Grid commands not available in trend-only mode.\n"
+            "Use: /trend_status /trend_capital /trend_pnl /trend_close /trend_history"
+        )
+        return False
+
     def _cmd_status(self, update, context):
         try:
+            if not self._require_grid(update):
+                return
             logger.info("Telegram /status received")
             uptime_s = int(time.time() - self._started_at)
             hours, remainder = divmod(uptime_s, 3600)
@@ -265,6 +277,8 @@ class TelegramCommandHandler:
 
     def _cmd_pnl(self, update, context):
         try:
+            if not self._require_grid(update):
+                return
             logger.info("Telegram /pnl received")
             today = self.journal.summary_today()
             week = self.journal.summary_this_week()
@@ -415,6 +429,8 @@ class TelegramCommandHandler:
 
     def _cmd_trades(self, update, context):
         try:
+            if not self._require_grid(update):
+                return
             logger.info("Telegram /trades received")
             trades = self.journal.get_trades()
             if not trades:
@@ -517,6 +533,8 @@ class TelegramCommandHandler:
 
     def _cmd_fees(self, update, context):
         try:
+            if not self._require_grid(update):
+                return
             logger.info("Telegram /fees received")
             today = self.journal.fee_summary(
                 datetime.now(timezone.utc).strftime("%Y-%m-%d 00:00:00")
