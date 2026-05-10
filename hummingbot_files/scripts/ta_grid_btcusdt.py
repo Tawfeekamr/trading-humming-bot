@@ -803,10 +803,9 @@ class TAGridSOLUSDT(StrategyV2Base):
         sells_skipped_rsi = 0
         sells_skipped_no_position = 0
 
-        # Only place as many sells as we have open positions (buys + buffered sells) to close.
-        # Selling without a position to close creates unmatched fills that accumulate forever.
-        available_positions = len(self._open_buys) + len(self._unmatched_sells)
-        sells_remaining = available_positions
+        # Only place as many sells as we have open buy positions to close.
+        # Selling without a buy to match creates unmatched fills that accumulate forever.
+        sells_remaining = len(self._open_buys)
 
         for level in grid.sell_levels:
             # Skip sells when RSI is low — market oversold, wait for bounce
