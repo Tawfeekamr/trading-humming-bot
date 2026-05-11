@@ -1,4 +1,4 @@
-FROM hummingbot/hummingbot:latest
+FROM hummingbot/hummingbot:version-2.13.0
 
 # Install our requirements into the conda hummingbot environment
 COPY requirements.txt /tmp/requirements.txt
