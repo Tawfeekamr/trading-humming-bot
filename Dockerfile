@@ -26,7 +26,7 @@ RUN mkdir -p /home/hummingbot/data /home/hummingbot/logs
 COPY docker-entrypoint.sh /home/hummingbot/docker-entrypoint.sh
 RUN chmod +x /home/hummingbot/docker-entrypoint.sh
 
-ENV SCRIPT_CONFIG=ta_grid_btcusdt.yml
+ENV SCRIPT_CONFIG=ta_grid_trend_conf.yml
 ENV HEADLESS_MODE=true
 
 CMD ["/home/hummingbot/docker-entrypoint.sh"]
