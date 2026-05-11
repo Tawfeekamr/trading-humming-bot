@@ -218,6 +218,24 @@ class TAGridTrendStrategy(StrategyV2Base):
         logger.info(f"Trend engine initialized: capital=${self._position_manager._capital:.2f}, enabled={self._trend_enabled}")
         _logger.info(f"Dual-engine strategy started on {self.exchange} {self.trading_pair}")
 
+        # Start force-ready watchdog (bypasses connector freeze after 30s)
+        threading.Thread(target=self._force_connector_ready, daemon=True).start()
+
+    def _force_connector_ready(self):
+        """Force ready_to_trade after timeout to bypass connector freeze."""
+        import time
+        time.sleep(30)
+        if self._trend_tick_count == 0:
+            for name, conn in self.connectors.items():
+                ready = getattr(conn, 'ready', None)
+                sd = getattr(conn, 'status_dict', None)
+                logger.warning(
+                    f"FORCE-READY DIAGNOSTIC: connector={name} ready={ready} "
+                    f"status_dict={sd}"
+                )
+            logger.warning("Connector never became ready — forcing ready_to_trade=True")
+            self.ready_to_trade = True
+
     def on_tick(self):
         """
         Main strategy loop called by Hummingbot on each tick.

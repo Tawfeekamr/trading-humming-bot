@@ -365,6 +365,9 @@ class TAGridSOLUSDT(StrategyV2Base):
         self._state_file = Path("data/grid_state.json")
         self._load_state()
 
+        # Start force-ready watchdog (bypasses connector freeze after 30s)
+        threading.Thread(target=self._force_connector_ready, daemon=True).start()
+
     def _save_state(self):
         """Persist open positions to a JSON file (atomic write)."""
         try:
@@ -495,6 +498,26 @@ class TAGridSOLUSDT(StrategyV2Base):
     # NOTE: Do NOT override tick() — Cython dispatch (StrategyPyBase.c_tick)
     # bypasses Python-level overrides and calls StrategyV2Base.tick() directly.
     # All logic goes in on_tick() which IS properly dispatched via self.on_tick().
+
+    def _force_connector_ready(self):
+        """Force ready_to_trade after timeout to bypass Hummingbot connector freeze.
+
+        The paper trade connector sometimes never reaches 'ready' state, causing
+        the event loop to hang silently. This workaround sets ready_to_trade=True
+        from a background thread after a grace period.
+        """
+        time_mod.sleep(30)
+        if self._tick_count == 0:
+            # Diagnose WHY connector isn't ready
+            for name, conn in self.connectors.items():
+                ready = getattr(conn, 'ready', None)
+                sd = getattr(conn, 'status_dict', None)
+                logger.warning(
+                    f"FORCE-READY DIAGNOSTIC: connector={name} ready={ready} "
+                    f"status_dict={sd}"
+                )
+            logger.warning("Connector never became ready — forcing ready_to_trade=True")
+            self.ready_to_trade = True
 
     def on_tick(self):
         try:
