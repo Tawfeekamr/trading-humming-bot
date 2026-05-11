@@ -399,7 +399,7 @@ class TAGridTrendStrategy(StrategyV2Base):
 
     @property
     def max_base_exposure_pct(self):
-        return float(os.environ.get("MAX_BASE_EXPOSURE_PCT", self.position_guard.max_exposure_pct))
+        return float(os.environ.get("MAX_BASE_EXPOSURE_PCT", self.position_guard.max_base_exposure_pct))
 
     # ── Force-Ready Watchdog ──
 
