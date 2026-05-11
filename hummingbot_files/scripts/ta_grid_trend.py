@@ -58,6 +58,7 @@ from src.trend.trend_manager import TrendManager
 from src.trend.position_manager import PositionManager
 from src.trend.trend_journal import TrendJournal
 from src.indicators.atr import ATR
+from src.data.candle_feed import CandleFeed
 from src.risk.circuit_breaker import CircuitBreaker
 from src.health import update_health, set_halted, start_health_server
 from src.notifications.telegram_bot import TelegramBot
@@ -145,6 +146,16 @@ class TAGridTrendStrategy(StrategyV2Base):
         # Environment
         self.env = os.environ.get("ENV", "paper")
         self.is_testnet = self.env == "paper"
+
+        # Candle feed — uses Binance REST API directly (public, no keys needed)
+        self.binance_symbol = self.trading_pair.replace("-", "")  # e.g. "SOLUSDT"
+        self.display_pair = self.trading_pair.replace("-", "/")   # e.g. "SOL/USDT"
+        self.candle_feed = CandleFeed(
+            symbol=self.binance_symbol,
+            interval=trend_cfg.get("timeframe", "1h"),
+            testnet=self.is_testnet,
+        )
+        self._last_candle_time = None
 
         # Trend engine components
         self._trend_manager = TrendManager(
@@ -238,7 +249,22 @@ class TAGridTrendStrategy(StrategyV2Base):
             self._close_all_trend_positions()
             self._trend_force_close = False
 
-        # Evaluate signals every 55 ticks
+        # Refresh candle data every ~55 minutes (must happen before signal eval)
+        now = pd.Timestamp.now(tz="UTC")
+        if (self._last_candle_time is None
+                or now - self._last_candle_time >= pd.Timedelta(minutes=55)):
+            try:
+                df = self.candle_feed.fetch_candles(limit=250)
+                if not df.empty and len(df) >= 200:
+                    self._cached_candles = df
+                    self._last_candle_time = now
+                    logger.info(f"Candle data refreshed: {len(df)} candles")
+                else:
+                    logger.warning(f"Insufficient candle data: {len(df) if not df.empty else 0}")
+            except Exception as e:
+                logger.error(f"Candle fetch failed: {e}")
+
+        # Evaluate signals every 55 ticks (~55 seconds = ~1 min apart)
         if (self._trend_enabled
                 and self._last_price > 0
                 and self._position_manager._capital > 0
@@ -306,40 +332,24 @@ class TAGridTrendStrategy(StrategyV2Base):
             logger.warning("Trend circuit breaker halted - skipping signal evaluation")
             return
 
-        connector = self.connectors.get(self.exchange)
-        if not connector:
-            return
-
-        try:
-            candles = self._fetch_candles(connector)
-            if candles is None or len(candles) < 200:
-                logger.debug(f"Insufficient candles: {len(candles) if candles is not None else 0}")
-                return
-        except Exception as e:
-            logger.error(f"Trend candle fetch failed: {e}")
+        candles = getattr(self, '_cached_candles', None)
+        if candles is None or len(candles) < 200:
+            logger.debug(f"Insufficient cached candles: {len(candles) if candles is not None else 0}")
             return
 
         score = self._trend_manager.evaluate(candles, self._last_price)
         self._last_trend_score = score
 
-        logger.debug(f"Trend signal score: {score.total}/7 (EMA={score.ema_score}, RSI={score.rsi_score}, "
-                    f"MACD={score.macd_score}, SR={score.sr_score})")
+        logger.info(f"Trend signal score: {score.total}/7 | details: {[d['signal'] for d in score.details]}")
 
         if self._trend_manager.should_enter(score):
             if self._trend_manager.confirm_entry(score):
                 self._open_trend_position(candles, score)
             else:
-                logger.debug(f"Trend signal insufficient confirmation (score={score.total}/7)")
+                logger.info(f"Trend signal pending confirmation (score={score.total}/7, need {self._trend_manager._confirmation_ticks} ticks)")
 
-    def _fetch_candles(self, connector: ConnectorBase) -> Optional[pd.DataFrame]:
-        """Fetch candle data from the connector."""
-        try:
-            candles_df = connector.candles.get_candles_df(self.trading_pair)
-            if candles_df is not None and len(candles_df) >= 200:
-                return candles_df.tail(250)
-        except Exception as e:
-            logger.debug(f"Candle fetch error: {e}")
-        return None
+    # NOTE: _fetch_candles removed — candle data is now fetched in on_tick()
+    # via self.candle_feed.fetch_candles() and cached in self._cached_candles.
 
     def _open_trend_position(self, candles: pd.DataFrame, score):
         """Open a new trend position."""
