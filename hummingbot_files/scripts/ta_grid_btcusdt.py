@@ -502,23 +502,11 @@ class TAGridSOLUSDT(StrategyV2Base):
     def _force_connector_ready(self):
         """Force ready_to_trade after timeout to bypass Hummingbot connector freeze."""
         try:
-            with open("/tmp/force_ready_log.txt", "a") as f:
-                f.write(f"thread started at {time_mod.time()}\n")
-            time_mod.sleep(15)
-            with open("/tmp/force_ready_log.txt", "a") as f:
-                f.write(f"after 15s sleep, tick_count={self._tick_count}, connectors={list(self.connectors.keys())}\n")
-            if self._tick_count == 0:
-                with open("/tmp/force_ready_log.txt", "a") as f:
-                    f.write("forcing ready_to_trade=True\n")
-                self.ready_to_trade = True
-                with open("/tmp/force_ready_log.txt", "a") as f:
-                    f.write(f"ready_to_trade set to {self.ready_to_trade}\n")
             time_mod.sleep(30)
-            with open("/tmp/force_ready_log.txt", "a") as f:
-                f.write(f"after 45s total, tick_count={self._tick_count}\n")
-        except Exception as e:
-            with open("/tmp/force_ready_error.txt", "w") as f:
-                f.write(f"ERROR: {e}\n")
+            if self._tick_count == 0:
+                self.ready_to_trade = True
+        except Exception:
+            pass
 
     def on_tick(self):
         try:
