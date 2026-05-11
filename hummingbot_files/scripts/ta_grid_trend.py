@@ -1008,7 +1008,7 @@ class TAGridTrendStrategy(StrategyV2Base):
             buys_placed += 1
             client_order_id = self.buy(
                 connector_name=self.exchange, trading_pair=self.trading_pair,
-                amount=Decimal(str(level["quantity"])), order_type=OrderType,
+                amount=Decimal(str(level["quantity"])), order_type=OrderType.LIMIT,
                 price=Decimal(str(level["price"])),
             )
             if client_order_id:
@@ -1032,7 +1032,7 @@ class TAGridTrendStrategy(StrategyV2Base):
             sells_placed += 1
             client_order_id = self.sell(
                 connector_name=self.exchange, trading_pair=self.trading_pair,
-                amount=Decimal(str(level["quantity"])), order_type=OrderType,
+                amount=Decimal(str(level["quantity"])), order_type=OrderType.LIMIT,
                 price=Decimal(str(level["price"])),
             )
             if client_order_id:
