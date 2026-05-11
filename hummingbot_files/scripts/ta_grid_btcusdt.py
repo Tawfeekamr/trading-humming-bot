@@ -500,19 +500,25 @@ class TAGridSOLUSDT(StrategyV2Base):
     # All logic goes in on_tick() which IS properly dispatched via self.on_tick().
 
     def _force_connector_ready(self):
-        """Force ready_to_trade after timeout to bypass Hummingbot connector freeze.
-
-        The paper trade connector sometimes never reaches 'ready' state, causing
-        the event loop to hang silently. This workaround sets ready_to_trade=True
-        from a background thread after a grace period.
-        """
+        """Force ready_to_trade after timeout to bypass Hummingbot connector freeze."""
         try:
-            time_mod.sleep(30)
+            with open("/tmp/force_ready_log.txt", "a") as f:
+                f.write(f"thread started at {time_mod.time()}\n")
+            time_mod.sleep(15)
+            with open("/tmp/force_ready_log.txt", "a") as f:
+                f.write(f"after 15s sleep, tick_count={self._tick_count}, connectors={list(self.connectors.keys())}\n")
             if self._tick_count == 0:
-                logger.warning("Connector never became ready after 30s — forcing ready_to_trade=True")
+                with open("/tmp/force_ready_log.txt", "a") as f:
+                    f.write("forcing ready_to_trade=True\n")
                 self.ready_to_trade = True
+                with open("/tmp/force_ready_log.txt", "a") as f:
+                    f.write(f"ready_to_trade set to {self.ready_to_trade}\n")
+            time_mod.sleep(30)
+            with open("/tmp/force_ready_log.txt", "a") as f:
+                f.write(f"after 45s total, tick_count={self._tick_count}\n")
         except Exception as e:
-            logger.error(f"Force-ready thread failed: {e}")
+            with open("/tmp/force_ready_error.txt", "w") as f:
+                f.write(f"ERROR: {e}\n")
 
     def on_tick(self):
         try:
