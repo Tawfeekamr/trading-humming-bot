@@ -506,22 +506,20 @@ class TAGridSOLUSDT(StrategyV2Base):
         the event loop to hang silently. This workaround sets ready_to_trade=True
         from a background thread after a grace period.
         """
-        time_mod.sleep(30)
-        if self._tick_count == 0:
-            # Diagnose WHY connector isn't ready
-            for name, conn in self.connectors.items():
-                ready = getattr(conn, 'ready', None)
-                sd = getattr(conn, 'status_dict', None)
-                logger.warning(
-                    f"FORCE-READY DIAGNOSTIC: connector={name} ready={ready} "
-                    f"status_dict={sd}"
-                )
-            logger.warning("Connector never became ready — forcing ready_to_trade=True")
-            self.ready_to_trade = True
+        try:
+            time_mod.sleep(30)
+            if self._tick_count == 0:
+                logger.warning("Connector never became ready after 30s — forcing ready_to_trade=True")
+                self.ready_to_trade = True
+        except Exception as e:
+            logger.error(f"Force-ready thread failed: {e}")
 
     def on_tick(self):
         try:
             self._tick_count += 1
+            if self._tick_count <= 3:
+                for name, conn in self.connectors.items():
+                    logger.info(f"on_tick #{self._tick_count}: connector={name} ready={getattr(conn, 'ready', 'N/A')}")
             if self._tick_count <= 5 or self._tick_count % 300 == 0:
                 connectors_ready = {name: c.ready for name, c in self.connectors.items()}
                 logger.info(f"on_tick #{self._tick_count}: connectors_ready={connectors_ready}")

@@ -223,18 +223,14 @@ class TAGridTrendStrategy(StrategyV2Base):
 
     def _force_connector_ready(self):
         """Force ready_to_trade after timeout to bypass connector freeze."""
-        import time
-        time.sleep(30)
-        if self._trend_tick_count == 0:
-            for name, conn in self.connectors.items():
-                ready = getattr(conn, 'ready', None)
-                sd = getattr(conn, 'status_dict', None)
-                logger.warning(
-                    f"FORCE-READY DIAGNOSTIC: connector={name} ready={ready} "
-                    f"status_dict={sd}"
-                )
-            logger.warning("Connector never became ready — forcing ready_to_trade=True")
-            self.ready_to_trade = True
+        try:
+            import time
+            time.sleep(30)
+            if self._trend_tick_count == 0:
+                logger.warning("Connector never became ready after 30s — forcing ready_to_trade=True")
+                self.ready_to_trade = True
+        except Exception as e:
+            logger.error(f"Force-ready thread failed: {e}")
 
     def on_tick(self):
         """
