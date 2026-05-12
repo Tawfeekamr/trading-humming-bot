@@ -15,6 +15,7 @@ class GridManager:
     # Binance exchange filters (defaults suit most USDT pairs)
     MIN_NOTIONAL = 5.0       # $5 minimum order value
     TICK_SIZE = 0.01          # $0.01 price step
+    FEE_RATE = 0.001          # 0.1% per side (Binance default)
 
     def __init__(self, levels: int = 8, capital_usdt: float = 200,
                  min_reserve: float = 50, spacing_multiplier: float = 0.8,
@@ -46,14 +47,22 @@ class GridManager:
         # 1. Calculate the desired spacing based on volatility (ATR).
         atr_spacing = atr_value * self.spacing_multiplier
 
-        # 2. Calculate the maximum allowed spacing to keep the grid within BB bands.
-        # We use (levels + 1) to ensure even the outermost level is within the band.
+        # 2. Minimum profitable spacing: round-trip fee × profit_multiplier (3x = net 2x fees profit).
+        min_profit_spacing = bb.mid * self.FEE_RATE * 2 * 3
+
+        # 3. Calculate the maximum allowed spacing to keep the grid within BB bands.
         max_buy_spacing = (bb.mid - bb.lower) / (self.levels + 1)
         max_sell_spacing = (bb.upper - bb.mid) / (self.levels + 1)
 
-        # 3. Use the smaller of the two to ensure safety and logic.
+        # 4. Buy spacing: standard ATR-based, capped by BB lower band.
         buy_spacing = min(atr_spacing, max_buy_spacing)
-        sell_spacing = min(atr_spacing, max_sell_spacing)
+        if min_profit_spacing <= max_buy_spacing:
+            buy_spacing = max(buy_spacing, min_profit_spacing)
+
+        # 5. Sell spacing: tighter (75% of buy) so sells fill faster in falling markets.
+        sell_spacing = min(atr_spacing * 0.75, max_sell_spacing)
+        if min_profit_spacing <= max_sell_spacing:
+            sell_spacing = max(sell_spacing, min_profit_spacing)
 
         deployable = self.capital_usdt - self.min_reserve
         # Still divide by (levels * 2) to maintain the same conservative capital allocation
