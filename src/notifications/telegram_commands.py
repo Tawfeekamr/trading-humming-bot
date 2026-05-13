@@ -61,42 +61,26 @@ class TelegramCommandHandler:
             logger.error(f"Telegram polling thread crashed: {e}", exc_info=True)
 
     def _tg_get(self, path, params=None, timeout=35):
-        """HTTP GET to Telegram API via subprocess to avoid thread deadlock."""
+        """HTTP GET to Telegram API directly."""
         url = f"https://api.telegram.org/bot{self._token}/{path}"
         if params:
             qs = urllib.parse.urlencode(params)
             url = f"{url}?{qs}"
-        script = (
-            "import urllib.request, json, sys\n"
-            f"r = urllib.request.urlopen({url!r}, timeout={timeout})\n"
-            "sys.stdout.write(r.read().decode())\n"
-        )
-        result = subprocess.run(
-            ["python3", "-c", script],
-            capture_output=True, text=True, timeout=timeout + 10,
-        )
-        if result.returncode != 0 and result.stderr:
-            logger.warning(f"Telegram GET failed: {result.stderr.strip()}")
-        return json.loads(result.stdout) if result.stdout else {}
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = resp.read().decode()
+        return json.loads(body) if body else {}
 
     def _tg_post(self, path, data, timeout=10):
-        """HTTP POST to Telegram API via subprocess to avoid thread deadlock."""
+        """HTTP POST to Telegram API directly."""
         url = f"https://api.telegram.org/bot{self._token}/{path}"
-        encoded = urllib.parse.urlencode(data)
-        script = (
-            "import urllib.request\n"
-            f"req = urllib.request.Request({url!r}, data={encoded!r}.encode())\n"
-            f"urllib.request.urlopen(req, timeout={timeout})\n"
-        )
-        result = subprocess.run(
-            ["python3", "-c", script],
-            capture_output=True, text=True, timeout=timeout + 10,
-        )
-        if result.returncode != 0 and result.stderr:
-            logger.warning(f"Telegram POST failed: {result.stderr.strip()}")
+        encoded = urllib.parse.urlencode(data).encode()
+        req = urllib.request.Request(url, data=encoded)
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            resp.read()
 
     def _poll_forever(self):
-        """Synchronous getUpdates-based polling loop using subprocess curl."""
+        """Synchronous getUpdates-based polling loop."""
         last_update_id = 0
         logger.info("Telegram _poll_forever: clearing webhook...")
 
@@ -588,7 +572,7 @@ class TelegramCommandHandler:
                 "sys.stdout.write(t['price'])\n"
             )
             result = subprocess.run(
-                ["python", "-c", script],
+                ["python3", "-c", script],
                 capture_output=True, text=True, timeout=15,
             )
             if result.returncode != 0 or not result.stdout:
