@@ -117,6 +117,10 @@ class TelegramCommandHandler:
         if not self._token or not self._chat_id:
             return
 
+        if self._init_retries == 0:
+            import sys
+            print(f"[TG-DEBUG] poll_once first call: token={bool(self._token)} chat_id={bool(self._chat_id)}", file=sys.stderr, flush=True)
+
         # One-time init: clear webhook and send startup ping
         if not self._initialized:
             self._init_retries += 1
