@@ -418,6 +418,10 @@ class TAGridTrendStrategy(StrategyV2Base):
             self._tick_count += 1
             self._trend_tick_count += 1
 
+            # Poll for Telegram commands (non-blocking)
+            if self._telegram_commands:
+                self._telegram_commands.poll_once()
+
             # Update current price
             connector = self.connectors.get(self.exchange)
             if connector:

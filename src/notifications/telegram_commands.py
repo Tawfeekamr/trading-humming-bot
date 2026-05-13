@@ -25,7 +25,9 @@ class TelegramCommandHandler:
         self._chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
         self._started_at = time.time()
         self._aiohttp_session = None
-        self._poll_task = None
+        self._last_update_id = 0
+        self._initialized = False
+        self._init_retries = 0
 
     _started = False
     _start_lock = threading.Lock()
@@ -46,19 +48,7 @@ class TelegramCommandHandler:
 
         logger.info(f"Telegram commands initializing with chat_id={self._chat_id}")
 
-        try:
-            loop = asyncio.get_event_loop()
-            self._poll_task = loop.create_task(self._async_poll_forever())
-            logger.info("Telegram command handler scheduled on event loop")
-        except Exception as e:
-            logger.error(f"Failed to start Telegram commands: {e}", exc_info=True)
-
-    def stop(self):
-        if self._poll_task and not self._poll_task.done():
-            self._poll_task.cancel()
-        logger.info("Telegram command handler stop requested")
-
-    # ── Async HTTP helpers ──────────────────────────────────────────
+    # ── Async HTTP helpers (called via run_until_complete with nest_asyncio) ──
 
     async def _get_session(self):
         import aiohttp
@@ -91,110 +81,125 @@ class TelegramCommandHandler:
             data = await resp.json()
             return float(data["price"])
 
-    # ── Async polling loop ──────────────────────────────────────────
-
-    async def _async_poll_forever(self):
-        """Async getUpdates-based polling loop — runs as a task on the event loop."""
+    def _tg_get(self, path, params=None, timeout=35):
+        """Sync wrapper — runs async request via run_until_complete (nest_asyncio)."""
         try:
-            await asyncio.sleep(5)  # Let the strategy initialize first
-
-            # Clear webhook
-            logger.info("Telegram: clearing webhook...")
-            resp = await self._async_tg_request(
-                "deleteWebhook", params={"drop_pending_updates": "true"}, timeout=10,
+            loop = asyncio.get_event_loop()
+            return loop.run_until_complete(
+                self._async_tg_request(path, params=params, timeout=timeout),
             )
-            logger.info(f"Telegram webhook cleared: {resp}")
-
-            # Send startup ping
-            ping_text = (
-                "📡 <b>Telegram Command Handler Online</b>\n"
-                "Commands: /status /pnl /balance /capital /price /trades /pending /fees /system /clear /help\n"
-                "Trend: /trend_status /trend_capital /trend_pnl /trend_close /trend_history"
-            )
-            await self._async_tg_request("sendMessage", data={
-                "chat_id": self._chat_id,
-                "text": ping_text,
-                "parse_mode": "HTML",
-            })
-            logger.info("Telegram startup ping sent")
-
-            commands = {
-                "status": self._cmd_status,
-                "pnl": self._cmd_pnl,
-                "balance": self._cmd_balance,
-                "capital": self._cmd_capital,
-                "pause": self._cmd_pause,
-                "resume": self._cmd_resume,
-                "reset": self._cmd_reset,
-                "trades": self._cmd_trades,
-                "pending": self._cmd_pending,
-                "logs": self._cmd_logs,
-                "errors": self._cmd_errors,
-                "fees": self._cmd_fees,
-                "price": self._cmd_price,
-                "system": self._cmd_server,
-                "server": self._cmd_server,
-                "clear": self._cmd_clear,
-                "help": self._cmd_help,
-                "trend_status": self._cmd_trend_status,
-                "trend_capital": self._cmd_trend_capital,
-                "trend_pnl": self._cmd_trend_pnl,
-                "trend_close": self._cmd_trend_close,
-                "trend_history": self._cmd_trend_history,
-            }
-
-            last_update_id = 0
-            logger.info("Telegram command handler online — async polling active")
-
-            # Poll loop — long-polls up to 30s, yielding to event loop between iterations
-            while True:
-                try:
-                    data = await self._async_tg_request("getUpdates", params={
-                        "offset": str(last_update_id + 1),
-                        "timeout": "30",
-                        "allowed_updates": '["message"]',
-                    })
-
-                    for update in data.get("result", []):
-                        last_update_id = update["update_id"]
-                        msg = update.get("message", {})
-                        chat_id = str(msg.get("chat", {}).get("id", ""))
-                        text = msg.get("text", "")
-
-                        if chat_id != self._chat_id or not text.startswith("/"):
-                            continue
-
-                        cmd = text.split("@")[0][1:].split()[0].lower()
-                        handler = commands.get(cmd)
-                        if not handler:
-                            continue
-
-                        await self._dispatch(handler, chat_id, msg)
-
-                except asyncio.CancelledError:
-                    raise
-                except Exception as e:
-                    logger.error(f"Telegram poll error: {e}")
-                    await asyncio.sleep(5)
-
-        except asyncio.CancelledError:
-            logger.info("Telegram polling cancelled")
         except Exception as e:
-            logger.error(f"Telegram polling crashed: {e}", exc_info=True)
+            logger.warning(f"Telegram GET failed: {e}")
+            return {}
 
-    async def _dispatch(self, handler, chat_id: str, msg: dict):
-        """Call a command handler (sync), capture its reply, send it async."""
-        reply_text = None
-        reply_parse_mode = ""
+    def _tg_post(self, path, data, timeout=10):
+        """Sync wrapper — runs async request via run_until_complete (nest_asyncio)."""
+        try:
+            loop = asyncio.get_event_loop()
+            return loop.run_until_complete(
+                self._async_tg_request(path, data=data, timeout=timeout),
+            )
+        except Exception as e:
+            logger.warning(f"Telegram POST failed: {e}")
 
+    # ── Poll-on-tick (called from strategy's on_tick) ────────────────
+
+    def poll_once(self):
+        """Non-blocking poll for Telegram updates. Call from on_tick each tick."""
+        if not self._token or not self._chat_id:
+            return
+
+        # One-time init: clear webhook and send startup ping
+        if not self._initialized:
+            self._init_retries += 1
+            if self._init_retries < 10:
+                return  # Wait a few ticks for the event loop to stabilize
+            try:
+                resp = self._tg_get("deleteWebhook", params={"drop_pending_updates": "true"}, timeout=10)
+                logger.info(f"Telegram webhook cleared: {resp}")
+
+                ping_text = (
+                    "📡 <b>Telegram Command Handler Online</b>\n"
+                    "Commands: /status /pnl /balance /capital /price /trades /pending /fees /system /clear /help\n"
+                    "Trend: /trend_status /trend_capital /trend_pnl /trend_close /trend_history"
+                )
+                self._tg_post("sendMessage", data={
+                    "chat_id": self._chat_id,
+                    "text": ping_text,
+                    "parse_mode": "HTML",
+                })
+                logger.info("Telegram startup ping sent")
+                self._initialized = True
+            except Exception as e:
+                logger.warning(f"Telegram init failed: {e}")
+                self._init_retries = 5  # Retry after a few more ticks
+            return
+
+        # Non-blocking getUpdates (timeout=0 returns immediately)
+        try:
+            data = self._tg_get("getUpdates", params={
+                "offset": str(self._last_update_id + 1),
+                "timeout": "0",
+                "allowed_updates": '["message"]',
+            }, timeout=10)
+
+            for update in data.get("result", []):
+                self._last_update_id = update["update_id"]
+                msg = update.get("message", {})
+                chat_id = str(msg.get("chat", {}).get("id", ""))
+                text = msg.get("text", "")
+
+                if chat_id != self._chat_id or not text.startswith("/"):
+                    continue
+
+                cmd = text.split("@")[0][1:].split()[0].lower()
+                handler = self._commands.get(cmd)
+                if not handler:
+                    continue
+
+                self._dispatch(handler, chat_id, msg)
+
+        except Exception as e:
+            logger.error(f"Telegram poll error: {e}")
+
+    @property
+    def _commands(self):
+        return {
+            "status": self._cmd_status,
+            "pnl": self._cmd_pnl,
+            "balance": self._cmd_balance,
+            "capital": self._cmd_capital,
+            "pause": self._cmd_pause,
+            "resume": self._cmd_resume,
+            "reset": self._cmd_reset,
+            "trades": self._cmd_trades,
+            "pending": self._cmd_pending,
+            "logs": self._cmd_logs,
+            "errors": self._cmd_errors,
+            "fees": self._cmd_fees,
+            "price": self._cmd_price,
+            "system": self._cmd_server,
+            "server": self._cmd_server,
+            "clear": self._cmd_clear,
+            "help": self._cmd_help,
+            "trend_status": self._cmd_trend_status,
+            "trend_capital": self._cmd_trend_capital,
+            "trend_pnl": self._cmd_trend_pnl,
+            "trend_close": self._cmd_trend_close,
+            "trend_history": self._cmd_trend_history,
+        }
+
+    def _dispatch(self, handler, chat_id: str, msg: dict):
+        """Call a command handler and send the reply."""
         class _MockMessage:
             def __init__(self, msg_dict, cid):
                 self.text = msg_dict.get("text", "")
                 self._chat_id = cid
+                self._reply = None
+                self._parse_mode = ""
             def reply_text(self, text, **kw):
-                nonlocal reply_text, reply_parse_mode
-                reply_text = text
-                reply_parse_mode = kw.get("parse_mode", "")
+                self._reply = text
+                self._parse_mode = kw.get("parse_mode", "")
 
         class _MockUpdate:
             def __init__(self, msg_dict, cid):
@@ -204,16 +209,21 @@ class TelegramCommandHandler:
         try:
             mock_update = _MockUpdate(msg, chat_id)
             handler(mock_update, None)
+            if mock_update.message._reply:
+                self._tg_post("sendMessage", data={
+                    "chat_id": chat_id,
+                    "text": mock_update.message._reply,
+                    "parse_mode": mock_update.message._parse_mode,
+                })
         except Exception as e:
             logger.error(f"Telegram command handler error: {e}", exc_info=True)
-            reply_text = f"⚠️ Error: {e}"
-
-        if reply_text:
-            await self._async_tg_request("sendMessage", data={
-                "chat_id": chat_id,
-                "text": reply_text,
-                "parse_mode": reply_parse_mode,
-            })
+            try:
+                self._tg_post("sendMessage", data={
+                    "chat_id": chat_id,
+                    "text": f"⚠️ Error: {e}",
+                })
+            except Exception:
+                pass
 
     def _fmt_pnl(self, val):
         if val is None:
@@ -572,10 +582,8 @@ class TelegramCommandHandler:
     def _cmd_price(self, update, context):
         try:
             logger.info("Telegram /price received")
-            binance_symbol = getattr(self.strategy, 'binance_symbol', 'SOLUSDT')
             display_pair = getattr(self.strategy, 'display_pair', 'SOL/USDT')
 
-            # Use cached indicator price (live price fetch requires async context)
             indicators = self.strategy.get_indicators_snapshot()
             live_price = indicators[4] if indicators else None
 
@@ -637,7 +645,6 @@ class TelegramCommandHandler:
             data_dir = Path("data")
             cleared = []
 
-            # Clear log files — remove and recreate so FileHandlers reset
             for f in log_dir.glob("bot_*.log"):
                 f.unlink(missing_ok=True)
                 f.touch()
@@ -652,14 +659,12 @@ class TelegramCommandHandler:
                 crash_file.touch()
                 cleared.append("crashes.log")
 
-            # Clear grid state only (preserve trades.json)
             state_file = data_dir / "grid_state.json"
             if state_file.exists():
                 state_file.unlink()
                 state_file.write_text("{}")
                 cleared.append("grid_state.json")
 
-            # Clear strategy-specific log
             script_name = getattr(self.strategy, 'script_file_name', 'ta_grid_btcusdt.py').replace('.py', '')
             strat_log = log_dir / f"logs_{script_name}.log"
             if strat_log.exists():
