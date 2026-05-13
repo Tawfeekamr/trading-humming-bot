@@ -993,11 +993,14 @@ class TAGridTrendStrategy(StrategyV2Base):
         sells_placed = 0
         indicators = self._cached_indicators
         current_rsi = indicators[1] if indicators else None
+        filled_buy_levels = set(fill.grid_level for fill in self._open_buys.values())
 
         for level in grid.buy_levels:
             if current_rsi and current_rsi > 60:
                 continue
             if level["price"] >= current_price:
+                continue
+            if level["level"] in filled_buy_levels:
                 continue
             order_usdt = level["price"] * level["quantity"]
             if not self.position_guard.can_place_order(
