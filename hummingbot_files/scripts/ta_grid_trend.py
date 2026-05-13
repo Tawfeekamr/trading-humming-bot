@@ -920,8 +920,7 @@ class TAGridTrendStrategy(StrategyV2Base):
         score = self._trend_manager.evaluate(candles, self._last_price)
         self._last_trend_score = score
 
-        self.event_log.log("trend_score", total=score.total, max=7,
-                           details=[{"name": d.name, "points": d.points} for d in score.details])
+        self.event_log.log("trend_score", total=score.total, max=7, details=score.details)
 
         if self._trend_manager.should_enter(score):
             confirmed = self._trend_manager.confirm_entry(score)
