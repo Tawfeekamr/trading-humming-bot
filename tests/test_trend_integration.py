@@ -88,7 +88,8 @@ class TestTrendIntegration:
         assert len(exits) == 1
         assert exits[0]["reason"] == "take_profit"
 
-        closed = pm.close_position("lifecycle_test", 99.4, "take_profit")
+        pm.mark_exit_pending("lifecycle_test", "exit_abc", "take_profit")
+        closed = pm.finalize_exit("lifecycle_test", 99.4, fee=0.1)
         assert closed["pnl"] > 0
 
         journal.log_trade(
@@ -102,8 +103,8 @@ class TestTrendIntegration:
 
         summary = journal.summary()
         assert summary["total_trades"] == 1
-        assert summary["wins"] == 1
-        assert summary["total_pnl"] > 0
+        assert summary["winning"] == 1
+        assert summary["net_pnl"] > 0
 
         Path(tmp.name).unlink()
 
@@ -115,5 +116,6 @@ class TestTrendIntegration:
         assert len(exits) == 1
         assert exits[0]["reason"] == "stop_loss"
 
-        closed = pm.close_position("sl_test", 91.3, "stop_loss")
+        pm.mark_exit_pending("sl_test", "exit_xyz", "stop_loss")
+        closed = pm.finalize_exit("sl_test", 91.3, fee=0.0)
         assert closed["pnl"] < 0

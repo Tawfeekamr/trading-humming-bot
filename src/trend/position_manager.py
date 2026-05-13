@@ -20,6 +20,9 @@ class TrendPosition:
     trailing_stop: float = 0.0
     trailing_activated: bool = False
     highest_price: float = 0.0
+    exit_order_id: str = ""
+    exit_reason: str = ""
+    is_closed: bool = False
 
     def __post_init__(self):
         if self.trailing_stop == 0.0:
@@ -64,12 +67,28 @@ class PositionManager:
             self._positions[entry_order_id] = pos
             return pos
 
-    def close_position(self, order_id: str, exit_price: float,
-                       exit_reason: str) -> Optional[dict]:
+    def mark_exit_pending(self, entry_order_id: str, exit_order_id: str, exit_reason: str) -> bool:
         with self._lock:
-            pos = self._positions.pop(order_id, None)
+            pos = self._positions.get(entry_order_id)
+            if pos is None or pos.is_closed:
+                return False
+            pos.exit_order_id = exit_order_id
+            pos.exit_reason = exit_reason
+            return True
+
+    def get_position_by_exit(self, exit_order_id: str) -> Optional[TrendPosition]:
+        with self._lock:
+            for pos in self._positions.values():
+                if pos.exit_order_id == exit_order_id and not pos.is_closed:
+                    return pos
+        return None
+
+    def finalize_exit(self, entry_order_id: str, exit_price: float, fee: float) -> Optional[dict]:
+        with self._lock:
+            pos = self._positions.pop(entry_order_id, None)
             if pos is None:
                 return None
+            pos.is_closed = True
             pnl = (exit_price - pos.entry_price) * pos.amount
             pnl_pct = (exit_price - pos.entry_price) / pos.entry_price * 100
             try:
@@ -78,13 +97,15 @@ class PositionManager:
             except (ValueError, TypeError):
                 duration_min = 0
             return {
-                "order_id": order_id,
+                "entry_order_id": pos.entry_order_id,
+                "exit_order_id": pos.exit_order_id,
                 "entry_price": pos.entry_price,
                 "exit_price": exit_price,
                 "amount": pos.amount,
                 "pnl": round(pnl, 2),
                 "pnl_pct": round(pnl_pct, 2),
-                "exit_reason": exit_reason,
+                "fee": fee,
+                "exit_reason": pos.exit_reason,
                 "duration_minutes": duration_min,
                 "stop_loss": pos.stop_loss,
                 "take_profit": pos.take_profit,
@@ -101,6 +122,8 @@ class PositionManager:
         exits = []
         with self._lock:
             for order_id, pos in list(self._positions.items()):
+                if pos.exit_order_id or pos.is_closed:
+                    continue
                 if current_price >= pos.take_profit:
                     exits.append({"order_id": order_id, "reason": "take_profit", "exit_price": pos.take_profit})
                 elif current_price <= pos.stop_loss:

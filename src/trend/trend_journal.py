@@ -1,7 +1,7 @@
 import logging
 import sqlite3
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -90,15 +90,43 @@ class TrendJournal:
         rows = [dict(r) for r in conn.execute(query, params).fetchall()]
         conn.close()
         if not rows:
-            return {"total_trades": 0, "wins": 0, "losses": 0, "win_rate": 0.0, "total_pnl": 0.0}
+            return {"total_trades": 0, "winning": 0, "losing": 0, "win_rate": 0.0, "net_pnl": 0.0, "gross_pnl": 0.0, "total_fees": 0.0, "avg_pnl": 0.0, "best_trade": 0.0, "worst_trade": 0.0}
         wins = [t for t in rows if t["pnl"] > 0]
         losses = [t for t in rows if t["pnl"] <= 0]
         total_pnl = sum(t["pnl"] for t in rows)
+        gross_pnl = sum(t["pnl"] + t["fee"] for t in rows)
+        total_fees = sum(t["fee"] for t in rows)
+        best = max((t["pnl"] for t in rows), default=0.0)
+        worst = min((t["pnl"] for t in rows), default=0.0)
         return {
-            "total_trades": len(rows), "wins": len(wins), "losses": len(losses),
+            "total_trades": len(rows), "winning": len(wins), "losing": len(losses),
             "win_rate": round(len(wins) / len(rows) * 100, 1),
-            "total_pnl": round(total_pnl, 2),
+            "net_pnl": round(total_pnl, 2),
+            "gross_pnl": round(gross_pnl, 2),
+            "total_fees": round(total_fees, 2),
+            "avg_pnl": round(total_pnl / len(rows), 2) if rows else 0.0,
+            "best_trade": round(best, 2),
+            "worst_trade": round(worst, 2)
         }
+
+    def summary_this_hour(self) -> dict:
+        since = (datetime.now(timezone.utc) - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
+        return self.summary(since)
+
+    def summary_today(self) -> dict:
+        since = datetime.now(timezone.utc).strftime("%Y-%m-%d 00:00:00")
+        return self.summary(since)
+
+    def summary_this_week(self) -> dict:
+        since = (datetime.now(timezone.utc) - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
+        return self.summary(since)
+
+    def summary_this_month(self) -> dict:
+        since = datetime.now(timezone.utc).strftime("%Y-%m-01 00:00:00")
+        return self.summary(since)
+
+    def summary_all_time(self) -> dict:
+        return self.summary("2000-01-01 00:00:00")
 
     def performance(self, since: Optional[str] = None) -> dict:
         conn = self._conn()

@@ -40,7 +40,8 @@ class TestPositionManager:
 
     def test_close_position(self, manager):
         manager.open_position("abc", 94.0, 14.0, 91.0, 100.0, "2026-05-11T10:00:00Z")
-        closed = manager.close_position("abc", exit_price=100.0, exit_reason="take_profit")
+        manager.mark_exit_pending("abc", "def", "take_profit")
+        closed = manager.finalize_exit("abc", exit_price=100.0, fee=0.1)
         assert closed is not None
         assert closed["pnl"] > 0
         assert closed["exit_reason"] == "take_profit"
@@ -48,7 +49,8 @@ class TestPositionManager:
 
     def test_close_position_pnl_calculation(self, manager):
         manager.open_position("abc", 94.0, 14.0, 91.0, 100.0, "2026-05-11T10:00:00Z")
-        closed = manager.close_position("abc", exit_price=91.0, exit_reason="stop_loss")
+        manager.mark_exit_pending("abc", "def", "stop_loss")
+        closed = manager.finalize_exit("abc", exit_price=91.0, fee=0.0)
         expected_pnl = (91.0 - 94.0) * 14.0
         assert abs(closed["pnl"] - expected_pnl) < 0.01
         assert closed["pnl"] < 0

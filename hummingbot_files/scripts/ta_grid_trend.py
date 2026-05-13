@@ -639,9 +639,9 @@ class TAGridTrendStrategy(StrategyV2Base):
 
     def did_fill_order(self, event):
         try:
-            # Route to trend if order_id matches a trend position
             order_id = str(getattr(event, 'order_id', getattr(event, 'client_order_id', '')))
-            if self._position_manager.get_position(order_id):
+            # Route to trend if order_id matches a trend position's entry OR exit order ID
+            if self._position_manager.get_position(order_id) or self._position_manager.get_position_by_exit(order_id):
                 self._trend_fill(event)
             else:
                 self._grid_fill(event)
@@ -652,9 +652,73 @@ class TAGridTrendStrategy(StrategyV2Base):
             self._safe_telegram_crash("did_fill_order", str(e), tb)
 
     def _trend_fill(self, event):
-        """Handle fill for a trend position — tracked by position manager."""
-        # Trend fills are handled by the position manager and exit logic
-        pass
+        """Handle fill for a trend position (async tracking)."""
+        order_id = str(getattr(event, 'order_id', getattr(event, 'client_order_id', '')))
+        price = float(getattr(event, 'price', 0))
+        quantity = float(getattr(event, 'amount', 0))
+        fee = quantity * price * self._fee_rate
+
+        pos = self._position_manager.get_position(order_id)
+        if pos:
+            # It's an entry fill
+            pos.entry_price = price
+            pos.amount = quantity  # update to actual filled amount
+            logger.info(f"TREND ENTRY FILLED: {quantity} SOL @ ${price:,.2f}")
+            msg = (
+                f"🚀 <b>Trend ENTRY Filled — {self.display_pair}</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"💵 Entry Price: ${price:,.2f}\n"
+                f"📦 Amount:      {quantity} {self.base_asset}\n"
+                f"🛑 Stop Loss:   ${pos.stop_loss:,.2f}\n"
+                f"🎯 Take Profit: ${pos.take_profit:,.2f}\n"
+                f"🌐 Mode:        {self.env.upper()}"
+            )
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    loop.create_task(self.telegram.send(msg))
+            except RuntimeError:
+                pass
+            return
+
+        pos = self._position_manager.get_position_by_exit(order_id)
+        if pos:
+            # It's an exit fill
+            closed = self._position_manager.finalize_exit(pos.entry_order_id, price, fee)
+            if closed:
+                self._trend_journal.log_trade(
+                    side="SELL", entry_price=closed["entry_price"], exit_price=closed["exit_price"],
+                    amount=closed["amount"], fee=round(fee, 2), pnl=closed["pnl"],
+                    pnl_pct=closed["pnl_pct"], stop_loss=closed["stop_loss"],
+                    take_profit=closed["take_profit"], exit_reason=closed["exit_reason"],
+                    signal_score=0, duration_minutes=closed["duration_minutes"],
+                )
+                self._save_trend_state()
+                logger.info(f"TREND EXIT FILLED ({closed['exit_reason']}): {closed['amount']:.1f} SOL @ ${price:.2f} | PnL ${closed['pnl']:+.2f}")
+                
+                pnl_sign = "+" if closed["pnl"] >= 0 else ""
+                emoji = "💚" if closed["pnl"] >= 0 else "🔴"
+                msg = (
+                    f"{emoji} <b>Trend EXIT Filled — {self.display_pair}</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"🔔 Reason: {closed['exit_reason'].upper()}\n"
+                    f"⏱ Duration: {closed['duration_minutes']} min\n"
+                    f"🔵 Entry: ${closed['entry_price']:,.2f}\n"
+                    f"🔵 Exit:  ${price:,.2f}\n"
+                    f"📦 Amount: {closed['amount']} {self.base_asset}\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"💰 Gross PnL: {pnl_sign}${closed['pnl']:.2f}\n"
+                    f"💸 Fee:       -${fee:.2f}\n"
+                    f"<b>📊 Net PnL:   {pnl_sign}${closed['pnl'] - fee:.2f}</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"🌐 Mode: {self.env.upper()}"
+                )
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        loop.create_task(self.telegram.send(msg))
+                except RuntimeError:
+                    pass
 
     def _grid_fill(self, event):
         """Handle fill for a grid order."""
@@ -747,7 +811,7 @@ class TAGridTrendStrategy(StrategyV2Base):
 
                 pnl_sign = "+" if net_pnl >= 0 else ""
                 telegram_msg = (
-                    f"{'💚' if net_pnl >= 0 else '🔴'} <b>Trade Closed (SELL-first) — {self.display_pair}</b>\n"
+                    f"{'💚' if net_pnl >= 0 else '🔴'} <b>Trade Closed — {self.display_pair}</b>\n"
                     f"━━━━━━━━━━━━━━━━━━━━━━\n"
                     f"📈 BUY closed SELL position  |  Grid Level {grid_level}\n"
                     f"⏱ Duration: {duration_min} min\n"
@@ -898,18 +962,8 @@ class TAGridTrendStrategy(StrategyV2Base):
             logger.error(f"Trend sell failed: {e}")
             return
 
-        closed = self._position_manager.close_position(pos.entry_order_id, exit_price, reason)
-        if closed:
-            fee = exit_price * float(amount) * 0.00075
-            self._trend_journal.log_trade(
-                side="SELL", entry_price=closed["entry_price"], exit_price=exit_price,
-                amount=closed["amount"], fee=round(fee, 2), pnl=closed["pnl"],
-                pnl_pct=closed["pnl_pct"], stop_loss=closed["stop_loss"],
-                take_profit=closed["take_profit"], exit_reason=reason,
-                signal_score=0, duration_minutes=closed["duration_minutes"],
-            )
-            self._save_trend_state()
-            logger.info(f"TREND EXIT ({reason}): {closed['amount']:.1f} SOL @ ${exit_price:.2f} | PnL ${closed['pnl']:+.2f}")
+        self._position_manager.mark_exit_pending(pos.entry_order_id, str(order_id), reason)
+        self._save_trend_state()
 
     def _evaluate_trend_signals(self):
         if not self._position_manager.can_open():
@@ -932,10 +986,6 @@ class TAGridTrendStrategy(StrategyV2Base):
                                pending=self._trend_manager._pending_ticks,
                                required=self._trend_manager._confirmation_ticks)
             if confirmed:
-                self._open_trend_position(candles, score)
-
-        if self._trend_manager.should_enter(score):
-            if self._trend_manager.confirm_entry(score):
                 self._open_trend_position(candles, score)
 
     def _open_trend_position(self, candles: pd.DataFrame, score):
@@ -1116,6 +1166,10 @@ class TAGridTrendStrategy(StrategyV2Base):
             s = self.journal.summary_today()
             sw = self.journal.summary_this_week()
             sm = self.journal.summary_this_month()
+            
+            ts = self._trend_journal.summary_today()
+            tsw = self._trend_journal.summary_this_week()
+            tsm = self._trend_journal.summary_this_month()
 
             def fmt(val):
                 sign = "+" if (val or 0) >= 0 else ""
@@ -1123,20 +1177,29 @@ class TAGridTrendStrategy(StrategyV2Base):
 
             base = getattr(self, '_base_capital', self.capital_usdt)
             growth_pct = ((equity - base) / base * 100) if base > 0 else 0
+            
+            total_net_today = s['net_pnl'] + ts['net_pnl']
+            total_net_week = sw['net_pnl'] + tsw['net_pnl']
+            total_net_month = sm['net_pnl'] + tsm['net_pnl']
 
             msg = (
                 f"📅 <b>Daily Report — {pd.Timestamp.now(tz='UTC').strftime('%b %d, %Y')}</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"📊 Trades: {s['total_trades']}  "
-                f"(✅{s['winning']} / ❌{s['losing']})  "
-                f"Win: {s['win_rate']}%\n"
+                f"🤖 <b>GRID BOT</b>\n"
+                f"📊 Trades: {s['total_trades']} (✅{s['winning']} / ❌{s['losing']}) Win: {s['win_rate']}%\n"
+                f"💰 Gross: {fmt(s['gross_pnl'])}  |  💸 Fees: -${abs(s['total_fees']):.2f}\n"
+                f"📈 Net Today: {fmt(s['net_pnl'])}\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"💰 Gross: {fmt(s['gross_pnl'])}\n"
-                f"💸 Fees:  -${abs(s['total_fees']):.2f}\n"
-                f"📈 <b>Net Today: {fmt(s['net_pnl'])}</b>\n"
+                f"📈 <b>TREND BOT</b>\n"
+                f"📊 Trades: {ts['total_trades']} (✅{ts['winning']} / ❌{ts['losing']}) Win: {ts['win_rate']}%\n"
+                f"💰 Gross: {fmt(ts['gross_pnl'])}  |  💸 Fees: -${abs(ts['total_fees']):.2f}\n"
+                f"📈 Net Today: {fmt(ts['net_pnl'])}\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"📆 Week:  {fmt(sw['net_pnl'])}\n"
-                f"🗓 Month: {fmt(sm['net_pnl'])}\n"
+                f"🏆 <b>COMBINED PNL</b>\n"
+                f"📈 Net Today: <b>{fmt(total_net_today)}</b>\n"
+                f"📆 Net Week:  {fmt(total_net_week)}\n"
+                f"🗓 Net Month: {fmt(total_net_month)}\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"🏦 Equity: ${equity:,.2f} ({growth_pct:+.1f}% vs base)\n"
                 f"🌐 Mode: {self.env.upper()}"
             )

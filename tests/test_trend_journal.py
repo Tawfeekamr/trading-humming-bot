@@ -40,10 +40,10 @@ class TestTrendJournal:
         journal.log_trade("BUY", 95.0, 92.0, 14.0, 2.0, -44.0, -3.1, 92.0, 101.0, "stop_loss", 3, 60)
         summary = journal.summary()
         assert summary["total_trades"] == 2
-        assert summary["wins"] == 1
-        assert summary["losses"] == 1
+        assert summary["winning"] == 1
+        assert summary["losing"] == 1
         assert abs(summary["win_rate"] - 50.0) < 0.1
-        assert abs(summary["total_pnl"] - 38.0) < 0.1
+        assert abs(summary["net_pnl"] - 38.0) < 0.1
 
     def test_recent_trades_limit(self, journal):
         for i in range(15):
