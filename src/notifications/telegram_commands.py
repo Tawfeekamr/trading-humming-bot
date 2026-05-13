@@ -1,9 +1,9 @@
 import os
-import asyncio
 import time
 import json
 import logging
 import threading
+import http.client
 import urllib.parse
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
@@ -24,7 +24,6 @@ class TelegramCommandHandler:
         self._token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
         self._chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
         self._started_at = time.time()
-        self._aiohttp_session = None
         self._last_update_id = 0
         self._initialized = False
         self._init_retries = 0
@@ -48,65 +47,33 @@ class TelegramCommandHandler:
 
         logger.info(f"Telegram commands initializing with chat_id={self._chat_id}")
 
-        # Apply nest_asyncio to allow run_until_complete() inside a running event loop
+    # ── HTTP helpers (plain http.client, no asyncio) ────────────────
+
+    def _tg_get(self, path, params=None, timeout=10):
+        """HTTP GET to Telegram API via http.client."""
         try:
-            import nest_asyncio
-            nest_asyncio.apply()
-            logger.info("Telegram: nest_asyncio applied")
-        except ImportError:
-            logger.warning("Telegram: nest_asyncio not available — commands may not work")
-
-    # ── Async HTTP helpers (called via run_until_complete with nest_asyncio) ──
-
-    async def _get_session(self):
-        import aiohttp
-        if self._aiohttp_session is None or self._aiohttp_session.closed:
-            self._aiohttp_session = aiohttp.ClientSession()
-        return self._aiohttp_session
-
-    async def _async_tg_request(self, path, params=None, data=None, timeout=35):
-        import aiohttp
-        url = f"https://api.telegram.org/bot{self._token}/{path}"
-        session = await self._get_session()
-        try:
-            if data:
-                async with session.post(url, data=data, timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
-                    return await resp.json()
-            else:
-                if params:
-                    url = f"{url}?{urllib.parse.urlencode(params)}"
-                async with session.get(url, timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
-                    return await resp.json()
-        except Exception as e:
-            logger.warning(f"Telegram async request failed: {e}")
-            return {}
-
-    async def _async_fetch_price(self, symbol):
-        import aiohttp
-        session = await self._get_session()
-        url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}"
-        async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-            data = await resp.json()
-            return float(data["price"])
-
-    def _tg_get(self, path, params=None, timeout=35):
-        """Sync wrapper — runs async request via run_until_complete (nest_asyncio)."""
-        try:
-            loop = asyncio.get_event_loop()
-            return loop.run_until_complete(
-                self._async_tg_request(path, params=params, timeout=timeout),
-            )
+            query = f"?{urllib.parse.urlencode(params)}" if params else ""
+            conn = http.client.HTTPSConnection("api.telegram.org", timeout=timeout)
+            conn.request("GET", f"/bot{self._token}/{path}{query}")
+            resp = conn.getresponse()
+            data = json.loads(resp.read())
+            conn.close()
+            return data
         except Exception as e:
             logger.warning(f"Telegram GET failed: {e}")
             return {}
 
     def _tg_post(self, path, data, timeout=10):
-        """Sync wrapper — runs async request via run_until_complete (nest_asyncio)."""
+        """HTTP POST to Telegram API via http.client."""
         try:
-            loop = asyncio.get_event_loop()
-            return loop.run_until_complete(
-                self._async_tg_request(path, data=data, timeout=timeout),
-            )
+            body = urllib.parse.urlencode(data)
+            conn = http.client.HTTPSConnection("api.telegram.org", timeout=timeout)
+            conn.request("POST", f"/bot{self._token}/{path}", body=body,
+                         headers={"Content-Type": "application/x-www-form-urlencoded"})
+            resp = conn.getresponse()
+            result = json.loads(resp.read())
+            conn.close()
+            return result
         except Exception as e:
             logger.warning(f"Telegram POST failed: {e}")
 
@@ -116,14 +83,6 @@ class TelegramCommandHandler:
         """Non-blocking poll for Telegram updates. Call from on_tick each tick."""
         if not self._token or not self._chat_id:
             return
-
-        if self._init_retries == 0:
-            import sys
-            print(f"[TG-DEBUG] poll_once first call: token={bool(self._token)} chat_id={bool(self._chat_id)}", file=sys.stderr, flush=True)
-
-        if self._init_retries == 4:
-            import sys
-            print(f"[TG-DEBUG] poll_once about to init: retries={self._init_retries}", file=sys.stderr, flush=True)
 
         # One-time init: clear webhook and send startup ping
         if not self._initialized:
@@ -149,7 +108,7 @@ class TelegramCommandHandler:
                 self._initialized = True
             except Exception as e:
                 logger.warning(f"Telegram init failed: {e}")
-                self._init_retries = 5  # Retry after a few more ticks
+                self._init_retries = 3  # Retry after a few more ticks
             return
 
         # Non-blocking getUpdates (timeout=0 returns immediately)
