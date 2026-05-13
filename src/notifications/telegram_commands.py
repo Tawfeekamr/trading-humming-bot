@@ -121,6 +121,10 @@ class TelegramCommandHandler:
             import sys
             print(f"[TG-DEBUG] poll_once first call: token={bool(self._token)} chat_id={bool(self._chat_id)}", file=sys.stderr, flush=True)
 
+        if self._init_retries == 4:
+            import sys
+            print(f"[TG-DEBUG] poll_once about to init: retries={self._init_retries}", file=sys.stderr, flush=True)
+
         # One-time init: clear webhook and send startup ping
         if not self._initialized:
             self._init_retries += 1
