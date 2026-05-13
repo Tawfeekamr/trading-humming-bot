@@ -27,6 +27,9 @@ class TelegramCommandHandler:
         self._app = None
         self._thread = None
 
+    _started = False
+    _start_lock = threading.Lock()
+
     def start(self):
         if not self._token or not self._chat_id:
             logger.warning(
@@ -34,6 +37,12 @@ class TelegramCommandHandler:
                 f"chat_id={'SET' if self._chat_id else 'MISSING'}"
             )
             return
+
+        with self._start_lock:
+            if TelegramCommandHandler._started:
+                logger.info("Telegram commands already running — skipping duplicate start")
+                return
+            TelegramCommandHandler._started = True
 
         logger.info(f"Telegram commands initializing with chat_id={self._chat_id}")
 
@@ -97,6 +106,11 @@ class TelegramCommandHandler:
         """Synchronous getUpdates-based polling loop."""
         last_update_id = 0
         logger.info("Telegram _poll_forever: clearing webhook...")
+        try:
+            resp = self._tg_get("deleteWebhook", {"drop_pending_updates": "true"}, timeout=10)
+            logger.info(f"Telegram webhook cleared: {resp}")
+        except Exception as e:
+            logger.warning(f"Telegram deleteWebhook failed: {e}")
 
         # Clear webhook
         try:
