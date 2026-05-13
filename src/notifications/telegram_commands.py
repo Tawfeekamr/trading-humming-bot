@@ -72,7 +72,7 @@ class TelegramCommandHandler:
             "sys.stdout.write(r.read().decode())\n"
         )
         result = subprocess.run(
-            ["python", "-c", script],
+            ["python3", "-c", script],
             capture_output=True, text=True, timeout=timeout + 10,
         )
         if result.returncode != 0 and result.stderr:
@@ -89,7 +89,7 @@ class TelegramCommandHandler:
             f"urllib.request.urlopen(req, timeout={timeout})\n"
         )
         result = subprocess.run(
-            ["python", "-c", script],
+            ["python3", "-c", script],
             capture_output=True, text=True, timeout=timeout + 10,
         )
         if result.returncode != 0 and result.stderr:

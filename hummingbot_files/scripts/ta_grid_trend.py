@@ -609,8 +609,6 @@ class TAGridTrendStrategy(StrategyV2Base):
 
     def _trend_tick(self):
         if not self._trend_enabled:
-            if self._trend_tick_count % 55 == 0:
-                self.event_log.log("trend_debug", msg="disabled", tick=self._trend_tick_count)
             return
 
         # Update trailing stops
@@ -631,12 +629,6 @@ class TAGridTrendStrategy(StrategyV2Base):
         if (self._last_price > 0
                 and self._position_manager._capital > 0
                 and self._trend_tick_count % 55 == 0):
-            self.event_log.log("trend_eval", tick=self._trend_tick_count,
-                               capital=self._position_manager._capital,
-                               price=self._last_price,
-                               candles=len(self._cached_candles) if self._cached_candles is not None else 0,
-                               can_open=self._position_manager.can_open(),
-                               halted=self._trend_breaker.halted)
             self._evaluate_trend_signals()
 
     # ── Fill Handler ──
@@ -917,15 +909,12 @@ class TAGridTrendStrategy(StrategyV2Base):
 
     def _evaluate_trend_signals(self):
         if not self._position_manager.can_open():
-            logger.info("Trend eval skip: cannot open position")
             return
         if self._trend_breaker.halted:
-            logger.info("Trend eval skip: circuit breaker halted")
             return
 
         candles = getattr(self, '_cached_candles', None)
         if candles is None or len(candles) < 200:
-            self.event_log.log("trend_eval_skip", reason="candles", count=len(candles) if candles is not None else 0)
             return
 
         score = self._trend_manager.evaluate(candles, self._last_price)
