@@ -24,10 +24,8 @@ class TelegramCommandHandler:
         self._token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
         self._chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
         self._started_at = time.time()
-        self._app = None
-        self._thread = None
-        self._loop = None
         self._aiohttp_session = None
+        self._poll_task = None
 
     _started = False
     _start_lock = threading.Lock()
@@ -49,49 +47,26 @@ class TelegramCommandHandler:
         logger.info(f"Telegram commands initializing with chat_id={self._chat_id}")
 
         try:
-            # Capture the running event loop for scheduling async HTTP from the thread
-            self._loop = asyncio.get_event_loop()
-
-            # Start raw polling in background thread
-            self._thread = threading.Thread(target=self._run, daemon=True, name="TelegramBotThread")
-            self._thread.start()
-            logger.info("Telegram command handler thread launched")
-
+            loop = asyncio.get_event_loop()
+            self._poll_task = loop.create_task(self._async_poll_forever())
+            logger.info("Telegram command handler scheduled on event loop")
         except Exception as e:
             logger.error(f"Failed to start Telegram commands: {e}", exc_info=True)
 
     def stop(self):
-        if self._app:
-            # Note: stopping a running polling from another thread is complex in PTB v20+
-            # We rely on daemon thread for clean exit if needed
-            logger.info("Telegram command handler stop requested")
+        if self._poll_task and not self._poll_task.done():
+            self._poll_task.cancel()
+        logger.info("Telegram command handler stop requested")
 
-    def _run(self):
-        """Runs the telegram polling loop directly (synchronous)."""
-        try:
-            logger.info("Telegram _run: starting synchronous polling...")
-            self._poll_forever()
-        except Exception as e:
-            logger.error(f"Telegram polling thread crashed: {e}", exc_info=True)
+    # ── Async HTTP helpers ──────────────────────────────────────────
 
     async def _get_session(self):
-        """Get or create a shared aiohttp session."""
         import aiohttp
         if self._aiohttp_session is None or self._aiohttp_session.closed:
             self._aiohttp_session = aiohttp.ClientSession()
         return self._aiohttp_session
 
-    async def _async_fetch_price(self, symbol):
-        """Fetch live price from Binance API."""
-        import aiohttp
-        session = await self._get_session()
-        url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}"
-        async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-            data = await resp.json()
-            return float(data["price"])
-
     async def _async_tg_request(self, path, params=None, data=None, timeout=35):
-        """Async HTTP request to Telegram API via aiohttp."""
         import aiohttp
         url = f"https://api.telegram.org/bot{self._token}/{path}"
         session = await self._get_session()
@@ -108,140 +83,118 @@ class TelegramCommandHandler:
             logger.warning(f"Telegram async request failed: {e}")
             return {}
 
-    def _tg_get(self, path, params=None, timeout=35):
-        """HTTP GET to Telegram API — scheduled on event loop from thread."""
-        if not self._loop:
-            logger.warning("Telegram GET skipped — no event loop")
-            return {}
-        try:
-            future = asyncio.run_coroutine_threadsafe(
-                self._async_tg_request(path, params=params, timeout=timeout),
-                self._loop,
-            )
-            return future.result(timeout=timeout + 10)
-        except Exception as e:
-            logger.warning(f"Telegram GET failed: {e}")
-            return {}
+    async def _async_fetch_price(self, symbol):
+        import aiohttp
+        session = await self._get_session()
+        url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}"
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+            data = await resp.json()
+            return float(data["price"])
 
-    def _tg_post(self, path, data, timeout=10):
-        """HTTP POST to Telegram API — scheduled on event loop from thread."""
-        if not self._loop:
-            logger.warning("Telegram POST skipped — no event loop")
-            return
-        try:
-            future = asyncio.run_coroutine_threadsafe(
-                self._async_tg_request(path, data=data, timeout=timeout),
-                self._loop,
-            )
-            return future.result(timeout=timeout + 5)
-        except Exception as e:
-            logger.warning(f"Telegram POST failed: {e}")
+    # ── Async polling loop ──────────────────────────────────────────
 
-    def _poll_forever(self):
-        """Synchronous getUpdates-based polling loop."""
-        last_update_id = 0
-        logger.info("Telegram _poll_forever: clearing webhook...")
+    async def _async_poll_forever(self):
+        """Async getUpdates-based polling loop — runs as a task on the event loop."""
         try:
-            resp = self._tg_get("deleteWebhook", {"drop_pending_updates": "true"}, timeout=10)
+            await asyncio.sleep(5)  # Let the strategy initialize first
+
+            # Clear webhook
+            logger.info("Telegram: clearing webhook...")
+            resp = await self._async_tg_request(
+                "deleteWebhook", params={"drop_pending_updates": "true"}, timeout=10,
+            )
             logger.info(f"Telegram webhook cleared: {resp}")
-        except Exception as e:
-            logger.warning(f"Telegram deleteWebhook failed: {e}")
 
-        # Send startup ping
-        try:
+            # Send startup ping
             ping_text = (
                 "📡 <b>Telegram Command Handler Online</b>\n"
                 "Commands: /status /pnl /balance /capital /price /trades /pending /fees /system /clear /help\n"
                 "Trend: /trend_status /trend_capital /trend_pnl /trend_close /trend_history"
             )
-            self._tg_post("sendMessage", {
+            await self._async_tg_request("sendMessage", data={
                 "chat_id": self._chat_id,
                 "text": ping_text,
                 "parse_mode": "HTML",
             })
             logger.info("Telegram startup ping sent")
+
+            commands = {
+                "status": self._cmd_status,
+                "pnl": self._cmd_pnl,
+                "balance": self._cmd_balance,
+                "capital": self._cmd_capital,
+                "pause": self._cmd_pause,
+                "resume": self._cmd_resume,
+                "reset": self._cmd_reset,
+                "trades": self._cmd_trades,
+                "pending": self._cmd_pending,
+                "logs": self._cmd_logs,
+                "errors": self._cmd_errors,
+                "fees": self._cmd_fees,
+                "price": self._cmd_price,
+                "system": self._cmd_server,
+                "server": self._cmd_server,
+                "clear": self._cmd_clear,
+                "help": self._cmd_help,
+                "trend_status": self._cmd_trend_status,
+                "trend_capital": self._cmd_trend_capital,
+                "trend_pnl": self._cmd_trend_pnl,
+                "trend_close": self._cmd_trend_close,
+                "trend_history": self._cmd_trend_history,
+            }
+
+            last_update_id = 0
+            logger.info("Telegram command handler online — async polling active")
+
+            # Poll loop — long-polls up to 30s, yielding to event loop between iterations
+            while True:
+                try:
+                    data = await self._async_tg_request("getUpdates", params={
+                        "offset": str(last_update_id + 1),
+                        "timeout": "30",
+                        "allowed_updates": '["message"]',
+                    })
+
+                    for update in data.get("result", []):
+                        last_update_id = update["update_id"]
+                        msg = update.get("message", {})
+                        chat_id = str(msg.get("chat", {}).get("id", ""))
+                        text = msg.get("text", "")
+
+                        if chat_id != self._chat_id or not text.startswith("/"):
+                            continue
+
+                        cmd = text.split("@")[0][1:].split()[0].lower()
+                        handler = commands.get(cmd)
+                        if not handler:
+                            continue
+
+                        await self._dispatch(handler, chat_id, msg)
+
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    logger.error(f"Telegram poll error: {e}")
+                    await asyncio.sleep(5)
+
+        except asyncio.CancelledError:
+            logger.info("Telegram polling cancelled")
         except Exception as e:
-            logger.warning(f"Telegram startup ping failed: {e}")
+            logger.error(f"Telegram polling crashed: {e}", exc_info=True)
 
-        # Build command dispatch table
-        commands = {
-            "status": self._cmd_status,
-            "pnl": self._cmd_pnl,
-            "balance": self._cmd_balance,
-            "capital": self._cmd_capital,
-            "pause": self._cmd_pause,
-            "resume": self._cmd_resume,
-            "reset": self._cmd_reset,
-            "trades": self._cmd_trades,
-            "pending": self._cmd_pending,
-            "logs": self._cmd_logs,
-            "errors": self._cmd_errors,
-            "fees": self._cmd_fees,
-            "price": self._cmd_price,
-            "system": self._cmd_server,
-            "server": self._cmd_server,
-            "clear": self._cmd_clear,
-            "help": self._cmd_help,
-            "trend_status": self._cmd_trend_status,
-            "trend_capital": self._cmd_trend_capital,
-            "trend_pnl": self._cmd_trend_pnl,
-            "trend_close": self._cmd_trend_close,
-            "trend_history": self._cmd_trend_history,
-        }
-
-        logger.info("Telegram command handler online — raw polling active")
-
-        # Poll loop
-        while True:
-            try:
-                data = self._tg_get("getUpdates", {
-                    "offset": str(last_update_id + 1),
-                    "timeout": "30",
-                    "allowed_updates": '["message"]',
-                })
-
-                for update in data.get("result", []):
-                    last_update_id = update["update_id"]
-                    msg = update.get("message", {})
-                    chat_id = str(msg.get("chat", {}).get("id", ""))
-                    text = msg.get("text", "")
-
-                    if chat_id != self._chat_id or not text.startswith("/"):
-                        continue
-
-                    cmd = text.split("@")[0][1:].split()[0].lower()
-                    handler = commands.get(cmd)
-                    if not handler:
-                        continue
-
-                    self._dispatch(handler, chat_id, msg)
-
-            except Exception as e:
-                logger.error(f"Telegram poll error: {e}")
-                time.sleep(5)
-
-    def _send_message(self, chat_id: str, text: str, parse_mode: str = ""):
-        """Send a message to Telegram chat."""
-        self._tg_post("sendMessage", {
-            "chat_id": chat_id,
-            "text": text,
-            "parse_mode": parse_mode,
-        })
-
-    def _dispatch(self, handler, chat_id: str, msg: dict):
-        """Call a command handler and send the reply text back."""
-        handler_self = self
+    async def _dispatch(self, handler, chat_id: str, msg: dict):
+        """Call a command handler (sync), capture its reply, send it async."""
+        reply_text = None
+        reply_parse_mode = ""
 
         class _MockMessage:
             def __init__(self, msg_dict, cid):
                 self.text = msg_dict.get("text", "")
                 self._chat_id = cid
             def reply_text(self, text, **kw):
-                handler_self._tg_post("sendMessage", {
-                    "chat_id": self._chat_id,
-                    "text": text,
-                    "parse_mode": kw.get("parse_mode", ""),
-                })
+                nonlocal reply_text, reply_parse_mode
+                reply_text = text
+                reply_parse_mode = kw.get("parse_mode", "")
 
         class _MockUpdate:
             def __init__(self, msg_dict, cid):
@@ -253,10 +206,14 @@ class TelegramCommandHandler:
             handler(mock_update, None)
         except Exception as e:
             logger.error(f"Telegram command handler error: {e}", exc_info=True)
-            try:
-                self._send_message(chat_id, f"⚠️ Error: {e}")
-            except Exception:
-                pass
+            reply_text = f"⚠️ Error: {e}"
+
+        if reply_text:
+            await self._async_tg_request("sendMessage", data={
+                "chat_id": chat_id,
+                "text": reply_text,
+                "parse_mode": reply_parse_mode,
+            })
 
     def _fmt_pnl(self, val):
         if val is None:
@@ -265,7 +222,6 @@ class TelegramCommandHandler:
         return f"{sign}${val:.2f}"
 
     def _require_grid(self, update):
-        """Return True if grid components are available, else send message and return False."""
         if self.journal is not None and self.state_machine is not None:
             return True
         update.message.reply_text(
@@ -619,27 +575,13 @@ class TelegramCommandHandler:
             binance_symbol = getattr(self.strategy, 'binance_symbol', 'SOLUSDT')
             display_pair = getattr(self.strategy, 'display_pair', 'SOL/USDT')
 
-            # Fetch real-time price from Binance via async HTTP
-            live_price = None
-            if self._loop:
-                try:
-                    future = asyncio.run_coroutine_threadsafe(
-                        self._async_fetch_price(binance_symbol), self._loop,
-                    )
-                    live_price = future.result(timeout=15)
-                except Exception as e:
-                    logger.warning(f"Price fetch failed: {e}")
+            # Use cached indicator price (live price fetch requires async context)
+            indicators = self.strategy.get_indicators_snapshot()
+            live_price = indicators[4] if indicators else None
 
-            if live_price is None:
-                # Fallback to cached indicator price
-                indicators = self.strategy.get_indicators_snapshot()
-                live_price = indicators[4] if indicators else None
             if live_price is None:
                 update.message.reply_text("⚠️ Could not fetch live price.")
                 return
-
-            # Get cached indicators for context
-            indicators = self.strategy.get_indicators_snapshot()
 
             if not indicators or not indicators[0]:
                 update.message.reply_text(f"💲 <b>{display_pair}</b>: ${live_price:,.2f}", parse_mode="HTML")
@@ -659,7 +601,7 @@ class TelegramCommandHandler:
             rsi_zone = "OVERBOUGHT" if rsi > 70 else "OVERSOLD" if rsi < 30 else "NEUTRAL"
 
             update.message.reply_text(
-                f"◎ <b>{display_pair} — LIVE</b>\n"
+                f"◎ <b>{display_pair}</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"💲 <b>${live_price:,.2f}</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━\n"
