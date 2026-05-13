@@ -1,9 +1,9 @@
 import os
+import asyncio
 import time
 import json
 import logging
 import threading
-import subprocess
 import urllib.parse
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
@@ -26,6 +26,8 @@ class TelegramCommandHandler:
         self._started_at = time.time()
         self._app = None
         self._thread = None
+        self._loop = None
+        self._aiohttp_session = None
 
     _started = False
     _start_lock = threading.Lock()
@@ -47,6 +49,9 @@ class TelegramCommandHandler:
         logger.info(f"Telegram commands initializing with chat_id={self._chat_id}")
 
         try:
+            # Capture the running event loop for scheduling async HTTP from the thread
+            self._loop = asyncio.get_event_loop()
+
             # Start raw polling in background thread
             self._thread = threading.Thread(target=self._run, daemon=True, name="TelegramBotThread")
             self._thread.start()
@@ -69,25 +74,66 @@ class TelegramCommandHandler:
         except Exception as e:
             logger.error(f"Telegram polling thread crashed: {e}", exc_info=True)
 
-    def _tg_get(self, path, params=None, timeout=35):
-        """HTTP GET to Telegram API via curl."""
+    async def _get_session(self):
+        """Get or create a shared aiohttp session."""
+        import aiohttp
+        if self._aiohttp_session is None or self._aiohttp_session.closed:
+            self._aiohttp_session = aiohttp.ClientSession()
+        return self._aiohttp_session
+
+    async def _async_fetch_price(self, symbol):
+        """Fetch live price from Binance API."""
+        import aiohttp
+        session = await self._get_session()
+        url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}"
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+            data = await resp.json()
+            return float(data["price"])
+
+    async def _async_tg_request(self, path, params=None, data=None, timeout=35):
+        """Async HTTP request to Telegram API via aiohttp."""
+        import aiohttp
         url = f"https://api.telegram.org/bot{self._token}/{path}"
-        if params:
-            qs = urllib.parse.urlencode(params)
-            url = f"{url}?{qs}"
+        session = await self._get_session()
         try:
-            stdout = os.popen(f"curl -sS --max-time {timeout} '{url}'").read()
-            return json.loads(stdout) if stdout else {}
+            if data:
+                async with session.post(url, data=data, timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
+                    return await resp.json()
+            else:
+                if params:
+                    url = f"{url}?{urllib.parse.urlencode(params)}"
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
+                    return await resp.json()
+        except Exception as e:
+            logger.warning(f"Telegram async request failed: {e}")
+            return {}
+
+    def _tg_get(self, path, params=None, timeout=35):
+        """HTTP GET to Telegram API — scheduled on event loop from thread."""
+        if not self._loop:
+            logger.warning("Telegram GET skipped — no event loop")
+            return {}
+        try:
+            future = asyncio.run_coroutine_threadsafe(
+                self._async_tg_request(path, params=params, timeout=timeout),
+                self._loop,
+            )
+            return future.result(timeout=timeout + 10)
         except Exception as e:
             logger.warning(f"Telegram GET failed: {e}")
             return {}
 
     def _tg_post(self, path, data, timeout=10):
-        """HTTP POST to Telegram API via curl."""
-        url = f"https://api.telegram.org/bot{self._token}/{path}"
-        encoded = urllib.parse.urlencode(data)
+        """HTTP POST to Telegram API — scheduled on event loop from thread."""
+        if not self._loop:
+            logger.warning("Telegram POST skipped — no event loop")
+            return
         try:
-            os.popen(f"curl -sS --max-time {timeout} -X POST -d '{encoded}' '{url}'").read()
+            future = asyncio.run_coroutine_threadsafe(
+                self._async_tg_request(path, data=data, timeout=timeout),
+                self._loop,
+            )
+            return future.result(timeout=timeout + 5)
         except Exception as e:
             logger.warning(f"Telegram POST failed: {e}")
 
@@ -95,13 +141,6 @@ class TelegramCommandHandler:
         """Synchronous getUpdates-based polling loop."""
         last_update_id = 0
         logger.info("Telegram _poll_forever: clearing webhook...")
-        try:
-            resp = self._tg_get("deleteWebhook", {"drop_pending_updates": "true"}, timeout=10)
-            logger.info(f"Telegram webhook cleared: {resp}")
-        except Exception as e:
-            logger.warning(f"Telegram deleteWebhook failed: {e}")
-
-        # Clear webhook
         try:
             resp = self._tg_get("deleteWebhook", {"drop_pending_updates": "true"}, timeout=10)
             logger.info(f"Telegram webhook cleared: {resp}")
@@ -580,22 +619,24 @@ class TelegramCommandHandler:
             binance_symbol = getattr(self.strategy, 'binance_symbol', 'SOLUSDT')
             display_pair = getattr(self.strategy, 'display_pair', 'SOL/USDT')
 
-            # Fetch real-time price from Binance ticker
-            script = (
-                "from binance.client import Client\n"
-                "import json, sys\n"
-                "c = Client('', '')\n"
-                f"t = c.get_symbol_ticker(symbol='{binance_symbol}')\n"
-                "sys.stdout.write(t['price'])\n"
-            )
-            result = subprocess.run(
-                ["python3", "-c", script],
-                capture_output=True, text=True, timeout=15,
-            )
-            if result.returncode != 0 or not result.stdout:
+            # Fetch real-time price from Binance via async HTTP
+            live_price = None
+            if self._loop:
+                try:
+                    future = asyncio.run_coroutine_threadsafe(
+                        self._async_fetch_price(binance_symbol), self._loop,
+                    )
+                    live_price = future.result(timeout=15)
+                except Exception as e:
+                    logger.warning(f"Price fetch failed: {e}")
+
+            if live_price is None:
+                # Fallback to cached indicator price
+                indicators = self.strategy.get_indicators_snapshot()
+                live_price = indicators[4] if indicators else None
+            if live_price is None:
                 update.message.reply_text("⚠️ Could not fetch live price.")
                 return
-            live_price = float(result.stdout.strip())
 
             # Get cached indicators for context
             indicators = self.strategy.get_indicators_snapshot()
