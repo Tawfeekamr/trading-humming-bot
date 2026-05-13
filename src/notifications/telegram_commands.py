@@ -48,6 +48,14 @@ class TelegramCommandHandler:
 
         logger.info(f"Telegram commands initializing with chat_id={self._chat_id}")
 
+        # Apply nest_asyncio to allow run_until_complete() inside a running event loop
+        try:
+            import nest_asyncio
+            nest_asyncio.apply()
+            logger.info("Telegram: nest_asyncio applied")
+        except ImportError:
+            logger.warning("Telegram: nest_asyncio not available — commands may not work")
+
     # ── Async HTTP helpers (called via run_until_complete with nest_asyncio) ──
 
     async def _get_session(self):
