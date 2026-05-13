@@ -61,18 +61,15 @@ class TelegramCommandHandler:
             logger.error(f"Telegram polling thread crashed: {e}", exc_info=True)
 
     def _tg_get(self, path, params=None, timeout=35):
-        """HTTP GET to Telegram API via subprocess to avoid event loop deadlock."""
+        """HTTP GET to Telegram API via curl subprocess to avoid event loop deadlock."""
         url = f"https://api.telegram.org/bot{self._token}/{path}"
         if params:
             qs = urllib.parse.urlencode(params)
             url = f"{url}?{qs}"
         try:
             result = subprocess.run(
-                ["python3", "-c",
-                 f"import urllib.request,json,sys\n"
-                 f"r=urllib.request.urlopen({url!r},timeout={timeout})\n"
-                 f"sys.stdout.write(r.read().decode())"],
-                capture_output=True, text=True, timeout=timeout + 15,
+                ["curl", "-sS", "--max-time", str(timeout), url],
+                capture_output=True, text=True, timeout=timeout + 10,
             )
             if result.returncode != 0 and result.stderr:
                 logger.warning(f"Telegram GET failed: {result.stderr.strip()}")
@@ -82,16 +79,14 @@ class TelegramCommandHandler:
             return {}
 
     def _tg_post(self, path, data, timeout=10):
-        """HTTP POST to Telegram API via subprocess to avoid event loop deadlock."""
+        """HTTP POST to Telegram API via curl subprocess to avoid event loop deadlock."""
         url = f"https://api.telegram.org/bot{self._token}/{path}"
         encoded = urllib.parse.urlencode(data)
         try:
             result = subprocess.run(
-                ["python3", "-c",
-                 f"import urllib.request\n"
-                 f"req=urllib.request.Request({url!r},data={encoded!r}.encode())\n"
-                 f"urllib.request.urlopen(req,timeout={timeout})"],
-                capture_output=True, text=True, timeout=timeout + 15,
+                ["curl", "-sS", "--max-time", str(timeout), "-X", "POST",
+                 "-d", encoded, url],
+                capture_output=True, text=True, timeout=timeout + 10,
             )
             if result.returncode != 0 and result.stderr:
                 logger.warning(f"Telegram POST failed: {result.stderr.strip()}")
