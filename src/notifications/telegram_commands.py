@@ -120,8 +120,9 @@ class TelegramCommandHandler:
         # One-time init: clear webhook and send startup ping
         if not self._initialized:
             self._init_retries += 1
-            if self._init_retries < 10:
+            if self._init_retries < 5:
                 return  # Wait a few ticks for the event loop to stabilize
+            logger.info(f"Telegram poll_once: initializing (retries={self._init_retries})")
             try:
                 resp = self._tg_get("deleteWebhook", params={"drop_pending_updates": "true"}, timeout=10)
                 logger.info(f"Telegram webhook cleared: {resp}")
