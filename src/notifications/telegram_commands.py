@@ -61,23 +61,42 @@ class TelegramCommandHandler:
             logger.error(f"Telegram polling thread crashed: {e}", exc_info=True)
 
     def _tg_get(self, path, params=None, timeout=35):
-        """HTTP GET to Telegram API directly."""
+        """HTTP GET to Telegram API via subprocess to avoid event loop deadlock."""
         url = f"https://api.telegram.org/bot{self._token}/{path}"
         if params:
             qs = urllib.parse.urlencode(params)
             url = f"{url}?{qs}"
-        req = urllib.request.Request(url)
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            body = resp.read().decode()
-        return json.loads(body) if body else {}
+        try:
+            result = subprocess.run(
+                ["python3", "-c",
+                 f"import urllib.request,json,sys\n"
+                 f"r=urllib.request.urlopen({url!r},timeout={timeout})\n"
+                 f"sys.stdout.write(r.read().decode())"],
+                capture_output=True, text=True, timeout=timeout + 15,
+            )
+            if result.returncode != 0 and result.stderr:
+                logger.warning(f"Telegram GET failed: {result.stderr.strip()}")
+            return json.loads(result.stdout) if result.stdout else {}
+        except subprocess.TimeoutExpired:
+            logger.warning(f"Telegram GET timeout: {path}")
+            return {}
 
     def _tg_post(self, path, data, timeout=10):
-        """HTTP POST to Telegram API directly."""
+        """HTTP POST to Telegram API via subprocess to avoid event loop deadlock."""
         url = f"https://api.telegram.org/bot{self._token}/{path}"
-        encoded = urllib.parse.urlencode(data).encode()
-        req = urllib.request.Request(url, data=encoded)
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            resp.read()
+        encoded = urllib.parse.urlencode(data)
+        try:
+            result = subprocess.run(
+                ["python3", "-c",
+                 f"import urllib.request\n"
+                 f"req=urllib.request.Request({url!r},data={encoded!r}.encode())\n"
+                 f"urllib.request.urlopen(req,timeout={timeout})"],
+                capture_output=True, text=True, timeout=timeout + 15,
+            )
+            if result.returncode != 0 and result.stderr:
+                logger.warning(f"Telegram POST failed: {result.stderr.strip()}")
+        except subprocess.TimeoutExpired:
+            logger.warning(f"Telegram POST timeout: {path}")
 
     def _poll_forever(self):
         """Synchronous getUpdates-based polling loop."""
