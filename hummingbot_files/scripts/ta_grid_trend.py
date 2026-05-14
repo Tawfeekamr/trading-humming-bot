@@ -1056,6 +1056,8 @@ class TAGridTrendStrategy(StrategyV2Base):
         indicators = self._cached_indicators
         current_rsi = indicators[1] if indicators else None
         filled_buy_levels = set(fill.grid_level for fill in self._open_buys.values())
+        filled_buy_prices = [fill.price for fill in self._open_buys.values()]
+        min_spacing = grid.buy_spacing * 0.5 if grid.buy_spacing > 0 else 0.5
 
         for level in grid.buy_levels:
             if current_rsi and current_rsi > 60:
@@ -1063,6 +1065,8 @@ class TAGridTrendStrategy(StrategyV2Base):
             if level["price"] >= current_price:
                 continue
             if level["level"] in filled_buy_levels:
+                continue
+            if any(abs(level["price"] - fp) < min_spacing for fp in filled_buy_prices):
                 continue
             order_usdt = level["price"] * level["quantity"]
             if not self.position_guard.can_place_order(
@@ -1082,28 +1086,32 @@ class TAGridTrendStrategy(StrategyV2Base):
                     side=OrderSide.BUY, price=level["price"], quantity=level["quantity"],
                 ))
 
-        sells_remaining = len(self._open_buys)
-        for level in grid.sell_levels:
+        # Place sells for each open buy at a price that guarantees profit.
+        # Uses entry_price + sell_spacing, NOT bb.mid + sell_spacing.
+        min_sell_spacing = grid.sell_spacing if grid.sell_spacing > 0 else grid.mid_price * 0.002
+        for buy in list(self._open_buys.values()):
             if current_rsi and current_rsi < 40:
                 continue
-            if level["price"] <= current_price:
+            profit_price = buy.price + min_sell_spacing
+            sell_price = max(profit_price, current_price + min_sell_spacing * 0.5)
+            sell_price = round(sell_price, 2)
+            if sell_price <= current_price:
                 continue
-            if sells_remaining <= 0:
+            if sell_price <= buy.price:
                 continue
             base_balance = self._get_base_balance()
-            if level["quantity"] > base_balance:
+            if buy.quantity > base_balance:
                 continue
-            sells_remaining -= 1
             sells_placed += 1
             client_order_id = self.sell(
                 connector_name=self.exchange, trading_pair=self.trading_pair,
-                amount=Decimal(str(level["quantity"])), order_type=OrderType.LIMIT,
-                price=Decimal(str(level["price"])),
+                amount=Decimal(str(buy.quantity)), order_type=OrderType.LIMIT,
+                price=Decimal(str(sell_price)),
             )
             if client_order_id:
                 self._grid_order_tracker.add(GridOrder(
-                    order_id=client_order_id, level=level["level"],
-                    side=OrderSide.SELL, price=level["price"], quantity=level["quantity"],
+                    order_id=client_order_id, level=buy.grid_level,
+                    side=OrderSide.SELL, price=sell_price, quantity=buy.quantity,
                 ))
 
         logger.info(f"Grid: buys={buys_placed} sells={sells_placed} | open_buys={len(self._open_buys)} unmatched={len(self._unmatched_sells)}")
