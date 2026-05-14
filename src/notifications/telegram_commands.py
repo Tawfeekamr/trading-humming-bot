@@ -130,16 +130,22 @@ class TelegramCommandHandler:
                 "allowed_updates": '["message"]',
             }, timeout=10)
 
+            if not data.get("ok"):
+                _log(f"[WARN] getUpdates returned: {data}")
+
             for update in data.get("result", []):
                 self._last_update_id = update["update_id"]
                 msg = update.get("message", {})
                 chat_id = str(msg.get("chat", {}).get("id", ""))
                 text = msg.get("text", "")
 
+                _log(f"[DEBUG] update: chat_id={chat_id} text={text[:50]}")
+
                 if chat_id != self._chat_id or not text.startswith("/"):
                     continue
 
                 cmd = text.split("@")[0][1:].split()[0].lower()
+                _log(f"[INFO] command: /{cmd}")
                 handler = self._commands.get(cmd)
                 if not handler:
                     continue
