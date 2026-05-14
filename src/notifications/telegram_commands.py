@@ -20,8 +20,10 @@ _tg_handler = logging.handlers.RotatingFileHandler(
     _log_dir / "telegram.log", maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
 )
 _tg_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+_tg_handler.setLevel(logging.DEBUG)
 logger.addHandler(_tg_handler)
-logger.propagate = True  # Also send to root (console)
+logger.setLevel(logging.INFO)  # Explicit level, immune to root logger changes
+logger.propagate = True
 
 
 class TelegramCommandHandler:
@@ -97,9 +99,6 @@ class TelegramCommandHandler:
 
         # One-time init: clear webhook and send startup ping
         if not self._initialized:
-            if self._init_retries == 0:
-                import sys
-                print("TELEGRAM poll_once first call", file=sys.stderr, flush=True)
             self._init_retries += 1
             if self._init_retries < 5:
                 return  # Wait a few ticks for the event loop to stabilize
