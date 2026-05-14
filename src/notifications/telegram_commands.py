@@ -97,6 +97,9 @@ class TelegramCommandHandler:
 
         # One-time init: clear webhook and send startup ping
         if not self._initialized:
+            if self._init_retries == 0:
+                import sys
+                print("TELEGRAM poll_once first call", file=sys.stderr, flush=True)
             self._init_retries += 1
             if self._init_retries < 5:
                 return  # Wait a few ticks for the event loop to stabilize
