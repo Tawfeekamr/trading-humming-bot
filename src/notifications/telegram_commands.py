@@ -89,10 +89,12 @@ class TelegramCommandHandler:
             self._init_retries += 1
             if self._init_retries < 5:
                 return  # Wait a few ticks for the event loop to stabilize
-            logger.info(f"Telegram poll_once: initializing (retries={self._init_retries})")
+            with open("/tmp/tg_poll.log", "a") as _f:
+                _f.write(f"init retries={self._init_retries}\n")
             try:
                 resp = self._tg_get("deleteWebhook", params={"drop_pending_updates": "true"}, timeout=10)
-                logger.info(f"Telegram webhook cleared: {resp}")
+                with open("/tmp/tg_poll.log", "a") as _f:
+                    _f.write(f"webhook resp={resp}\n")
 
                 ping_text = (
                     "📡 <b>Telegram Command Handler Online</b>\n"
@@ -104,10 +106,12 @@ class TelegramCommandHandler:
                     "text": ping_text,
                     "parse_mode": "HTML",
                 })
-                logger.info("Telegram startup ping sent")
+                with open("/tmp/tg_poll.log", "a") as _f:
+                    _f.write(f"ping sent, initialized=True\n")
                 self._initialized = True
             except Exception as e:
-                logger.warning(f"Telegram init failed: {e}")
+                with open("/tmp/tg_poll.log", "a") as _f:
+                    _f.write(f"init error: {e}\n")
                 self._init_retries = 3  # Retry after a few more ticks
             return
 
@@ -119,7 +123,12 @@ class TelegramCommandHandler:
                 "allowed_updates": '["message"]',
             }, timeout=10)
 
-            for update in data.get("result", []):
+            results = data.get("result", [])
+            if results:
+                with open("/tmp/tg_poll.log", "a") as _f:
+                    _f.write(f"got {len(results)} updates\n")
+
+            for update in results:
                 self._last_update_id = update["update_id"]
                 msg = update.get("message", {})
                 chat_id = str(msg.get("chat", {}).get("id", ""))
