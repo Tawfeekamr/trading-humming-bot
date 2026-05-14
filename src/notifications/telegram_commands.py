@@ -13,17 +13,15 @@ from src.monitoring.system_monitor import get_stats
 
 logger = logging.getLogger(__name__)
 
-# Dedicated file handler — immune to Hummingbot overriding root logger handlers
+# Direct file logging — bypasses Python logging entirely (Hummingbot overrides it)
 _log_dir = Path(os.environ.get("LOG_DIR", "logs"))
 _log_dir.mkdir(parents=True, exist_ok=True)
-_tg_handler = logging.handlers.RotatingFileHandler(
-    _log_dir / "telegram.log", maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
-)
-_tg_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
-_tg_handler.setLevel(logging.DEBUG)
-logger.addHandler(_tg_handler)
-logger.setLevel(logging.INFO)  # Explicit level, immune to root logger changes
-logger.propagate = True
+_tg_log_path = _log_dir / "telegram.log"
+
+
+def _log(msg: str):
+    with open(_tg_log_path, "a") as f:
+        f.write(f"{datetime.now():%Y-%m-%d %H:%M:%S} {msg}\n")
 
 
 class TelegramCommandHandler:
@@ -102,10 +100,10 @@ class TelegramCommandHandler:
             self._init_retries += 1
             if self._init_retries < 5:
                 return  # Wait a few ticks for the event loop to stabilize
-            logger.info(f"Telegram poll_once: initializing (retries={self._init_retries})")
+            _log(f"[INFO] Telegram poll_once: initializing (retries={self._init_retries})")
             try:
                 resp = self._tg_get("deleteWebhook", params={"drop_pending_updates": "true"}, timeout=10)
-                logger.info(f"Telegram webhook cleared: {resp}")
+                _log(f"[INFO] Telegram webhook cleared: {resp}")
 
                 ping_text = (
                     "📡 <b>Telegram Command Handler Online</b>\n"
@@ -117,10 +115,10 @@ class TelegramCommandHandler:
                     "text": ping_text,
                     "parse_mode": "HTML",
                 })
-                logger.info("Telegram startup ping sent")
+                _log("[INFO] Telegram startup ping sent")
                 self._initialized = True
             except Exception as e:
-                logger.warning(f"Telegram init failed: {e}")
+                _log(f"[WARN] Telegram init failed: {e}")
                 self._init_retries = 3  # Retry after a few more ticks
             return
 
@@ -149,7 +147,7 @@ class TelegramCommandHandler:
                 self._dispatch(handler, chat_id, msg)
 
         except Exception as e:
-            logger.error(f"Telegram poll error: {e}")
+            _log(f"[ERROR] Telegram poll error: {e}")
 
     @property
     def _commands(self):
@@ -205,7 +203,7 @@ class TelegramCommandHandler:
                     "parse_mode": mock_update.message._parse_mode,
                 })
         except Exception as e:
-            logger.error(f"Telegram command handler error: {e}", exc_info=True)
+            _log(f"[ERROR] Telegram command handler error: {e}")
             try:
                 self._tg_post("sendMessage", data={
                     "chat_id": chat_id,
