@@ -735,7 +735,7 @@ class TelegramCommandHandler:
             if len(parts) < 2:
                 update.message.reply_text(
                     f"Current trend capital: ${strategy._position_manager._capital:.2f}\n"
-                    f"Usage: /trend_capital <amount>"
+                    f"Usage: /trend_capital &lt;amount&gt;"
                 )
                 return
 
@@ -844,7 +844,7 @@ class TelegramCommandHandler:
             "/status — Grid state, mode, uptime, pending orders\n"
             "/pnl — Today / week / month / all-time P&L\n"
             f"/balance — USDT, {base_asset}, equity, and grid capital\n"
-            "/capital <amount> — Update grid capital (no redeploy)\n"
+            "/capital &lt;amount&gt; — Update grid capital (no redeploy)\n"
             f"/price — Current {display_pair} price with indicators\n"
             "/pause — Manually pause grid (cancel all orders)\n"
             "/resume — Resume grid trading\n"
@@ -857,7 +857,7 @@ class TelegramCommandHandler:
             "/errors — Recent errors and crashes\n"
             "/clear — Clear logs and grid state (keeps trade history)\n"
             "/trend_status — Trend engine status and positions\n"
-            "/trend_capital <amount> — Update trend trading capital\n"
+            "/trend_capital &lt;amount&gt; — Update trend trading capital\n"
             "/trend_pnl — Trend strategy P&L report\n"
             "/trend_close — Force close all trend positions\n"
             "/trend_history — Recent trend trade history\n"
