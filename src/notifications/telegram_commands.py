@@ -202,12 +202,17 @@ class TelegramCommandHandler:
         try:
             mock_update = _MockUpdate(msg, chat_id)
             handler(mock_update, None)
-            if mock_update.message._reply:
-                self._tg_post("sendMessage", data={
+            reply = mock_update.message._reply
+            if reply:
+                _log(f"[DEBUG] sending reply ({len(reply)} chars)")
+                result = self._tg_post("sendMessage", data={
                     "chat_id": chat_id,
-                    "text": mock_update.message._reply,
+                    "text": reply,
                     "parse_mode": mock_update.message._parse_mode,
                 })
+                _log(f"[DEBUG] sendMessage result: {result}")
+            else:
+                _log("[WARN] handler produced no reply")
         except Exception as e:
             _log(f"[ERROR] Telegram command handler error: {e}")
             try:
