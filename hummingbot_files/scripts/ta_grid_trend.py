@@ -406,15 +406,10 @@ class TAGridTrendStrategy(StrategyV2Base):
     def _force_connector_ready(self):
         try:
             time_mod.sleep(30)
-            with open("/tmp/force_ready.log", "a") as f:
-                f.write(f"tick_count={self._tick_count} ready={self.ready_to_trade}\n")
             if self._tick_count == 0:
                 self.ready_to_trade = True
-                with open("/tmp/force_ready.log", "a") as f:
-                    f.write("SET ready_to_trade=True\n")
-        except Exception as e:
-            with open("/tmp/force_ready.log", "a") as f:
-                f.write(f"EXCEPTION: {e}\n")
+        except Exception:
+            pass
 
     # ── Main Tick Loop ──
 
@@ -422,9 +417,6 @@ class TAGridTrendStrategy(StrategyV2Base):
         try:
             self._tick_count += 1
             self._trend_tick_count += 1
-            if self._tick_count <= 3:
-                with open("/tmp/on_tick.log", "a") as f:
-                    f.write(f"tick {self._tick_count} at {time_mod.time()}\n")
 
             # Poll for Telegram commands (non-blocking)
             if self._telegram_commands:

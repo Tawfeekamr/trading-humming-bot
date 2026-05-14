@@ -2,6 +2,7 @@ import os
 import time
 import json
 import logging
+import logging.handlers
 import threading
 import http.client
 import urllib.parse
@@ -11,6 +12,16 @@ from datetime import datetime, timedelta, timezone
 from src.monitoring.system_monitor import get_stats
 
 logger = logging.getLogger(__name__)
+
+# Dedicated file handler — immune to Hummingbot overriding root logger handlers
+_log_dir = Path(os.environ.get("LOG_DIR", "logs"))
+_log_dir.mkdir(parents=True, exist_ok=True)
+_tg_handler = logging.handlers.RotatingFileHandler(
+    _log_dir / "telegram.log", maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
+)
+_tg_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+logger.addHandler(_tg_handler)
+logger.propagate = True  # Also send to root (console)
 
 
 class TelegramCommandHandler:
@@ -89,12 +100,10 @@ class TelegramCommandHandler:
             self._init_retries += 1
             if self._init_retries < 5:
                 return  # Wait a few ticks for the event loop to stabilize
-            with open("/tmp/tg_poll.log", "a") as _f:
-                _f.write(f"init retries={self._init_retries}\n")
+            logger.info(f"Telegram poll_once: initializing (retries={self._init_retries})")
             try:
                 resp = self._tg_get("deleteWebhook", params={"drop_pending_updates": "true"}, timeout=10)
-                with open("/tmp/tg_poll.log", "a") as _f:
-                    _f.write(f"webhook resp={resp}\n")
+                logger.info(f"Telegram webhook cleared: {resp}")
 
                 ping_text = (
                     "📡 <b>Telegram Command Handler Online</b>\n"
@@ -106,12 +115,10 @@ class TelegramCommandHandler:
                     "text": ping_text,
                     "parse_mode": "HTML",
                 })
-                with open("/tmp/tg_poll.log", "a") as _f:
-                    _f.write(f"ping sent, initialized=True\n")
+                logger.info("Telegram startup ping sent")
                 self._initialized = True
             except Exception as e:
-                with open("/tmp/tg_poll.log", "a") as _f:
-                    _f.write(f"init error: {e}\n")
+                logger.warning(f"Telegram init failed: {e}")
                 self._init_retries = 3  # Retry after a few more ticks
             return
 
@@ -123,12 +130,7 @@ class TelegramCommandHandler:
                 "allowed_updates": '["message"]',
             }, timeout=10)
 
-            results = data.get("result", [])
-            if results:
-                with open("/tmp/tg_poll.log", "a") as _f:
-                    _f.write(f"got {len(results)} updates\n")
-
-            for update in results:
+            for update in data.get("result", []):
                 self._last_update_id = update["update_id"]
                 msg = update.get("message", {})
                 chat_id = str(msg.get("chat", {}).get("id", ""))
