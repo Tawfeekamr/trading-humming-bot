@@ -698,7 +698,7 @@ class TelegramCommandHandler:
 
             tm = strategy._trend_manager
             pm = strategy._position_manager
-            lines = ["TREND ENGINE", chr(9473) * 33]
+            lines = ["🤖 <b>TREND ENGINE</b>", "•••"]
             positions = pm.get_all_positions()
             lines.append(f"Open positions: {len(positions)}/{pm._max_positions}")
 
@@ -716,7 +716,7 @@ class TelegramCommandHandler:
                 for d in score.details:
                     lines.append(f"  +{d['points']} {d['signal']}: {d['note']}")
 
-            update.message.reply_text("\n".join(lines))
+            update.message.reply_text("\n".join(lines), parse_mode="HTML")
         except Exception as e:
             logger.error(f"Error in /trend_status: {e}")
             update.message.reply_text(f"⚠️ Error getting trend status: {e}")
@@ -775,7 +775,7 @@ class TelegramCommandHandler:
             summary = journal.summary()
             perf = journal.performance()
 
-            lines = ["TREND P&L", chr(9473) * 33]
+            lines = ["📈 <b>TREND P&L</b>", "•••"]
             lines.append(f"Total trades: {summary['total_trades']}")
             lines.append(f"Win rate: {summary['win_rate']:.1f}% ({summary['wins']}W / {summary['losses']}L)")
             lines.append(f"Total P&L: ${summary['total_pnl']:.2f}")
@@ -783,7 +783,7 @@ class TelegramCommandHandler:
             lines.append(f"Avg win: ${perf['avg_win']:.2f} | Avg loss: ${perf['avg_loss']:.2f}")
             lines.append(f"Avg duration: {perf['avg_duration']:.0f} min")
 
-            update.message.reply_text("\n".join(lines))
+            update.message.reply_text("\n".join(lines), parse_mode="HTML")
         except Exception as e:
             logger.error(f"Error in /trend_pnl: {e}")
             update.message.reply_text(f"⚠️ Error getting trend P&L: {e}")
@@ -824,12 +824,12 @@ class TelegramCommandHandler:
                 update.message.reply_text("No trend trades yet")
                 return
 
-            lines = ["TREND HISTORY", chr(9473) * 33]
+            lines = ["📜 <b>TREND HISTORY</b>", "•••"]
             for t in trades:
                 emoji = "+" if t["pnl"] >= 0 else "-"
                 lines.append(f"{emoji} {t['side']} {t['amount']:.1f}@${t['entry_price']:.2f}->${t['exit_price']:.2f} | ${t['pnl']:+.2f} ({t['exit_reason']})")
 
-            update.message.reply_text("\n".join(lines))
+            update.message.reply_text("\n".join(lines), parse_mode="HTML")
         except Exception as e:
             logger.error(f"Error in /trend_history: {e}")
             update.message.reply_text(f"⚠️ Error getting trend history: {e}")
