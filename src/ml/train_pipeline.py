@@ -44,7 +44,7 @@ def main():
         "15m": {"forward_window": 48, "trend_threshold": 0.015},   # 48 x 15m = 12h lookahead
         "1H":  {"forward_window": 12, "trend_threshold": 0.02},    # 12 x 1h  = 12h lookahead
         "4H":  {"forward_window": 6,  "trend_threshold": 0.025},   # 6 x 4h   = 24h lookahead
-        "1D":  {"forward_window": 5,  "trend_threshold": 0.03},    # 5 x 1d   = 5d  lookahead
+        "1d":  {"forward_window": 5,  "trend_threshold": 0.03},    # 5 x 1d   = 5d  lookahead
     }
 
     datasets = []
