@@ -857,17 +857,17 @@ class TAGridTrendStrategy(StrategyV2Base):
                     f"{'💚' if net_pnl >= 0 else '🔴'} <b>Trade Closed — {self.display_pair}</b>\n"
                     f"•••\n"
                     f"📈 BUY closed SELL position  |  Grid Level {grid_level}\n"
-                    f"⏱ Duration: {duration_min} min\n"
-                    f"🔵 Entry (SELL): ${entry_price:,.2f}\n"
-                    f"🔵 Exit (BUY):  ${exit_price:,.2f}\n"  # noqa: F821 - price from scope
-                    f"📦 Qty: {quantity} {self.base_asset}\n"
+                    f"⏱ <b>Dur:</b> {duration_min}m\n"
+                    f"🔵 <b>In:</b>  ${entry_price:,.2f}\n"
+                    f"⚪️ <b>Out:</b> ${exit_price:,.2f}\n"  # noqa: F821 - price from scope
+                    f"📦 <b>Size:</b> {quantity} {self.base_asset}\n"
                     f"•••\n"
-                    f"💰 Gross PnL: {pnl_sign}${gross_pnl:.2f}\n"
-                    f"💸 Fee: -${total_fee:.2f}\n"
-                    f"<b>📊 Net PnL: {pnl_sign}${net_pnl:.2f}</b>\n"
+                    f"💰 <b>Gross:</b> {pnl_sign}${gross_pnl:.2f}\n"
+                    f"💸 <b>Fee:</b> -${total_fee:.2f}\n"
+                    f"<b>📊 NET: {pnl_sign}${net_pnl:.2f}</b>\n"
                     f"•••\n"
-                    f"🏦 Equity: ${equity:,.2f}  |  Exposure: {exposure_pct:.0f}%\n"
-                    f"🌐 Mode: {self.env.upper()}"
+                    f"🏦 <b>Eq:</b> ${equity:,.2f}  |  <b>Exp:</b> {exposure_pct:.0f}%\n"
+                    f"⚙️ <b>Env:</b> {self.env.upper()}"
                 )
                 try:
                     loop = asyncio.get_event_loop()
@@ -889,11 +889,11 @@ class TAGridTrendStrategy(StrategyV2Base):
                 buy_msg = (
                     f"📈 <b>BUY Filled — {self.display_pair}</b>\n"
                     f"•••\n"
-                    f"💵 Price: ${price:,.2f}\n"
-                    f"📦 Qty: {quantity} {self.base_asset}\n"
+                    f"💵 <b>Price:</b> ${price:,.2f}\n"
+                    f"📦 <b>Size:</b> {quantity} {self.base_asset}\n"
                     f"📊 Level {grid_level}  |  RSI: {rsi_val:.1f}\n"
-                    f"🏦 Equity: ${equity:,.2f}  |  Exposure: {exposure_pct:.0f}%\n"
-                    f"🌐 Mode: {self.env.upper()}"
+                    f"🏦 <b>Eq:</b> ${equity:,.2f}  |  <b>Exp:</b> {exposure_pct:.0f}%\n"
+                    f"⚙️ <b>Env:</b> {self.env.upper()}"
                 )
                 try:
                     loop = asyncio.get_event_loop()
@@ -937,17 +937,17 @@ class TAGridTrendStrategy(StrategyV2Base):
                     f"{'💚' if net_pnl >= 0 else '🔴'} <b>Trade Closed — {self.display_pair}</b>\n"
                     f"•••\n"
                     f"📉 SELL  |  Grid Level {grid_level}\n"
-                    f"⏱ Duration: {duration_min} min\n"
-                    f"🔵 Entry: ${entry_price:,.2f}\n"
-                    f"🔵 Exit:  ${price:,.2f}\n"
-                    f"📦 Qty: {quantity} {self.base_asset}\n"
+                    f"⏱ <b>Dur:</b> {duration_min}m\n"
+                    f"🔵 <b>In:</b> ${entry_price:,.2f}\n"
+                    f"⚪️ <b>Out:</b> ${price:,.2f}\n"
+                    f"📦 <b>Size:</b> {quantity} {self.base_asset}\n"
                     f"•••\n"
-                    f"💰 Gross PnL: {pnl_sign}${gross_pnl:.2f}\n"
-                    f"💸 Fee: -${total_fee:.2f}\n"
-                    f"<b>📊 Net PnL: {pnl_sign}${net_pnl:.2f}</b>\n"
+                    f"💰 <b>Gross:</b> {pnl_sign}${gross_pnl:.2f}\n"
+                    f"💸 <b>Fee:</b> -${total_fee:.2f}\n"
+                    f"<b>📊 NET: {pnl_sign}${net_pnl:.2f}</b>\n"
                     f"•••\n"
-                    f"🏦 Equity: ${equity:,.2f}  |  Exposure: {exposure_pct:.0f}%\n"
-                    f"🌐 Mode: {self.env.upper()}"
+                    f"🏦 <b>Eq:</b> ${equity:,.2f}  |  <b>Exp:</b> {exposure_pct:.0f}%\n"
+                    f"⚙️ <b>Env:</b> {self.env.upper()}"
                 )
             else:
                 self._unmatched_sells[order_id] = FillRecord(
@@ -965,11 +965,11 @@ class TAGridTrendStrategy(StrategyV2Base):
                     f"🟡 <b>SELL Filled (buffered) — {self.display_pair}</b>\n"
                     f"•••\n"
                     f"📉 SELL  |  Grid Level {grid_level}\n"
-                    f"💵 Price: ${price:,.2f}\n"
-                    f"📦 Qty: {quantity} {self.base_asset}\n"
+                    f"💵 <b>Price:</b> ${price:,.2f}\n"
+                    f"📦 <b>Size:</b> {quantity} {self.base_asset}\n"
                     f"🔄 Buffered sells: {len(self._unmatched_sells)}\n"
-                    f"🏦 Equity: ${equity:,.2f}\n"
-                    f"🌐 Mode: {self.env.upper()}"
+                    f"🏦 <b>Eq:</b> ${equity:,.2f}\n"
+                    f"⚙️ <b>Env:</b> {self.env.upper()}"
                 )
 
             try:
@@ -1263,9 +1263,9 @@ class TAGridTrendStrategy(StrategyV2Base):
                 f"📆 Net Week:  {fmt(total_net_week)}\n"
                 f"🗓 Net Month: {fmt(total_net_month)}\n"
                 f"•••\n"
-                f"🏦 Equity: ${equity:,.2f} ({growth_pct:+.1f}% vs base)\n"
+                f"🏦 <b>Eq:</b> ${equity:,.2f} ({growth_pct:+.1f}% vs base)\n"
                 f"{'🤖 ML: ' + self._regime_name() + f' ({self._ml_confidence*100:.0f}%)' + chr(10) if self._ml_classifier else ''}"
-                f"🌐 Mode: {self.env.upper()}"
+                f"⚙️ <b>Env:</b> {self.env.upper()}"
             )
 
             try:
@@ -1292,38 +1292,38 @@ class TAGridTrendStrategy(StrategyV2Base):
             msg = (
                 f"🟢 <b>Grid ACTIVATED — {self.display_pair}</b>\n"
                 f"•••\n"
-                f"💵 Price: ${price:,.2f}\n"
-                f"📐 Range: ${bb.lower:,.0f} → ${bb.upper:,.0f}\n"
-                f"📏 Spacing: ${spacing:,.2f}\n"
+                f"💵 <b>Price:</b> ${price:,.2f}\n"
+                f"📐 <b>Range:</b> ${bb.lower:,.0f} → ${bb.upper:,.0f}\n"
+                f"📏 <b>Space:</b> ${spacing:,.2f}\n"
                 f"📊 RSI: {rsi:.1f}  |  EMA200: ${ema:,.0f}\n"
                 f"{'🤖 ' + ml_line + chr(10) if ml_line else ''}"
-                f"⚠️ Trigger: {trigger_reason}"
+                f"⚠️ <b>Why:</b> {trigger_reason}"
             )
         elif new_state == GridState.PAUSED:
             msg = (
                 f"⏸️ <b>Grid PAUSED — {self.display_pair}</b>\n"
                 f"•••\n"
-                f"💵 Price: ${price:,.2f}\n"
+                f"💵 <b>Price:</b> ${price:,.2f}\n"
                 f"📊 RSI: {rsi:.1f}  |  EMA200: ${ema:,.0f}\n"
                 f"{'🤖 ' + ml_line + chr(10) if ml_line else ''}"
-                f"⚠️ Trigger: {trigger_reason}\n"
+                f"⚠️ <b>Why:</b> {trigger_reason}\n"
                 f"💤 Holding USDT until re-entry signal."
             )
         elif new_state == GridState.REACTIVATING:
             msg = (
                 f"🔄 <b>Grid REACTIVATING — {self.display_pair}</b>\n"
                 f"•••\n"
-                f"💵 Price: ${price:,.2f}\n"
-                f"📐 New range: ${bb.lower:,.0f} → ${bb.upper:,.0f}\n"
+                f"💵 <b>Price:</b> ${price:,.2f}\n"
+                f"📐 <b>Range:</b> ${bb.lower:,.0f} → ${bb.upper:,.0f}\n"
                 f"📊 RSI: {rsi:.1f}  |  EMA200: ${ema:,.0f}\n"
                 f"{'🤖 ' + ml_line + chr(10) if ml_line else ''}"
-                f"⚠️ Trigger: {trigger_reason}"
+                f"⚠️ <b>Why:</b> {trigger_reason}"
             )
         elif new_state == GridState.DANGER:
             msg = (
                 f"🔴 <b>Grid DANGER MODE — {self.display_pair}</b>\n"
                 f"•••\n"
-                f"💵 Price: ${price:,.2f}\n"
+                f"💵 <b>Price:</b> ${price:,.2f}\n"
                 f"🤖 ML: DANGER ({self._ml_confidence*100:.0f}%)\n"
                 f"⚠️ Both engines paused — market whipsaw detected.\n"
                 f"💤 Holding all positions until regime clears."

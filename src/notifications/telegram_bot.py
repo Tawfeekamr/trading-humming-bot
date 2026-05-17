@@ -56,8 +56,8 @@ class TelegramBot:
         await self.send(
             f"🟢 <b>Grid Bot STARTED</b>\n"
             f"•••\n"
-            f"🌐 Mode: {env.upper()}\n"
-            f"💰 Capital: ${capital:,.0f} USDT\n"
+            f"⚙️ <b>Env:</b> {env.upper()}\n"
+            f"💰 <b>Cap:</b> ${capital:,.0f} USDT\n"
             f"📊 Pair: {display_pair}\n"
             f"⏰ Time: {self._now()} UTC"
         )
@@ -66,7 +66,7 @@ class TelegramBot:
         await self.send(
             f"🔴 <b>Grid Bot STOPPED</b>\n"
             f"•••\n"
-            f"⚠️ Reason: {reason}\n"
+            f"⚠️ <b>Why:</b> {reason}\n"
             f"⏰ Time: {self._now()} UTC"
         )
 

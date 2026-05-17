@@ -928,8 +928,8 @@ class TAGridSOLUSDT(StrategyV2Base):
                 f"•••\n"
                 f"📆 Week:  {fmt(sw['net_pnl'])}\n"
                 f"🗓 Month: {fmt(sm['net_pnl'])}\n"
-                f"🏦 Equity: ${equity:,.2f} ({growth_pct:+.1f}% vs base)\n"
-                f"🌐 Mode: {self.env.upper()}"
+                f"🏦 <b>Eq:</b> ${equity:,.2f} ({growth_pct:+.1f}% vs base)\n"
+                f"⚙️ <b>Env:</b> {self.env.upper()}"
             )
 
             try:
@@ -960,27 +960,27 @@ class TAGridSOLUSDT(StrategyV2Base):
             msg = (
                 f"🟢 <b>Grid ACTIVATED — {self.display_pair}</b>\n"
                 f"•••\n"
-                f"💵 Price: ${price:,.2f}\n"
-                f"📐 Range: ${bb.lower:,.0f} → ${bb.upper:,.0f}\n"
-                f"📏 Spacing: ${spacing:,.2f}\n"
+                f"💵 <b>Price:</b> ${price:,.2f}\n"
+                f"📐 <b>Range:</b> ${bb.lower:,.0f} → ${bb.upper:,.0f}\n"
+                f"📏 <b>Space:</b> ${spacing:,.2f}\n"
                 f"📊 RSI: {rsi:.1f}  |  EMA200: ${ema:,.0f}\n"
-                f"⚠️ Trigger: {trigger_reason}"
+                f"⚠️ <b>Why:</b> {trigger_reason}"
             )
         elif new_state == GridState.PAUSED:
             msg = (
                 f"⏸️ <b>Grid PAUSED — {self.display_pair}</b>\n"
                 f"•••\n"
-                f"💵 Price: ${price:,.2f}\n"
+                f"💵 <b>Price:</b> ${price:,.2f}\n"
                 f"📊 RSI: {rsi:.1f}  |  EMA200: ${ema:,.0f}\n"
-                f"⚠️ Trigger: {trigger_reason}\n"
+                f"⚠️ <b>Why:</b> {trigger_reason}\n"
                 f"💤 Holding USDT until re-entry signal."
             )
         elif new_state == GridState.REACTIVATING:
             msg = (
                 f"🔄 <b>Grid REACTIVATING — {self.display_pair}</b>\n"
                 f"•••\n"
-                f"💵 Price: ${price:,.2f}\n"
-                f"📐 New range: ${bb.lower:,.0f} → ${bb.upper:,.0f}\n"
+                f"💵 <b>Price:</b> ${price:,.2f}\n"
+                f"📐 <b>Range:</b> ${bb.lower:,.0f} → ${bb.upper:,.0f}\n"
                 f"📊 RSI: {rsi:.1f}  |  EMA200: ${ema:,.0f}\n"
                 f"⚠️ Trigger: {trigger_reason}"
             )
@@ -1158,18 +1158,18 @@ class TAGridSOLUSDT(StrategyV2Base):
                     f"{'💚' if net_pnl >= 0 else '🔴'} <b>Trade Closed (SELL-first) — {self.display_pair}</b>\n"
                     f"•••\n"
                     f"📈 BUY closed SELL position  |  Grid Level {grid_level}\n"
-                    f"⏱ Duration:    {duration_min} min\n"
-                    f"🔵 Entry (SELL): ${entry_price:,.2f}\n"
-                    f"🔵 Exit (BUY):  ${exit_price:,.2f}\n"
-                    f"📦 Qty:         {quantity} {self.base_asset}\n"
+                    f"⏱ <b>Dur:</b> {duration_min}m\n"
+                    f"🔵 <b>In:</b>  ${entry_price:,.2f}\n"
+                    f"⚪️ <b>Out:</b> ${exit_price:,.2f}\n"
+                    f"📦 <b>Size:</b> {quantity} {self.base_asset}\n"
                     f"•••\n"
-                    f"💰 Gross PnL:   {pnl_sign}${gross_pnl:.2f}\n"
-                    f"💸 Fee:         -${total_fee:.2f}\n"
-                    f"<b>📊 Net PnL:    {pnl_sign}${net_pnl:.2f}</b>\n"
+                    f"💰 <b>Gross:</b> {pnl_sign}${gross_pnl:.2f}\n"
+                    f"💸 <b>Fee:</b> -${total_fee:.2f}\n"
+                    f"<b>📊 NET: {pnl_sign}${net_pnl:.2f}</b>\n"
                     f"•••\n"
-                    f"🏦 Equity: ${equity:,.2f}  |  Exposure: {exposure_pct:.0f}%\n"
-                    f"Grid: {grid_state_val}  |  Pending: {pending} orders\n"
-                    f"🌐 Mode: {self.env.upper()}"
+                    f"🏦 <b>Eq:</b> ${equity:,.2f}  |  <b>Exp:</b> {exposure_pct:.0f}%\n"
+                    f"Grid: {grid_state_val}  |  Pending: {pending}\n"
+                    f"⚙️ <b>Env:</b> {self.env.upper()}"
                 )
                 try:
                     loop = asyncio.get_event_loop()
@@ -1207,13 +1207,13 @@ class TAGridSOLUSDT(StrategyV2Base):
                 buy_msg = (
                     f"📈 <b>BUY Filled — {self.display_pair}</b>\n"
                     f"•••\n"
-                    f"💵 Price: ${price:,.2f}\n"
-                    f"📦 Qty: {quantity} {self.base_asset}\n"
+                    f"💵 <b>Price:</b> ${price:,.2f}\n"
+                    f"📦 <b>Size:</b> {quantity} {self.base_asset}\n"
                     f"📊 Level {grid_level}  |  RSI: {rsi_val:.1f}\n"
-                    f"📏 Spacing: ${self._active_buy_spacing:,.2f}\n"
-                    f"💸 Fee: -${fee_est:.2f}\n"
-                    f"🏦 Equity: ${equity:,.2f}  |  Exposure: {exposure_pct:.0f}%\n"
-                    f"🌐 Mode: {self.env.upper()}"
+                    f"📏 <b>Space:</b> ${self._active_buy_spacing:,.2f}\n"
+                    f"💸 <b>Fee:</b> -${fee_est:.2f}\n"
+                    f"🏦 <b>Eq:</b> ${equity:,.2f}  |  <b>Exp:</b> {exposure_pct:.0f}%\n"
+                    f"⚙️ <b>Env:</b> {self.env.upper()}"
                 )
                 try:
                     loop = asyncio.get_event_loop()
@@ -1303,21 +1303,21 @@ class TAGridSOLUSDT(StrategyV2Base):
                     f"{'💚' if net_pnl >= 0 else '🔴'} <b>Trade Closed — {self.display_pair}</b>\n"
                     f"•••\n"
                     f"📉 SELL  |  Grid Level {grid_level}\n"
-                    f"⏱ Duration:    {duration_min} min\n"
-                    f"🔵 Entry:      ${entry_price:,.2f}\n"
-                    f"🔵 Exit:       ${price:,.2f}\n"
-                    f"📦 Qty:        {quantity} {self.base_asset}\n"
+                    f"⏱ <b>Dur:</b> {duration_min}m\n"
+                    f"🔵 <b>In:</b> ${entry_price:,.2f}\n"
+                    f"⚪️ <b>Out:</b> ${price:,.2f}\n"
+                    f"📦 <b>Size:</b> {quantity} {self.base_asset}\n"
                     f"•••\n"
-                    f"💰 Gross PnL:  {pnl_sign}${gross_pnl:.2f}\n"
-                    f"💸 Fee:        -${total_fee:.2f}\n"
-                    f"<b>📊 Net PnL:   {pnl_sign}${net_pnl:.2f}</b>\n"
+                    f"💰 <b>Gross:</b> {pnl_sign}${gross_pnl:.2f}\n"
+                    f"💸 <b>Fee:</b> -${total_fee:.2f}\n"
+                    f"<b>📊 NET: {pnl_sign}${net_pnl:.2f}</b>\n"
                     f"•••\n"
                     f"📉 RSI: {entry_rsi:.1f} → {rsi_val:.1f}\n"
                     f"📐 BB: ${entry_bb_lower:,.2f} → ${bb_upper:,.2f}\n"
-                    f"📏 ATR: ${atr_val:,.2f}  |  Spacing: ${self._active_sell_spacing:,.2f}\n"
-                    f"🏦 Equity: ${equity:,.2f}  |  Exposure: {exposure_pct:.0f}%\n"
-                    f"Grid: {grid_state_val}  |  Pending: {pending} orders\n"
-                    f"🌐 Mode: {self.env.upper()}"
+                    f"📏 ATR: ${atr_val:,.2f}  |  <b>Space:</b> ${self._active_sell_spacing:,.2f}\n"
+                    f"🏦 <b>Eq:</b> ${equity:,.2f}  |  <b>Exp:</b> {exposure_pct:.0f}%\n"
+                    f"Grid: {grid_state_val}  |  Pending: {pending}\n"
+                    f"⚙️ <b>Env:</b> {self.env.upper()}"
                 )
             else:
                 # No open buy to match — buffer as unmatched sell
@@ -1353,13 +1353,13 @@ class TAGridSOLUSDT(StrategyV2Base):
                     f"🟡 <b>SELL Filled (buffered, awaiting BUY match) — {self.display_pair}</b>\n"
                     f"•••\n"
                     f"📉 SELL  |  Grid Level {grid_level}\n"
-                    f"💵 Price: ${price:,.2f}\n"
-                    f"📦 Qty: {quantity} {self.base_asset}\n"
-                    f"💸 Fee: -${fee:.2f}\n"
+                    f"💵 <b>Price:</b> ${price:,.2f}\n"
+                    f"📦 <b>Size:</b> {quantity} {self.base_asset}\n"
+                    f"💸 <b>Fee:</b> -${fee:.2f}\n"
                     f"🔄 Buffered sells awaiting match: {len(self._unmatched_sells)}\n"
                     f"•••\n"
-                    f"🏦 Equity: ${equity:,.2f}  |  Exposure: {exposure_pct:.0f}%\n"
-                    f"🌐 Mode: {self.env.upper()}"
+                    f"🏦 <b>Eq:</b> ${equity:,.2f}  |  <b>Exp:</b> {exposure_pct:.0f}%\n"
+                    f"⚙️ <b>Env:</b> {self.env.upper()}"
                 )
             try:
                 loop = asyncio.get_event_loop()

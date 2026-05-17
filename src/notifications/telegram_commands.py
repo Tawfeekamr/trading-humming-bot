@@ -264,15 +264,15 @@ class TelegramCommandHandler:
                 f"•••\n"
                 f"Grid: <b>{state}</b>\n"
                 f"Mode: {mode}\n"
-                f"Circuit Breaker: {cb_status}\n"
-                f"⏱ Uptime: {hours}h {minutes}m {secs}s\n"
+                f"CB: {cb_status}\n"
+                f"⏱ <b>Up:</b> {hours}h {minutes}m {secs}s\n"
                 f"•••\n"
                 f"📐 Grid: {levels} buy + {levels} sell levels\n"
-                f"📏 Spacing: ${spacing_buy:.0f} (buy) / ${spacing_sell:.0f} (sell)\n"
-                f"📋 Pending orders: {pending}\n"
+                f"📏 <b>Space:</b> ${spacing_buy:.0f}/${spacing_sell:.0f}\n"
+                f"📋 <b>Pending:</b> {pending}\n"
                 f"•••\n"
-                f"💰 Base capital: ${base_capital:,.0f}\n"
-                f"📈 Compound: ${compound:,.2f} ({growth_pct:+.1f}%)",
+                f"💰 <b>Base:</b> ${base_capital:,.0f}\n"
+                f"📈 <b>Comp:</b> ${compound:,.2f} ({growth_pct:+.1f}%)",
                 parse_mode="HTML"
             )
         except Exception as e:
@@ -327,11 +327,11 @@ class TelegramCommandHandler:
                 f"💵 USDT: ${usdt:,.2f}\n"
                 f"◎ {base_asset}:  {base_bal:.4f} (${base_value:,.2f})\n"
                 f"•••\n"
-                f"📊 Equity: ${equity:,.2f}\n"
-                f"Mode: {mode}\n"
+                f"📊 <b>Eq:</b> ${equity:,.2f}\n"
+                f"⚙️ <b>Env:</b> {mode}\n"
                 f"•••\n"
-                f"📐 Grid capital: ${compound:,.2f} ({growth_pct:+.1f}%)\n"
-                f"📏 Base capital: ${base_cap:,.0f}\n"
+                f"📐 <b>Grid:</b> ${compound:,.2f} ({growth_pct:+.1f}%)\n"
+                f"📏 <b>Base:</b> ${base_cap:,.0f}\n"
                 f"💡 Change: /capital &lt;amount&gt;",
                 parse_mode="HTML"
             )
