@@ -9,6 +9,7 @@ on:
 env:
   PYTHON_VERSION: "3.12"
   AWS_REGION: "ap-northeast-1"
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   test:
@@ -48,7 +49,7 @@ jobs:
             --document-name "AWS-RunShellScript" \
             --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
             --region "${{ env.AWS_REGION }}" \
-            --parameters commands='["cd /home/ec2-user/trading-humming-bot && git pull origin main 2>&1","cd /home/ec2-user/trading-humming-bot && mkdir -p data logs","cd /home/ec2-user/trading-humming-bot && docker compose down --remove-orphans 2>&1 || true","cd /home/ec2-user/trading-humming-bot && docker compose up -d --build 2>&1","docker image prune -af --filter until=24h 2>&1 || true"]' \
+            --parameters commands='["cd /home/ec2-user/trading-humming-bot && git pull origin main 2>&1","cd /home/ec2-user/trading-humming-bot && mkdir -p data logs models","cd /home/ec2-user/trading-humming-bot && docker compose down --remove-orphans 2>&1 || true","cd /home/ec2-user/trading-humming-bot && docker compose up -d --build 2>&1","docker image prune -af --filter until=24h 2>&1 || true"]' \
             --timeout-seconds 600 \
             --comment "Deploying via GitHub Actions" \
             --query "Command.CommandId" \
