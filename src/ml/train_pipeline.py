@@ -40,11 +40,17 @@ def load_real_data(symbol: str = "SOLUSDT", intervals: list[str] = None, candles
 
 def main():
     print("Fetching real SOL/USDT market data from Binance...")
-    print(f"  Intervals: 1h, 4h (1000 candles each)")
-    df_1h = load_real_data("SOLUSDT", intervals=["1h"], candles_per_interval=1000)
-    df_4h = load_real_data("SOLUSDT", intervals=["4h"], candles_per_interval=1000)
+    interval_configs = {
+        "15m": {"forward_window": 48, "trend_threshold": 0.015},   # 48 x 15m = 12h lookahead
+        "1H":  {"forward_window": 12, "trend_threshold": 0.02},    # 12 x 1h  = 12h lookahead
+        "4H":  {"forward_window": 6,  "trend_threshold": 0.025},   # 6 x 4h   = 24h lookahead
+        "1d":  {"forward_window": 5,  "trend_threshold": 0.03},    # 5 x 1d   = 5d  lookahead
+    }
 
-    datasets = [("1H", df_1h), ("4H", df_4h)]
+    datasets = []
+    for interval, cfg in interval_configs.items():
+        df = load_real_data("SOLUSDT", intervals=[interval], candles_per_interval=1000)
+        datasets.append((interval, cfg, df))
 
     feature_cols = [
         'returns', 'volatility_14', 'volatility_30', 'normalized_atr',
@@ -53,13 +59,14 @@ def main():
 
     all_X_train, all_y_train, all_X_test, all_y_test = [], [], [], []
 
-    for name, df in datasets:
+    for name, cfg, df in datasets:
         print(f"\n--- Processing {name} data ({len(df)} candles) ---")
         df_features = calculate_technical_features(df)
         print(f"  After feature engineering: {len(df_features)} rows")
 
-        forward_window = 12 if name == "1H" else 6
-        df_labeled = generate_regime_labels(df_features, forward_window=forward_window, trend_threshold=0.02)
+        df_labeled = generate_regime_labels(
+            df_features, forward_window=cfg["forward_window"], trend_threshold=cfg["trend_threshold"]
+        )
         print(f"  After labeling: {len(df_labeled)} rows")
         print(f"  Label distribution: {df_labeled['regime_label'].value_counts().to_dict()}")
 
