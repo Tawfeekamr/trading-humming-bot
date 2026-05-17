@@ -22,8 +22,11 @@ RUN mkdir -p /home/hummingbot/conf/scripts
 COPY config/ta_grid_btcusdt_conf.yml /home/hummingbot/conf/scripts/ta_grid_btcusdt.yml
 COPY hummingbot_files/conf/scripts/ta_grid_trend_conf.yml /home/hummingbot/conf/scripts/ta_grid_trend_conf.yml
 
-# Ensure data/logs dirs exist
-RUN mkdir -p /home/hummingbot/data /home/hummingbot/logs
+# Ensure data/logs/models dirs exist
+RUN mkdir -p /home/hummingbot/data /home/hummingbot/logs /home/hummingbot/models
+
+# Copy pre-trained ML model
+COPY models/ /home/hummingbot/models/
 
 # Copy entrypoint script
 COPY docker-entrypoint.sh /home/hummingbot/docker-entrypoint.sh

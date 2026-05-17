@@ -26,5 +26,6 @@ services:
     volumes:
       - ./data:/home/hummingbot/data
       - ./logs:/home/hummingbot/logs
+      - ./models:/home/hummingbot/models
       - ./.env:/home/hummingbot/.env
       - ./config:/home/hummingbot/config:ro
