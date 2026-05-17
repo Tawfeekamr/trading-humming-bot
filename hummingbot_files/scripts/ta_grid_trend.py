@@ -1022,7 +1022,7 @@ class TAGridTrendStrategy(StrategyV2Base):
             if self._ml_regime == 2:  # Danger regime — no trend entries
                 return
             if self._ml_confidence < 0.5:
-            return
+                return
 
         candles = getattr(self, '_cached_candles', None)
         if candles is None or len(candles) < 200:
@@ -1184,6 +1184,9 @@ class TAGridTrendStrategy(StrategyV2Base):
         self._grid_order_tracker.cancel_all()
         self._grid_order_tracker.clear_history()
 
+    def _regime_name(self) -> str:
+        return {0: 'RANGING', 1: 'TRENDING', 2: 'DANGER'}.get(self._ml_regime, 'UNKNOWN')
+
     def _determine_trigger_reason(self, prev_state, new_state, price, rsi, ema_200, bb) -> str:
         if new_state == GridState.PAUSED:
             if rsi > self.rsi_overbought:
@@ -1264,7 +1267,7 @@ class TAGridTrendStrategy(StrategyV2Base):
                 f"🗓 Net Month: {fmt(total_net_month)}\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"🏦 Equity: ${equity:,.2f} ({growth_pct:+.1f}% vs base)\n"
-                f"{'🤖 ML: ' + {0: 'RANGING', 1: 'TRENDING', 2: 'DANGER'}.get(self._ml_regime, '?') + f' ({self._ml_confidence*100:.0f}%)' + chr(10) if self._ml_classifier else ''}"
+                f"{'🤖 ML: ' + self._regime_name() + f' ({self._ml_confidence*100:.0f}%)' + chr(10) if self._ml_classifier else ''}"
                 f"🌐 Mode: {self.env.upper()}"
             )
 
@@ -1286,7 +1289,7 @@ class TAGridTrendStrategy(StrategyV2Base):
         self._last_state_alert_time[state_key] = now
 
         spacing = actual_spacing if actual_spacing > 0 else (atr * self.atr_multiplier if atr else 0)
-        ml_line = f"🤖 ML: {{0: 'RANGING', 1: 'TRENDING', 2: 'DANGER'}.get(self._ml_regime, '?')} ({self._ml_confidence*100:.0f}%)" if self._ml_classifier else ""
+        ml_line = f"🤖 ML: {self._regime_name()} ({self._ml_confidence*100:.0f}%)" if self._ml_classifier else ""
 
         if new_state == GridState.ACTIVE:
             msg = (
