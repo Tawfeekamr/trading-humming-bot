@@ -12,64 +12,92 @@ from src.data.feature_engineering import calculate_technical_features
 from src.data.label_generation import generate_regime_labels
 from src.ml.regime_classifier import RegimeClassifier
 
-def load_dummy_data():
-    """Generates dummy OHLCV data for testing the pipeline."""
-    import numpy as np
-    dates = pd.date_range(start='2023-01-01', periods=1000, freq='1h')
-    np.random.seed(42)
-    close = np.random.randn(1000).cumsum() + 100
-    wicks_up = np.random.rand(1000) * 2
-    wicks_down = np.random.rand(1000) * 2
-    df = pd.DataFrame({
-        'open': close + np.random.randn(1000) * 0.5,
-        'high': close + wicks_up,
-        'low': close - wicks_down,
-        'close': close,
-        'volume': np.random.randint(100, 1000, size=1000)
-    }, index=dates)
-    # Guarantee valid OHLCV: high >= max(open,close), low <= min(open,close)
-    df['high'] = df[['open', 'close', 'high']].max(axis=1)
-    df['low'] = df[['open', 'close', 'low']].min(axis=1)
-    return df
+
+def load_real_data(symbol: str = "SOLUSDT", intervals: list[str] = None, candles_per_interval: int = 1000):
+    """Fetches real OHLCV data from Binance public API across multiple timeframes."""
+    from src.data.candle_feed import CandleFeed
+
+    if intervals is None:
+        intervals = ["1h"]
+
+    frames = []
+    for interval in intervals:
+        try:
+            feed = CandleFeed(symbol=symbol, interval=interval)
+            df = feed.fetch_candles(limit=candles_per_interval)
+            if not df.empty:
+                df = df.astype(float)
+                frames.append(df)
+                print(f"  {interval}: {len(df)} candles ({df.index[0]} → {df.index[-1]})")
+        except Exception as e:
+            print(f"  {interval}: FAILED - {e}")
+
+    if not frames:
+        raise RuntimeError("No candle data fetched from any interval")
+
+    return pd.concat(frames).drop_duplicates()
+
 
 def main():
-    print("Loading data...")
-    # In a real scenario, this loads from a database or CSV
-    df = load_dummy_data()
-    
-    print("Engineering features...")
-    df_features = calculate_technical_features(df)
-    
-    print("Generating labels...")
-    df_labeled = generate_regime_labels(df_features, forward_window=12, trend_threshold=0.015)
-    
-    # Define features to use
+    print("Fetching real SOL/USDT market data from Binance...")
+    print(f"  Intervals: 1h, 4h (1000 candles each)")
+    df_1h = load_real_data("SOLUSDT", intervals=["1h"], candles_per_interval=1000)
+    df_4h = load_real_data("SOLUSDT", intervals=["4h"], candles_per_interval=1000)
+
+    datasets = [("1H", df_1h), ("4H", df_4h)]
+
     feature_cols = [
         'returns', 'volatility_14', 'volatility_30', 'normalized_atr',
         'trend_strength', 'rsi_14', 'volume_ratio', 'close_location_value'
     ]
-    
-    X = df_labeled[feature_cols]
-    y = df_labeled['regime_label']
-    
-    # Split data (time-series split is better, but using train_test_split for simplicity here without shuffle)
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
-    
-    print("Initializing classifier...")
+
+    all_X_train, all_y_train, all_X_test, all_y_test = [], [], [], []
+
+    for name, df in datasets:
+        print(f"\n--- Processing {name} data ({len(df)} candles) ---")
+        df_features = calculate_technical_features(df)
+        print(f"  After feature engineering: {len(df_features)} rows")
+
+        forward_window = 12 if name == "1H" else 6
+        df_labeled = generate_regime_labels(df_features, forward_window=forward_window, trend_threshold=0.02)
+        print(f"  After labeling: {len(df_labeled)} rows")
+        print(f"  Label distribution: {df_labeled['regime_label'].value_counts().to_dict()}")
+
+        X = df_labeled[feature_cols]
+        y = df_labeled['regime_label']
+        split = int(len(X) * 0.8)
+        all_X_train.append(X.iloc[:split])
+        all_y_train.append(y.iloc[:split])
+        all_X_test.append(X.iloc[split:])
+        all_y_test.append(y.iloc[split:])
+
+    X_train = pd.concat(all_X_train)
+    y_train = pd.concat(all_y_train)
+    X_test = pd.concat(all_X_test)
+    y_test = pd.concat(all_y_test)
+
+    print(f"\n--- Training ---")
+    print(f"  Train: {len(X_train)} samples (trending: {sum(y_train==1)}, ranging: {sum(y_train==0)})")
+    print(f"  Test:  {len(X_test)} samples (trending: {sum(y_test==1)}, ranging: {sum(y_test==0)})")
+
     classifier = RegimeClassifier(model_path='models/regime_rf_v1.pkl')
-    
     classifier.train(X_train, y_train)
-    
-    print("\nEvaluating on Test Set...")
+
+    print("\n--- Evaluation on Test Set ---")
     y_pred = classifier.predict(X_test, threshold=0.55)
-    
-    print("Accuracy:", accuracy_score(y_test, y_pred))
-    print("\nClassification Report:")
-    print(classification_report(y_test, y_pred))
-    
-    # Save the model
+    print(f"Accuracy: {accuracy_score(y_test, y_pred):.4f}")
+    print(classification_report(y_test, y_pred, target_names=["Ranging", "Trending"]))
+
+    # Show per-feature importance
+    importances = list(zip(feature_cols, classifier.model.feature_importances_))
+    importances.sort(key=lambda x: x[1], reverse=True)
+    print("--- Feature Importances ---")
+    for feat, imp in importances:
+        print(f"  {feat:25s} {imp:.4f}")
+
     classifier.save_model()
-    print("Pipeline execution complete.")
+    print("\nPipeline complete. Model saved to models/regime_rf_v1.pkl")
+
 
 if __name__ == '__main__':
     main()
