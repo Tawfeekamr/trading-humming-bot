@@ -49,7 +49,7 @@ jobs:
             --document-name "AWS-RunShellScript" \
             --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
             --region "${{ env.AWS_REGION }}" \
-            --parameters commands='["cd /home/ec2-user/trading-humming-bot && git pull origin main 2>&1","cd /home/ec2-user/trading-humming-bot && mkdir -p data logs models","cd /home/ec2-user/trading-humming-bot && docker compose down --remove-orphans 2>&1 || true","cd /home/ec2-user/trading-humming-bot && docker compose up -d --build 2>&1","docker image prune -af --filter until=24h 2>&1 || true"]' \
+            --parameters commands='["cd /home/ec2-user/trading-humming-bot && git pull origin main 2>&1","cd /home/ec2-user/trading-humming-bot && mkdir -p data logs models","cd /home/ec2-user/trading-humming-bot && docker compose down --remove-orphans 2>&1 || true","cd /home/ec2-user/trading-humming-bot && docker compose build --no-cache bot 2>&1","cd /home/ec2-user/trading-humming-bot && docker compose up -d 2>&1","docker image prune -af --filter until=24h 2>&1 || true"]' \
             --timeout-seconds 600 \
             --comment "Deploying via GitHub Actions" \
             --query "Command.CommandId" \
@@ -131,7 +131,7 @@ jobs:
             "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
             -d chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
             -d parse_mode=HTML \
-            -d text="🚀 <b>Bot Deployed</b>%0A━━━━━━━━━━━━━━━━━━━━━━%0A📝 ${COMMIT_MSG}%0A🔗 Commit: ${{ github.sha }}%0A⏰ $(date -u +'%Y-%m-%d %H:%M UTC')"
+            -d text="🚀 <b>Bot Deployed</b>%0A•••%0A📝 ${COMMIT_MSG}%0A🔗 Commit: ${{ github.sha }}%0A⏰ $(date -u +'%Y-%m-%d %H:%M UTC')"
 
       - name: Notify Telegram on failure
         if: failure()
@@ -140,4 +140,4 @@ jobs:
             "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
             -d chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
             -d parse_mode=HTML \
-            -d text="❌ <b>Deploy FAILED</b>%0A━━━━━━━━━━━━━━━━━━━━━━%0A🔗 Commit: ${{ github.sha }}%0ACheck: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            -d text="❌ <b>Deploy FAILED</b>%0A•••%0A🔗 Commit: ${{ github.sha }}%0ACheck: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
