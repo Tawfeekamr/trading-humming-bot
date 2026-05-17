@@ -3,6 +3,8 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report, accuracy_score
 import os
 import sys
+import urllib.request
+import json
 
 # Support running as `python -m src.ml.train_pipeline` or as a script
 if __name__ == '__main__' and __package__ is None:
@@ -15,20 +17,27 @@ from src.ml.regime_classifier import RegimeClassifier
 
 def load_real_data(symbol: str = "SOLUSDT", intervals: list[str] = None, candles_per_interval: int = 1000):
     """Fetches real OHLCV data from Binance public API across multiple timeframes."""
-    from src.data.candle_feed import CandleFeed
-
     if intervals is None:
         intervals = ["1h"]
 
     frames = []
     for interval in intervals:
         try:
-            feed = CandleFeed(symbol=symbol, interval=interval)
-            df = feed.fetch_candles(limit=candles_per_interval)
-            if not df.empty:
-                df = df.astype(float)
-                frames.append(df)
-                print(f"  {interval}: {len(df)} candles ({df.index[0]} → {df.index[-1]})")
+            url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={candles_per_interval}"
+            req = urllib.request.Request(url, headers={"User-Agent": "train-pipeline"})
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                klines = json.loads(resp.read().decode())
+
+            df = pd.DataFrame(klines, columns=[
+                "open_time", "open", "high", "low", "close", "volume",
+                "close_time", "quote_volume", "trades",
+                "taker_buy_base", "taker_buy_quote", "ignore",
+            ])
+            for col in ["open", "high", "low", "close", "volume"]:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+            df = df[["open", "high", "low", "close", "volume"]].astype(float)
+            frames.append(df)
+            print(f"  {interval}: {len(df)} candles ({df.index[0]} → {df.index[-1]})")
         except Exception as e:
             print(f"  {interval}: FAILED - {e}")
 
@@ -42,8 +51,8 @@ def main():
     print("Fetching real SOL/USDT market data from Binance...")
     interval_configs = {
         "15m": {"forward_window": 48, "trend_threshold": 0.015},   # 48 x 15m = 12h lookahead
-        "1H":  {"forward_window": 12, "trend_threshold": 0.02},    # 12 x 1h  = 12h lookahead
-        "4H":  {"forward_window": 6,  "trend_threshold": 0.025},   # 6 x 4h   = 24h lookahead
+        "1h":  {"forward_window": 12, "trend_threshold": 0.02},    # 12 x 1h  = 12h lookahead
+        "4h":  {"forward_window": 6,  "trend_threshold": 0.025},   # 6 x 4h   = 24h lookahead
         "1d":  {"forward_window": 5,  "trend_threshold": 0.03},    # 5 x 1d   = 5d  lookahead
     }
 
