@@ -85,6 +85,14 @@ from src.logging.event_logger import EventLogger
 from src.monitoring.system_monitor import SystemAlertMonitor
 
 try:
+    from src.ml.regime_classifier import RegimeClassifier
+    from src.data.feature_engineering import calculate_technical_features
+    ML_AVAILABLE = True
+except ImportError:
+    ML_AVAILABLE = False
+
+
+try:
     from hummingbot.strategy.strategy_v2_base import StrategyV2Base, StrategyV2ConfigBase
     from hummingbot.connector.connector_base import ConnectorBase
     from hummingbot.core.data_type.common import MarketDict, OrderType, PriceType, TradeType
@@ -311,6 +319,22 @@ class TAGridTrendStrategy(StrategyV2Base):
             daily_loss_limit_pct=trend_cfg.get("daily_loss_limit_pct", 5.0),
         )
 
+        # ── ML Regime Classifier ──
+        self._ml_classifier = None
+        self._ml_confidence = 0.0
+        self._ml_regime = 0
+        if ML_AVAILABLE:
+            try:
+                model_path = Path("models/regime_rf_v1.pkl")
+                if model_path.exists():
+                    self._ml_classifier = RegimeClassifier(model_path=str(model_path))
+                    self._ml_classifier.load_model()
+                    logger.info(f"Loaded ML Regime Classifier from {model_path}")
+                else:
+                    logger.info("ML Regime Classifier model file not found.")
+            except Exception as e:
+                logger.warning(f"Could not initialize ML Regime Classifier: {e}")
+
         # ── Shared state ──
         self._last_price: float = 0.0
         self._last_trend_score = None
@@ -531,12 +555,29 @@ class TAGridTrendStrategy(StrategyV2Base):
             self._last_candle_time = now
             self._cached_candles = df
             self._grid_dirty = True
+            
+            # ML Prediction
+            if self._ml_classifier:
+                try:
+                    df_features = calculate_technical_features(df)
+                    if not df_features.empty:
+                        last_features = df_features.iloc[[-1]][[
+                            'returns', 'volatility_14', 'volatility_30', 'normalized_atr',
+                            'trend_strength', 'rsi_14', 'volume_ratio', 'close_location_value'
+                        ]]
+                        prob = self._ml_classifier.predict_proba(last_features)[0]
+                        self._ml_confidence = prob
+                        self._ml_regime = 1 if prob > 0.85 else 0
+                        logger.info(f"ML Regime Confidence: {prob*100:.1f}% -> {'TRENDING' if self._ml_regime else 'RANGING'}")
+                except Exception as e:
+                    logger.error(f"ML classification failed: {e}")
 
             self.event_log.log("indicators_updated",
                 rsi=round(rsi_value, 2), bb_upper=round(bb_result.upper, 2),
                 bb_mid=round(bb_result.mid, 2), bb_lower=round(bb_result.lower, 2),
                 ema_200=round(ema_value, 2), atr=round(atr_value, 2),
                 price=round(current_price, 2), grid_state=self.state_machine.state.value,
+                ml_confidence=round(self._ml_confidence, 3), ml_regime=self._ml_regime
             )
         else:
             if self._cached_indicators is None:
@@ -549,6 +590,7 @@ class TAGridTrendStrategy(StrategyV2Base):
             price=current_price, rsi=rsi_value, ema_200=ema_value,
             bb_lower=bb_result.lower, bb_upper=bb_result.upper,
             rsi_overbought=self.rsi_overbought, rsi_oversold=self.rsi_oversold,
+            ml_regime=self._ml_regime, ml_confidence=self._ml_confidence,
         )
 
         if new_state != prev_state:
@@ -971,6 +1013,10 @@ class TAGridTrendStrategy(StrategyV2Base):
         if self._trend_breaker.halted:
             return
 
+        # ML gate: skip trend entry if classifier signals ranging regime (<0.5 confidence of trending)
+        if self._ml_classifier is not None and self._ml_confidence < 0.5:
+            return
+
         candles = getattr(self, '_cached_candles', None)
         if candles is None or len(candles) < 200:
             return
@@ -1209,6 +1255,7 @@ class TAGridTrendStrategy(StrategyV2Base):
                 f"🗓 Net Month: {fmt(total_net_month)}\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"🏦 Equity: ${equity:,.2f} ({growth_pct:+.1f}% vs base)\n"
+                f"{'🤖 ML: ' + ('TRENDING' if self._ml_regime else 'RANGING') + f' ({self._ml_confidence*100:.0f}%)' + chr(10) if self._ml_classifier else ''}"
                 f"🌐 Mode: {self.env.upper()}"
             )
 
@@ -1230,6 +1277,7 @@ class TAGridTrendStrategy(StrategyV2Base):
         self._last_state_alert_time[state_key] = now
 
         spacing = actual_spacing if actual_spacing > 0 else (atr * self.atr_multiplier if atr else 0)
+        ml_line = f"🤖 ML: {'TRENDING' if self._ml_regime else 'RANGING'} ({self._ml_confidence*100:.0f}%)" if self._ml_classifier else ""
 
         if new_state == GridState.ACTIVE:
             msg = (
@@ -1239,6 +1287,7 @@ class TAGridTrendStrategy(StrategyV2Base):
                 f"📐 Range: ${bb.lower:,.0f} → ${bb.upper:,.0f}\n"
                 f"📏 Spacing: ${spacing:,.2f}\n"
                 f"📊 RSI: {rsi:.1f}  |  EMA200: ${ema:,.0f}\n"
+                f"{'🤖 ' + ml_line + chr(10) if ml_line else ''}"
                 f"⚠️ Trigger: {trigger_reason}"
             )
         elif new_state == GridState.PAUSED:
@@ -1247,6 +1296,7 @@ class TAGridTrendStrategy(StrategyV2Base):
                 f"━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"💵 Price: ${price:,.2f}\n"
                 f"📊 RSI: {rsi:.1f}  |  EMA200: ${ema:,.0f}\n"
+                f"{'🤖 ' + ml_line + chr(10) if ml_line else ''}"
                 f"⚠️ Trigger: {trigger_reason}\n"
                 f"💤 Holding USDT until re-entry signal."
             )
@@ -1257,6 +1307,7 @@ class TAGridTrendStrategy(StrategyV2Base):
                 f"💵 Price: ${price:,.2f}\n"
                 f"📐 New range: ${bb.lower:,.0f} → ${bb.upper:,.0f}\n"
                 f"📊 RSI: {rsi:.1f}  |  EMA200: ${ema:,.0f}\n"
+                f"{'🤖 ' + ml_line + chr(10) if ml_line else ''}"
                 f"⚠️ Trigger: {trigger_reason}"
             )
         else:
