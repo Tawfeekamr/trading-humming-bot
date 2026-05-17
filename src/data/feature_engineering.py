@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+import pandas_ta as ta
 
 def calculate_technical_features(df: pd.DataFrame) -> pd.DataFrame:
     """
@@ -39,6 +40,24 @@ def calculate_technical_features(df: pd.DataFrame) -> pd.DataFrame:
     avg_loss = loss.ewm(alpha=1/14, min_periods=14, adjust=False).mean()
     rs = avg_gain / avg_loss
     df['rsi_14'] = 100 - (100 / (1 + rs))
+
+    # 3b. Directional Features — address volatility bias
+    # ADX — trend strength regardless of direction (0-100, >25 = trending)
+    adx_result = ta.adx(df['high'], df['low'], df['close'], length=14)
+    df['adx_14'] = adx_result['ADX_14']
+
+    # MACD histogram — momentum acceleration (12/26/9)
+    macd_result = ta.macd(df['close'], fast=12, slow=26, signal=9)
+    df['macd_histogram'] = macd_result['MACDh_12_26_9']
+
+    # Distance to VWAP — price relative to volume-weighted average
+    typical_price = (df['high'] + df['low'] + df['close']) / 3
+    df['vwap'] = (df['volume'] * typical_price).cumsum() / df['volume'].cumsum()
+    df['distance_to_vwap'] = (df['close'] - df['vwap']) / df['vwap']
+
+    # On-Balance Volume — 14-period rate of change (normalized)
+    df['obv'] = ta.obv(df['close'], df['volume'])
+    df['obv_roc_14'] = df['obv'].pct_change(14)
     
     # Volume Features
     df['volume_sma_20'] = df['volume'].rolling(window=20).mean()

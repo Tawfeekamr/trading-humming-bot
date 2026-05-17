@@ -1,46 +1,58 @@
 import pandas as pd
 import numpy as np
 
-def generate_regime_labels(df: pd.DataFrame, forward_window: int = 14, trend_threshold: float = 0.02) -> pd.DataFrame:
+def generate_regime_labels(df: pd.DataFrame, forward_window: int = 14, trend_threshold: float = 0.02,
+                          atr_column: str = 'atr_14', trend_atr_k: float = 1.5) -> pd.DataFrame:
     """
     Generates target labels for ML training based on forward-looking price action.
     Labels:
     0 = Ranging (Grid Strategy preferred)
     1 = Trending (Trend Strategy preferred)
-    
+    2 = Danger (Whipsaw — both engines should pause)
+
     :param df: DataFrame with 'close' price.
     :param forward_window: How many periods ahead to look for price movement.
-    :param trend_threshold: Percentage move required to be considered a 'trend'.
+    :param trend_threshold: Percentage move required to be considered a 'trend' (static fallback).
+    :param atr_column: Column name for ATR values. When present, uses dynamic threshold.
+    :param trend_atr_k: Multiplier for ATR-based dynamic threshold (k * ATR/close).
     """
     df = df.copy()
-    
+
     # Calculate future returns over the forward window
     df['future_return'] = df['close'].shift(-forward_window) / df['close'] - 1
-    
+
     # Calculate the max excursion (high/low) in the forward window to see if it just spiked and reverted
     df['forward_max'] = df['high'].shift(-forward_window).rolling(window=forward_window).max()
     df['forward_min'] = df['low'].shift(-forward_window).rolling(window=forward_window).min()
-    
+
     df['max_up_move'] = df['forward_max'] / df['close'] - 1
     df['max_down_move'] = df['close'] / df['forward_min'] - 1
-    
-    # Label Logic:
-    # If the absolute future return is greater than the threshold, we are in a trend.
-    # Alternatively, if the market moves significantly in one direction but closes flat (high volatility),
-    # it might be too dangerous for simple grid, but for this basic labeler, we focus on directional closes.
-    
-    conditions = [
-        (df['future_return'].abs() > trend_threshold), # Trending
-        (df['future_return'].abs() <= trend_threshold) # Ranging
-    ]
-    
-    choices = [1, 0]
-    
+
+    # Use ATR-based dynamic threshold if available, otherwise fall back to static
+    if atr_column in df.columns:
+        dynamic_threshold = df[atr_column] / df['close'] * trend_atr_k
+        dynamic_threshold = dynamic_threshold.clip(lower=0.005, upper=0.10)
+    else:
+        dynamic_threshold = trend_threshold
+
+    # Danger: both directions have large excursions (whipsaw) but net move is small
+    danger_threshold = dynamic_threshold * 1.2
+    is_trending = df['future_return'].abs() > dynamic_threshold
+    is_danger = (
+        (df['max_up_move'] > danger_threshold) &
+        (df['max_down_move'] > danger_threshold) &
+        ~is_trending
+    )
+    is_ranging = ~is_trending & ~is_danger
+
+    conditions = [is_trending, is_danger, is_ranging]
+    choices = [1, 2, 0]  # 1=TRENDING, 2=DANGER, 0=RANGING
+
     df['regime_label'] = np.select(conditions, choices, default=0)
-    
+
     # Drop rows where we can't look forward
     df.dropna(subset=['future_return'], inplace=True)
-    
+
     return df
 
 if __name__ == '__main__':

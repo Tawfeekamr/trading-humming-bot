@@ -50,10 +50,10 @@ def load_real_data(symbol: str = "SOLUSDT", intervals: list[str] = None, candles
 def main():
     print("Fetching real SOL/USDT market data from Binance...")
     interval_configs = {
-        "15m": {"forward_window": 48, "trend_threshold": 0.015},   # 48 x 15m = 12h lookahead
-        "1h":  {"forward_window": 12, "trend_threshold": 0.02},    # 12 x 1h  = 12h lookahead
-        "4h":  {"forward_window": 6,  "trend_threshold": 0.025},   # 6 x 4h   = 24h lookahead
-        "1d":  {"forward_window": 5,  "trend_threshold": 0.03},    # 5 x 1d   = 5d  lookahead
+        "15m": {"forward_window": 48, "trend_threshold": 0.015, "trend_atr_k": 1.2},   # 48 x 15m = 12h lookahead
+        "1h":  {"forward_window": 12, "trend_threshold": 0.02,  "trend_atr_k": 1.5},    # 12 x 1h  = 12h lookahead
+        "4h":  {"forward_window": 6,  "trend_threshold": 0.025, "trend_atr_k": 1.5},   # 6 x 4h   = 24h lookahead
+        "1d":  {"forward_window": 5,  "trend_threshold": 0.03,  "trend_atr_k": 2.0},    # 5 x 1d   = 5d  lookahead
     }
 
     datasets = []
@@ -63,7 +63,8 @@ def main():
 
     feature_cols = [
         'returns', 'volatility_14', 'volatility_30', 'normalized_atr',
-        'trend_strength', 'rsi_14', 'volume_ratio', 'close_location_value'
+        'trend_strength', 'rsi_14', 'volume_ratio', 'close_location_value',
+        'adx_14', 'macd_histogram', 'distance_to_vwap', 'obv_roc_14'
     ]
 
     all_X_train, all_y_train, all_X_test, all_y_test = [], [], [], []
@@ -74,35 +75,43 @@ def main():
         print(f"  After feature engineering: {len(df_features)} rows")
 
         df_labeled = generate_regime_labels(
-            df_features, forward_window=cfg["forward_window"], trend_threshold=cfg["trend_threshold"]
+            df_features, forward_window=cfg["forward_window"], trend_threshold=cfg["trend_threshold"],
+            atr_column='atr_14', trend_atr_k=cfg["trend_atr_k"]
         )
         print(f"  After labeling: {len(df_labeled)} rows")
         print(f"  Label distribution: {df_labeled['regime_label'].value_counts().to_dict()}")
 
         X = df_labeled[feature_cols]
         y = df_labeled['regime_label']
-        split = int(len(X) * 0.8)
-        all_X_train.append(X.iloc[:split])
-        all_y_train.append(y.iloc[:split])
-        all_X_test.append(X.iloc[split:])
-        all_y_test.append(y.iloc[split:])
+        # 60/20/20 split: train on oldest, test on newest
+        train_end = int(len(X) * 0.8)
+        all_X_train.append(X.iloc[:train_end])
+        all_y_train.append(y.iloc[:train_end])
+        all_X_test.append(X.iloc[train_end:])
+        all_y_test.append(y.iloc[train_end:])
 
-    X_train = pd.concat(all_X_train)
-    y_train = pd.concat(all_y_train)
+    X_trainval = pd.concat(all_X_train)
+    y_trainval = pd.concat(all_y_train)
     X_test = pd.concat(all_X_test)
     y_test = pd.concat(all_y_test)
 
-    print(f"\n--- Training ---")
-    print(f"  Train: {len(X_train)} samples (trending: {sum(y_train==1)}, ranging: {sum(y_train==0)})")
-    print(f"  Test:  {len(X_test)} samples (trending: {sum(y_test==1)}, ranging: {sum(y_test==0)})")
+    print(f"\n--- Hyperparameter Tuning ---")
+    n_classes = y_trainval.nunique()
+    for c in sorted(y_trainval.unique()):
+        name = {0: "ranging", 1: "trending", 2: "danger"}.get(c, f"class_{c}")
+        print(f"  Train+Val: {sum(y_trainval == c)} {name}")
+    for c in sorted(y_test.unique()):
+        name = {0: "ranging", 1: "trending", 2: "danger"}.get(c, f"class_{c}")
+        print(f"  Test:      {sum(y_test == c)} {name}")
 
-    classifier = RegimeClassifier(model_path='models/regime_rf_v1.pkl')
-    classifier.train(X_train, y_train)
+    classifier = RegimeClassifier(model_path='models/regime_rf_v3.pkl')
+    classifier.tune_hyperparameters(X_trainval, y_trainval, n_iter=20, cv=3)
 
     print("\n--- Evaluation on Test Set ---")
-    y_pred = classifier.predict(X_test, threshold=0.55)
+    y_pred = classifier.model.predict(X_test)
     print(f"Accuracy: {accuracy_score(y_test, y_pred):.4f}")
-    print(classification_report(y_test, y_pred, target_names=["Ranging", "Trending"]))
+    target_names = ["Ranging", "Trending", "Danger"] if n_classes == 3 else ["Ranging", "Trending"]
+    print(classification_report(y_test, y_pred, target_names=target_names))
 
     # Show per-feature importance
     importances = list(zip(feature_cols, classifier.model.feature_importances_))
@@ -112,7 +121,7 @@ def main():
         print(f"  {feat:25s} {imp:.4f}")
 
     classifier.save_model()
-    print("\nPipeline complete. Model saved to models/regime_rf_v1.pkl")
+    print(f"\nPipeline complete. Model saved to {classifier.model_path}")
 
 
 if __name__ == '__main__':

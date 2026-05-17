@@ -6,6 +6,7 @@ class GridState(Enum):
     ACTIVE = "ACTIVE"
     PAUSED = "PAUSED"
     REACTIVATING = "REACTIVATING"
+    DANGER = "DANGER"
 
 
 class GridStateMachine:
@@ -18,6 +19,11 @@ class GridStateMachine:
                  rsi_overbought: float = 70.0, rsi_oversold: float = 35.0,
                  ml_regime: int = 0, ml_confidence: float = 0.0) -> GridState:
         with self._lock:
+            # ML danger regime overrides everything — pause both grid and trend
+            if ml_regime == 2:
+                self._state = GridState.DANGER
+                return self._state
+
             # ML trending (>0.85) relaxes overbought by +5, letting grid stay active
             # in confirmed uptrends despite slightly elevated RSI.
             ml_rsi_buffer = 5.0 if ml_regime == 1 and ml_confidence > 0.85 else 0.0
@@ -57,4 +63,4 @@ class GridStateMachine:
     @property
     def is_paused(self) -> bool:
         with self._lock:
-            return self._state == GridState.PAUSED
+            return self._state in (GridState.PAUSED, GridState.DANGER)

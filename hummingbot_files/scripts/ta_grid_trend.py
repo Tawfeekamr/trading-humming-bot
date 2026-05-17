@@ -325,7 +325,7 @@ class TAGridTrendStrategy(StrategyV2Base):
         self._ml_regime = 0
         if ML_AVAILABLE:
             try:
-                model_path = Path("models/regime_rf_v1.pkl")
+                model_path = Path("models/regime_rf_v3.pkl")
                 if model_path.exists():
                     self._ml_classifier = RegimeClassifier(model_path=str(model_path))
                     self._ml_classifier.load_model()
@@ -563,12 +563,16 @@ class TAGridTrendStrategy(StrategyV2Base):
                     if not df_features.empty:
                         last_features = df_features.iloc[[-1]][[
                             'returns', 'volatility_14', 'volatility_30', 'normalized_atr',
-                            'trend_strength', 'rsi_14', 'volume_ratio', 'close_location_value'
+                            'trend_strength', 'rsi_14', 'volume_ratio', 'close_location_value',
+                            'adx_14', 'macd_histogram', 'distance_to_vwap', 'obv_roc_14'
                         ]]
                         prob = self._ml_classifier.predict_proba(last_features)[0]
-                        self._ml_confidence = prob
-                        self._ml_regime = 1 if prob > 0.85 else 0
-                        logger.info(f"ML Regime Confidence: {prob*100:.1f}% -> {'TRENDING' if self._ml_regime else 'RANGING'}")
+                        regime_probs = self._ml_classifier.predict_proba_full(last_features)
+                        self._ml_regime = self._ml_classifier.predict_class(last_features)
+                        self._ml_confidence = regime_probs[self._ml_regime]
+                        REGIME_NAMES = {0: 'RANGING', 1: 'TRENDING', 2: 'DANGER'}
+                        regime_name = REGIME_NAMES.get(self._ml_regime, 'UNKNOWN')
+                        logger.info(f"ML Regime: {regime_name} ({self._ml_confidence*100:.1f}%) | probs={regime_probs}")
                 except Exception as e:
                     logger.error(f"ML classification failed: {e}")
 
@@ -1014,7 +1018,10 @@ class TAGridTrendStrategy(StrategyV2Base):
             return
 
         # ML gate: skip trend entry if classifier signals ranging regime (<0.5 confidence of trending)
-        if self._ml_classifier is not None and self._ml_confidence < 0.5:
+        if self._ml_classifier is not None:
+            if self._ml_regime == 2:  # Danger regime — no trend entries
+                return
+            if self._ml_confidence < 0.5:
             return
 
         candles = getattr(self, '_cached_candles', None)
@@ -1186,6 +1193,8 @@ class TAGridTrendStrategy(StrategyV2Base):
             return "combined_pause_signal"
         if new_state == GridState.REACTIVATING:
             return f"rsi_oversold_bounce ({rsi:.1f} < {self.rsi_oversold}, near BB lower)"
+        if new_state == GridState.DANGER:
+            return f"ml_danger_regime (confidence={self._ml_confidence:.0%})"
         if new_state == GridState.ACTIVE:
             if prev_state == GridState.PAUSED:
                 return f"conditions_cleared (rsi={rsi:.1f}, price>ema)"
@@ -1255,7 +1264,7 @@ class TAGridTrendStrategy(StrategyV2Base):
                 f"🗓 Net Month: {fmt(total_net_month)}\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"🏦 Equity: ${equity:,.2f} ({growth_pct:+.1f}% vs base)\n"
-                f"{'🤖 ML: ' + ('TRENDING' if self._ml_regime else 'RANGING') + f' ({self._ml_confidence*100:.0f}%)' + chr(10) if self._ml_classifier else ''}"
+                f"{'🤖 ML: ' + {0: 'RANGING', 1: 'TRENDING', 2: 'DANGER'}.get(self._ml_regime, '?') + f' ({self._ml_confidence*100:.0f}%)' + chr(10) if self._ml_classifier else ''}"
                 f"🌐 Mode: {self.env.upper()}"
             )
 
@@ -1277,7 +1286,7 @@ class TAGridTrendStrategy(StrategyV2Base):
         self._last_state_alert_time[state_key] = now
 
         spacing = actual_spacing if actual_spacing > 0 else (atr * self.atr_multiplier if atr else 0)
-        ml_line = f"🤖 ML: {'TRENDING' if self._ml_regime else 'RANGING'} ({self._ml_confidence*100:.0f}%)" if self._ml_classifier else ""
+        ml_line = f"🤖 ML: {{0: 'RANGING', 1: 'TRENDING', 2: 'DANGER'}.get(self._ml_regime, '?')} ({self._ml_confidence*100:.0f}%)" if self._ml_classifier else ""
 
         if new_state == GridState.ACTIVE:
             msg = (
@@ -1309,6 +1318,15 @@ class TAGridTrendStrategy(StrategyV2Base):
                 f"📊 RSI: {rsi:.1f}  |  EMA200: ${ema:,.0f}\n"
                 f"{'🤖 ' + ml_line + chr(10) if ml_line else ''}"
                 f"⚠️ Trigger: {trigger_reason}"
+            )
+        elif new_state == GridState.DANGER:
+            msg = (
+                f"🔴 <b>Grid DANGER MODE — {self.display_pair}</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"💵 Price: ${price:,.2f}\n"
+                f"🤖 ML: DANGER ({self._ml_confidence*100:.0f}%)\n"
+                f"⚠️ Both engines paused — market whipsaw detected.\n"
+                f"💤 Holding all positions until regime clears."
             )
         else:
             return
