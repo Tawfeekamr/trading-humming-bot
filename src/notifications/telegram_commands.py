@@ -261,16 +261,16 @@ class TelegramCommandHandler:
             logger.info(f"Telegram /status response: state={state}, mode={mode}, cb={cb_status}, pending={pending}")
             update.message.reply_text(
                 f"📊 <b>Bot Status</b>\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"•••\n"
                 f"Grid: <b>{state}</b>\n"
                 f"Mode: {mode}\n"
                 f"Circuit Breaker: {cb_status}\n"
                 f"⏱ Uptime: {hours}h {minutes}m {secs}s\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"•••\n"
                 f"📐 Grid: {levels} buy + {levels} sell levels\n"
                 f"📏 Spacing: ${spacing_buy:.0f} (buy) / ${spacing_sell:.0f} (sell)\n"
                 f"📋 Pending orders: {pending}\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"•••\n"
                 f"💰 Base capital: ${base_capital:,.0f}\n"
                 f"📈 Compound: ${compound:,.2f} ({growth_pct:+.1f}%)",
                 parse_mode="HTML"
@@ -292,7 +292,7 @@ class TelegramCommandHandler:
             logger.info(f"Telegram /pnl response: today={today['net_pnl']}, all={alltime['net_pnl']}")
             update.message.reply_text(
                 f"💰 <b>P&L Report</b>\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"•••\n"
                 f"📅 Today: {self._fmt_pnl(today['net_pnl'])}  ({today['total_trades']} trades, {today['win_rate']}%)\n"
                 f"📆 Week:  {self._fmt_pnl(week['net_pnl'])}\n"
                 f"🗓 Month: {self._fmt_pnl(month['net_pnl'])}\n"
@@ -323,13 +323,13 @@ class TelegramCommandHandler:
 
             update.message.reply_text(
                 f"💰 <b>Account Balance</b>\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"•••\n"
                 f"💵 USDT: ${usdt:,.2f}\n"
                 f"◎ {base_asset}:  {base_bal:.4f} (${base_value:,.2f})\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"•••\n"
                 f"📊 Equity: ${equity:,.2f}\n"
                 f"Mode: {mode}\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"•••\n"
                 f"📐 Grid capital: ${compound:,.2f} ({growth_pct:+.1f}%)\n"
                 f"📏 Base capital: ${base_cap:,.0f}\n"
                 f"💡 Change: /capital &lt;amount&gt;",
@@ -380,10 +380,10 @@ class TelegramCommandHandler:
 
             update.message.reply_text(
                 f"✅ <b>Capital Updated</b>\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"•••\n"
                 f"Before: ${old_capital:,.0f}\n"
                 f"Now:    ${new_capital:,.0f}\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"•••\n"
                 f"Grid will recalculate on next refresh.",
                 parse_mode="HTML"
             )
@@ -441,7 +441,7 @@ class TelegramCommandHandler:
                 update.message.reply_text("No trades recorded yet.")
                 return
 
-            lines = ["📜 <b>Last 5 Trades</b>", "━━━━━━━━━━━━━━━━━━━━━━"]
+            lines = ["📜 <b>Last 5 Trades</b>", "•••"]
             for t in trades[:5]:
                 pnl = t.get("net_pnl", 0)
                 sign = "+" if pnl >= 0 else ""
@@ -469,7 +469,7 @@ class TelegramCommandHandler:
             buys = [o for o in pending if o.side.value == "BUY"]
             sells = [o for o in pending if o.side.value == "SELL"]
 
-            lines = [f"📋 <b>Pending Orders ({len(pending)})</b>", "━━━━━━━━━━━━━━━━━━━━━━"]
+            lines = [f"📋 <b>Pending Orders ({len(pending)})</b>", "•••"]
 
             if buys:
                 buys.sort(key=lambda o: o.price, reverse=True)
@@ -485,7 +485,7 @@ class TelegramCommandHandler:
                     val = o.price * o.quantity
                     lines.append(f"  L{o.level}: ${o.price:,.2f} × {o.quantity:.4f} (${val:.2f})")
 
-            lines.append("━━━━━━━━━━━━━━━━━━━━━━")
+            lines.append("•••")
             total_buy = sum(o.price * o.quantity for o in buys)
             total_sell = sum(o.price * o.quantity for o in sells)
             lines.append(f"💰 Buy value: ${total_buy:,.2f} | Sell value: ${total_sell:,.2f}")
@@ -507,7 +507,7 @@ class TelegramCommandHandler:
             lines = log_file.read_text(encoding="utf-8", errors="replace").strip().split("\n")
             tail = "\n".join(lines[-30:])
             update.message.reply_text(
-                f"📜 <b>Last 30 log lines ({today})</b>\n━━━━━━━━━━━━━━━━━━━━━━\n<pre>{tail[:3900]}</pre>",
+                f"📜 <b>Last 30 log lines ({today})</b>\n•••\n<pre>{tail[:3900]}</pre>",
                 parse_mode="HTML"
             )
         except Exception as e:
@@ -528,7 +528,7 @@ class TelegramCommandHandler:
                 return
             tail = "\n".join(lines[-40:])
             update.message.reply_text(
-                f"🚨 <b>Recent Errors</b>\n━━━━━━━━━━━━━━━━━━━━━━\n<pre>{tail[:3900]}</pre>",
+                f"🚨 <b>Recent Errors</b>\n•••\n<pre>{tail[:3900]}</pre>",
                 parse_mode="HTML"
             )
         except Exception as e:
@@ -559,7 +559,7 @@ class TelegramCommandHandler:
 
             update.message.reply_text(
                 f"💸 <b>Fee Analysis</b>\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"•••\n"
                 f"📅 Today:   ${today['total_fees']:.2f} "
                 f"(ratio: {fmt_ratio(today['fee_to_gross_ratio'])}, "
                 f"{today['trade_count']} trades)\n"
@@ -567,7 +567,7 @@ class TelegramCommandHandler:
                 f"(ratio: {fmt_ratio(week['fee_to_gross_ratio'])})\n"
                 f"🗓 Month:   ${month['total_fees']:.2f} "
                 f"(ratio: {fmt_ratio(month['fee_to_gross_ratio'])})\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"•••\n"
                 f"{ot_emoji} Overtrading: {ot_status}\n"
                 f"📊 Fee ratio: {fmt_ratio(ot['fee_to_gross_ratio'])} "
                 f"(threshold: {ot['threshold']:.0%})",
@@ -608,13 +608,13 @@ class TelegramCommandHandler:
 
             update.message.reply_text(
                 f"◎ <b>{display_pair}</b>\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"•••\n"
                 f"💲 <b>${live_price:,.2f}</b>\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"•••\n"
                 f"📊 RSI (14): {rsi:.1f}  [{rsi_zone}]\n"
                 f"{ema_emoji} EMA 200: ${ema:,.2f}  ({pct_from_ema:+.1f}%)\n"
                 f"📏 ATR (14): ${atr:,.2f}\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"•••\n"
                 f"📈 BB Upper: ${bb_upper:,.2f}\n"
                 f"📊 BB Mid:   ${bb_mid:,.2f}\n"
                 f"📉 BB Lower: ${bb_lower:,.2f}",
@@ -676,9 +676,9 @@ class TelegramCommandHandler:
             files_list = "\n".join(f"  🗑 {f}" for f in cleared) if cleared else "  (nothing to clear)"
             update.message.reply_text(
                 f"🧹 <b>Logs & Data Cleared</b>\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"•••\n"
                 f"{files_list}\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"•••\n"
                 f"Bot continues running — fresh start.",
                 parse_mode="HTML"
             )
@@ -840,7 +840,7 @@ class TelegramCommandHandler:
         display_pair = getattr(self.strategy, 'display_pair', 'SOL/USDT')
         update.message.reply_text(
             "📖 <b>Available Commands</b>\n"
-            "━━━━━━━━━━━━━━━━━━━━━━\n"
+            "•••\n"
             "/status — Grid state, mode, uptime, pending orders\n"
             "/pnl — Today / week / month / all-time P&L\n"
             f"/balance — USDT, {base_asset}, equity, and grid capital\n"

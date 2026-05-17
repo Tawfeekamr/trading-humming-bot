@@ -559,7 +559,7 @@ class TAGridSOLUSDT(StrategyV2Base):
                     self.event_log.log("overtrading_detected", **ot)
                     ot_msg = (
                         f"⚠️ <b>OVERTRADING DETECTED</b>\n"
-                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"•••\n"
                         f"💸 Fees today: ${ot['total_fees']:.2f}\n"
                         f"📊 Gross activity: ${ot['abs_gross_pnl']:.2f}\n"
                         f"📈 Fee ratio: {ot['fee_to_gross_ratio']:.1%} (threshold: {ot['threshold']:.0%})\n"
@@ -917,15 +917,15 @@ class TAGridSOLUSDT(StrategyV2Base):
 
             msg = (
                 f"📅 <b>Daily Report — {pd.Timestamp.now(tz='UTC').strftime('%b %d, %Y')}</b>\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"•••\n"
                 f"📊 Trades: {s['total_trades']}  "
                 f"(✅{s['winning']} / ❌{s['losing']})  "
                 f"Win: {s['win_rate']}%\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"•••\n"
                 f"💰 Gross: {fmt(s['gross_pnl'])}\n"
                 f"💸 Fees:  -${abs(s['total_fees']):.2f}\n"
                 f"📈 <b>Net Today: {fmt(s['net_pnl'])}</b>\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"•••\n"
                 f"📆 Week:  {fmt(sw['net_pnl'])}\n"
                 f"🗓 Month: {fmt(sm['net_pnl'])}\n"
                 f"🏦 Equity: ${equity:,.2f} ({growth_pct:+.1f}% vs base)\n"
@@ -959,7 +959,7 @@ class TAGridSOLUSDT(StrategyV2Base):
         if new_state == GridState.ACTIVE:
             msg = (
                 f"🟢 <b>Grid ACTIVATED — {self.display_pair}</b>\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"•••\n"
                 f"💵 Price: ${price:,.2f}\n"
                 f"📐 Range: ${bb.lower:,.0f} → ${bb.upper:,.0f}\n"
                 f"📏 Spacing: ${spacing:,.2f}\n"
@@ -969,7 +969,7 @@ class TAGridSOLUSDT(StrategyV2Base):
         elif new_state == GridState.PAUSED:
             msg = (
                 f"⏸️ <b>Grid PAUSED — {self.display_pair}</b>\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"•••\n"
                 f"💵 Price: ${price:,.2f}\n"
                 f"📊 RSI: {rsi:.1f}  |  EMA200: ${ema:,.0f}\n"
                 f"⚠️ Trigger: {trigger_reason}\n"
@@ -978,7 +978,7 @@ class TAGridSOLUSDT(StrategyV2Base):
         elif new_state == GridState.REACTIVATING:
             msg = (
                 f"🔄 <b>Grid REACTIVATING — {self.display_pair}</b>\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"•••\n"
                 f"💵 Price: ${price:,.2f}\n"
                 f"📐 New range: ${bb.lower:,.0f} → ${bb.upper:,.0f}\n"
                 f"📊 RSI: {rsi:.1f}  |  EMA200: ${ema:,.0f}\n"
@@ -1156,17 +1156,17 @@ class TAGridSOLUSDT(StrategyV2Base):
                 pnl_sign = "+" if net_pnl >= 0 else ""
                 telegram_msg = (
                     f"{'💚' if net_pnl >= 0 else '🔴'} <b>Trade Closed (SELL-first) — {self.display_pair}</b>\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"•••\n"
                     f"📈 BUY closed SELL position  |  Grid Level {grid_level}\n"
                     f"⏱ Duration:    {duration_min} min\n"
                     f"🔵 Entry (SELL): ${entry_price:,.2f}\n"
                     f"🔵 Exit (BUY):  ${exit_price:,.2f}\n"
                     f"📦 Qty:         {quantity} {self.base_asset}\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"•••\n"
                     f"💰 Gross PnL:   {pnl_sign}${gross_pnl:.2f}\n"
                     f"💸 Fee:         -${total_fee:.2f}\n"
                     f"<b>📊 Net PnL:    {pnl_sign}${net_pnl:.2f}</b>\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"•••\n"
                     f"🏦 Equity: ${equity:,.2f}  |  Exposure: {exposure_pct:.0f}%\n"
                     f"Grid: {grid_state_val}  |  Pending: {pending} orders\n"
                     f"🌐 Mode: {self.env.upper()}"
@@ -1206,7 +1206,7 @@ class TAGridSOLUSDT(StrategyV2Base):
 
                 buy_msg = (
                     f"📈 <b>BUY Filled — {self.display_pair}</b>\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"•••\n"
                     f"💵 Price: ${price:,.2f}\n"
                     f"📦 Qty: {quantity} {self.base_asset}\n"
                     f"📊 Level {grid_level}  |  RSI: {rsi_val:.1f}\n"
@@ -1301,17 +1301,17 @@ class TAGridSOLUSDT(StrategyV2Base):
 
                 telegram_msg = (
                     f"{'💚' if net_pnl >= 0 else '🔴'} <b>Trade Closed — {self.display_pair}</b>\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"•••\n"
                     f"📉 SELL  |  Grid Level {grid_level}\n"
                     f"⏱ Duration:    {duration_min} min\n"
                     f"🔵 Entry:      ${entry_price:,.2f}\n"
                     f"🔵 Exit:       ${price:,.2f}\n"
                     f"📦 Qty:        {quantity} {self.base_asset}\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"•••\n"
                     f"💰 Gross PnL:  {pnl_sign}${gross_pnl:.2f}\n"
                     f"💸 Fee:        -${total_fee:.2f}\n"
                     f"<b>📊 Net PnL:   {pnl_sign}${net_pnl:.2f}</b>\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"•••\n"
                     f"📉 RSI: {entry_rsi:.1f} → {rsi_val:.1f}\n"
                     f"📐 BB: ${entry_bb_lower:,.2f} → ${bb_upper:,.2f}\n"
                     f"📏 ATR: ${atr_val:,.2f}  |  Spacing: ${self._active_sell_spacing:,.2f}\n"
@@ -1351,13 +1351,13 @@ class TAGridSOLUSDT(StrategyV2Base):
 
                 telegram_msg = (
                     f"🟡 <b>SELL Filled (buffered, awaiting BUY match) — {self.display_pair}</b>\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"•••\n"
                     f"📉 SELL  |  Grid Level {grid_level}\n"
                     f"💵 Price: ${price:,.2f}\n"
                     f"📦 Qty: {quantity} {self.base_asset}\n"
                     f"💸 Fee: -${fee:.2f}\n"
                     f"🔄 Buffered sells awaiting match: {len(self._unmatched_sells)}\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"•••\n"
                     f"🏦 Equity: ${equity:,.2f}  |  Exposure: {exposure_pct:.0f}%\n"
                     f"🌐 Mode: {self.env.upper()}"
                 )

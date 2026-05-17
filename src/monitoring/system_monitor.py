@@ -50,13 +50,13 @@ class SystemStats:
 
         return (
             f"🖥️ <b>Server Status</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"•••\n"
             f"💻 CPU:  {cpu_bar} {self.cpu_percent:.0f}%{cpu_flag}\n"
             f"🧠 RAM:  {ram_bar} {self.ram_percent:.0f}%{ram_flag}\n"
             f"        {self.ram_used_gb:.1f} / {self.ram_total_gb:.1f} GB\n"
             f"💾 Disk: {disk_bar} {self.disk_percent:.0f}%{disk_flag}\n"
             f"        {self.disk_used_gb:.1f} / {self.disk_total_gb:.1f} GB\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"•••\n"
             f"💰 Est. cost: ~$15/mo (t3.small Tokyo)\n"
             f"⚠️ Alert threshold: {ALERT_THRESHOLD:.0f}%"
         )
@@ -121,9 +121,9 @@ class SystemAlertMonitor:
             self._last_alert[alert_key] = now
             msg = (
                 f"⚠️ <b>RESOURCE ALERT</b>\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"•••\n"
                 f"{'  |  '.join(alerts)}\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"•••\n"
                 f"💻 CPU:  {stats.cpu_percent:.0f}%\n"
                 f"🧠 RAM:  {stats.ram_percent:.0f}% "
                 f"({stats.ram_used_gb:.1f}/{stats.ram_total_gb:.1f} GB)\n"

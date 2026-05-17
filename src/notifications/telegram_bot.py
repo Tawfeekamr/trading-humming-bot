@@ -55,7 +55,7 @@ class TelegramBot:
     async def alert_startup(self, env: str, capital: float, display_pair: str = "SOL/USDT") -> None:
         await self.send(
             f"🟢 <b>Grid Bot STARTED</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"•••\n"
             f"🌐 Mode: {env.upper()}\n"
             f"💰 Capital: ${capital:,.0f} USDT\n"
             f"📊 Pair: {display_pair}\n"
@@ -65,7 +65,7 @@ class TelegramBot:
     async def alert_shutdown(self, reason: str = "manual") -> None:
         await self.send(
             f"🔴 <b>Grid Bot STOPPED</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"•••\n"
             f"⚠️ Reason: {reason}\n"
             f"⏰ Time: {self._now()} UTC"
         )
@@ -73,7 +73,7 @@ class TelegramBot:
     async def alert_error(self, source: str, error: str, details: str = "") -> None:
         msg = (
             f"⚠️ <b>Error in {source}</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"•••\n"
             f"❌ {error}\n"
             f"⏰ Time: {self._now()} UTC"
         )
@@ -84,7 +84,7 @@ class TelegramBot:
     async def alert_crash(self, source: str, error: str, traceback_str: str = "") -> None:
         msg = (
             f"🚨 <b>CRASH in {source}</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"•••\n"
             f"❌ {error}\n"
             f"⏰ Time: {self._now()} UTC"
         )
