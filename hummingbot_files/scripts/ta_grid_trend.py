@@ -999,7 +999,7 @@ class TAGridTrendStrategy(StrategyV2Base):
         amount = Decimal(str(pos.amount)).quantize(Decimal("0.01"))
 
         try:
-            order_id = self.sell(self.exchange, self.trading_pair, amount)
+            order_id = self.sell(self.exchange, self.trading_pair, amount, OrderType.LIMIT)
             logger.info(f"Trend SELL order placed: {amount} SOL @ {exit_price}")
         except Exception as e:
             logger.error(f"Trend sell failed: {e}")
@@ -1066,7 +1066,7 @@ class TAGridTrendStrategy(StrategyV2Base):
         amount_dec = Decimal(str(amount)).quantize(Decimal("0.01"))
         try:
             self.event_log.log("trend_buy_attempt", amount=str(amount_dec), price=self._last_price)
-            order_id = self.buy(self.exchange, self.trading_pair, amount_dec)
+            order_id = self.buy(self.exchange, self.trading_pair, amount_dec, OrderType.LIMIT)
             self.event_log.log("trend_buy_result", order_id=str(order_id), amount=str(amount_dec))
         except Exception as e:
             self.event_log.log("trend_buy_error", error=str(e))
