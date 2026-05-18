@@ -1065,10 +1065,11 @@ class TAGridTrendStrategy(StrategyV2Base):
 
         amount_dec = Decimal(str(amount)).quantize(Decimal("0.01"))
         try:
+            self.event_log.log("trend_buy_attempt", amount=str(amount_dec), price=self._last_price)
             order_id = self.buy(self.exchange, self.trading_pair, amount_dec)
-            logger.info(f"Trend BUY order placed: {amount_dec} SOL @ {self._last_price}")
+            self.event_log.log("trend_buy_result", order_id=str(order_id), amount=str(amount_dec))
         except Exception as e:
-            logger.error(f"Trend buy failed: {e}")
+            self.event_log.log("trend_buy_error", error=str(e))
             return
 
         entry_time = datetime.now(timezone.utc).isoformat()
@@ -1079,8 +1080,11 @@ class TAGridTrendStrategy(StrategyV2Base):
 
         if pos:
             self._save_trend_state()
-            logger.info(f"TREND ENTRY: {amount:.1f} SOL @ ${self._last_price:.2f} | SL ${sl:.2f} TP ${tp:.2f} | Score {score.total}/7")
+            self.event_log.log("trend_entry", amount=round(amount, 2), price=self._last_price,
+                               sl=sl, tp=tp, score=score.total)
             self._trend_breaker.set_peak_equity(self._position_manager._capital + pos.amount * self._last_price)
+        else:
+            self.event_log.log("trend_entry_failed", reason="position_not_created")
 
     def _close_all_trend_positions(self):
         logger.warning("Closing all trend positions...")
