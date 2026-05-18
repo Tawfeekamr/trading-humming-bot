@@ -1014,11 +1014,13 @@ class TAGridTrendStrategy(StrategyV2Base):
         if self._trend_breaker.halted:
             return
 
-        # ML gate: skip trend entry if classifier signals ranging regime (<0.5 confidence of trending)
+        # ML gate: trend entries require ML confirmation
         if self._ml_classifier is not None:
             if self._ml_regime == 2:  # Danger regime — no trend entries
                 return
-            if self._ml_confidence < 0.5:
+            if self._ml_regime == 1 and self._ml_confidence < 0.5:  # Trending but uncertain
+                return
+            if self._ml_regime == 0 and self._ml_confidence >= 0.65:  # Confident ranging — no trend entries
                 return
 
         candles = getattr(self, '_cached_candles', None)
