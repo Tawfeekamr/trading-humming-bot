@@ -36,17 +36,25 @@ def generate_regime_labels(df: pd.DataFrame, forward_window: int = 14, trend_thr
         dynamic_threshold = trend_threshold
 
     # Danger: both directions have large excursions (whipsaw) but net move is small
-    danger_threshold = dynamic_threshold * 1.2
+    danger_threshold = dynamic_threshold * 0.8
     is_trending = df['future_return'].abs() > dynamic_threshold
-    is_danger = (
+    is_danger_excursion = (
         (df['max_up_move'] > danger_threshold) &
         (df['max_down_move'] > danger_threshold) &
         ~is_trending
     )
+    # High volatility + flat net return = whipsaw (top 10% ATR only, stricter)
+    is_danger_volatility = pd.Series(False, index=df.index)
+    if atr_column in df.columns:
+        atr_pct = df[atr_column] / df['close']
+        vol_threshold = atr_pct.quantile(0.90)
+        is_danger_volatility = (atr_pct > vol_threshold) & (df['future_return'].abs() < dynamic_threshold * 0.15)
+    is_danger = is_danger_excursion | is_danger_volatility
     is_ranging = ~is_trending & ~is_danger
 
-    conditions = [is_trending, is_danger, is_ranging]
-    choices = [1, 2, 0]  # 1=TRENDING, 2=DANGER, 0=RANGING
+    # Priority: Danger > Trending > Ranging
+    conditions = [is_danger, is_trending, is_ranging]
+    choices = [2, 1, 0]
 
     df['regime_label'] = np.select(conditions, choices, default=0)
 

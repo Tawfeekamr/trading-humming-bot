@@ -1,6 +1,8 @@
 import pandas as pd
+import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report, accuracy_score
+import argparse
 import os
 import sys
 import urllib.request
@@ -16,19 +18,46 @@ from src.ml.regime_classifier import RegimeClassifier
 
 
 def load_real_data(symbol: str = "SOLUSDT", intervals: list[str] = None, candles_per_interval: int = 1000):
-    """Fetches real OHLCV data from Binance public API across multiple timeframes."""
+    """Fetches real OHLCV data from Binance public API. Paginates automatically for >1500 candles."""
     if intervals is None:
         intervals = ["1h"]
+
+    INTERVAL_MS = {
+        "1m": 60_000, "3m": 180_000, "5m": 300_000, "15m": 900_000,
+        "30m": 1_800_000, "1h": 3_600_000, "2h": 7_200_000,
+        "4h": 14_400_000, "6h": 21_600_000, "8h": 28_800_000,
+        "12h": 43_200_000, "1d": 86_400_000, "3d": 259_200_000, "1w": 604_800_000,
+    }
 
     frames = []
     for interval in intervals:
         try:
-            url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={candles_per_interval}"
-            req = urllib.request.Request(url, headers={"User-Agent": "train-pipeline"})
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                klines = json.loads(resp.read().decode())
+            all_klines = []
+            remaining = candles_per_interval
+            end_time = None  # None = fetch from now backwards
 
-            df = pd.DataFrame(klines, columns=[
+            while remaining > 0:
+                batch = min(remaining, 1000)
+                url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={batch}"
+                if end_time is not None:
+                    url += f"&endTime={end_time}"
+
+                req = urllib.request.Request(url, headers={"User-Agent": "train-pipeline"})
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    klines = json.loads(resp.read().decode())
+
+                if not klines:
+                    break
+                all_klines.extend(klines)
+                remaining -= len(klines)
+
+                if len(klines) < batch:
+                    break  # no more data available
+
+                # Set end_time to before the earliest candle we just fetched
+                end_time = int(klines[0][0]) - 1
+
+            df = pd.DataFrame(all_klines, columns=[
                 "open_time", "open", "high", "low", "close", "volume",
                 "close_time", "quote_volume", "trades",
                 "taker_buy_base", "taker_buy_quote", "ignore",
@@ -36,8 +65,9 @@ def load_real_data(symbol: str = "SOLUSDT", intervals: list[str] = None, candles
             for col in ["open", "high", "low", "close", "volume"]:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
             df = df[["open", "high", "low", "close", "volume"]].astype(float)
+            df = df[~df.index.duplicated(keep='first')]
             frames.append(df)
-            print(f"  {interval}: {len(df)} candles ({df.index[0]} → {df.index[-1]})")
+            print(f"  {interval}: {len(df)} candles fetched")
         except Exception as e:
             print(f"  {interval}: FAILED - {e}")
 
@@ -48,23 +78,38 @@ def load_real_data(symbol: str = "SOLUSDT", intervals: list[str] = None, candles
 
 
 def main():
+    parser = argparse.ArgumentParser(description='ML Regime Classifier Training Pipeline')
+    parser.add_argument('--timeframe', type=str, default=None,
+                        help='Train on a single timeframe only (e.g., 1h). Default: all timeframes.')
+    parser.add_argument('--candles', type=int, default=1000,
+                        help='Number of candles per timeframe (default: 1000). Use 2000+ for single-TF training.')
+    args = parser.parse_args()
+
     print("Fetching real SOL/USDT market data from Binance...")
     interval_configs = {
-        "15m": {"forward_window": 48, "trend_threshold": 0.015, "trend_atr_k": 1.2},   # 48 x 15m = 12h lookahead
-        "1h":  {"forward_window": 12, "trend_threshold": 0.02,  "trend_atr_k": 1.5},    # 12 x 1h  = 12h lookahead
-        "4h":  {"forward_window": 6,  "trend_threshold": 0.025, "trend_atr_k": 1.5},   # 6 x 4h   = 24h lookahead
-        "1d":  {"forward_window": 5,  "trend_threshold": 0.03,  "trend_atr_k": 2.0},    # 5 x 1d   = 5d  lookahead
+        "15m": {"forward_window": 48, "trend_threshold": 0.015, "trend_atr_k": 1.2},
+        "1h":  {"forward_window": 12, "trend_threshold": 0.02,  "trend_atr_k": 1.5},
+        "4h":  {"forward_window": 6,  "trend_threshold": 0.025, "trend_atr_k": 1.5},
+        "1d":  {"forward_window": 5,  "trend_threshold": 0.03,  "trend_atr_k": 2.0},
     }
+
+    if args.timeframe:
+        if args.timeframe not in interval_configs:
+            print(f"Error: unknown timeframe '{args.timeframe}'. Choose from: {list(interval_configs.keys())}")
+            return
+        interval_configs = {args.timeframe: interval_configs[args.timeframe]}
+        print(f"  Single-timeframe mode: {args.timeframe}")
 
     datasets = []
     for interval, cfg in interval_configs.items():
-        df = load_real_data("SOLUSDT", intervals=[interval], candles_per_interval=1000)
+        df = load_real_data("SOLUSDT", intervals=[interval], candles_per_interval=args.candles)
         datasets.append((interval, cfg, df))
 
     feature_cols = [
-        'returns', 'volatility_14', 'volatility_30', 'normalized_atr',
+        'returns', 'volatility_ratio', 'normalized_atr',
         'trend_strength', 'rsi_14', 'volume_ratio', 'close_location_value',
-        'adx_14', 'macd_histogram', 'distance_to_vwap', 'obv_roc_14'
+        'adx_14', 'macd_histogram', 'distance_to_vwap', 'obv_roc_14',
+        'choppiness_index', 'fractal_dimension_index', 'aroon_oscillator'
     ]
 
     all_X_train, all_y_train, all_X_test, all_y_test = [], [], [], []
@@ -104,8 +149,8 @@ def main():
         name = {0: "ranging", 1: "trending", 2: "danger"}.get(c, f"class_{c}")
         print(f"  Test:      {sum(y_test == c)} {name}")
 
-    classifier = RegimeClassifier(model_path='models/regime_rf_v3.pkl')
-    classifier.tune_hyperparameters(X_trainval, y_trainval, n_iter=20, cv=3)
+    classifier = RegimeClassifier(model_path='models/regime_rf_v3.pkl', model_type='random_forest')
+    best_params = classifier.tune_hyperparameters(X_trainval, y_trainval, n_iter=20, cv=3)
 
     print("\n--- Evaluation on Test Set ---")
     y_pred = classifier.model.predict(X_test)

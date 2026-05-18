@@ -562,14 +562,24 @@ class TAGridTrendStrategy(StrategyV2Base):
                     df_features = calculate_technical_features(df)
                     if not df_features.empty:
                         last_features = df_features.iloc[[-1]][[
-                            'returns', 'volatility_14', 'volatility_30', 'normalized_atr',
+                            'returns', 'volatility_ratio', 'normalized_atr',
                             'trend_strength', 'rsi_14', 'volume_ratio', 'close_location_value',
-                            'adx_14', 'macd_histogram', 'distance_to_vwap', 'obv_roc_14'
+                            'adx_14', 'macd_histogram', 'distance_to_vwap', 'obv_roc_14',
+                            'choppiness_index', 'fractal_dimension_index', 'aroon_oscillator'
                         ]]
                         prob = self._ml_classifier.predict_proba(last_features)[0]
                         regime_probs = self._ml_classifier.predict_proba_full(last_features)
                         self._ml_regime = self._ml_classifier.predict_class(last_features)
                         self._ml_confidence = regime_probs[self._ml_regime]
+
+                        # Volatility-based Danger override: extreme ATR + flat price = whipsaw
+                        norm_atr = last_features['normalized_atr'].iloc[0]
+                        ret = abs(last_features['returns'].iloc[0])
+                        if norm_atr > 0.06 and ret < 0.005 and self._ml_regime != 2:
+                            self._ml_regime = 2
+                            self._ml_confidence = 0.80
+                            logger.info(f"ML Danger override: ATR={norm_atr:.4f}, ret={ret:.5f}")
+
                         REGIME_NAMES = {0: 'RANGING', 1: 'TRENDING', 2: 'DANGER'}
                         regime_name = REGIME_NAMES.get(self._ml_regime, 'UNKNOWN')
                         logger.info(f"ML Regime: {regime_name} ({self._ml_confidence*100:.1f}%) | probs={regime_probs}")
