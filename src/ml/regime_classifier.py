@@ -10,10 +10,10 @@ REGIME_DANGER = 2
 
 
 class RegimeClassifier:
-    def __init__(self, model_path: str = 'models/regime_rf.pkl', model_type: str = 'xgboost'):
+    def __init__(self, model_path: str = 'models/regime_rf.pkl', model_type: str = 'random_forest'):
         self.model_path = model_path
         self.model_type = model_type
-        self.model = self._create_default_model()
+        self.model = None
         self.calibrated_model = None
         self.is_trained = False
 
@@ -41,6 +41,8 @@ class RegimeClassifier:
         return self.calibrated_model if self.calibrated_model is not None else self.model
 
     def train(self, X_train, y_train, sample_weight=None):
+        if self.model is None:
+            self.model = self._create_default_model()
         print(f"Training {self.model_type} Regime Classifier on {len(X_train)} samples...")
         fit_kwargs = {}
         if sample_weight is not None and self.model_type == 'xgboost':
