@@ -1036,21 +1036,29 @@ class TAGridTrendStrategy(StrategyV2Base):
                                pending=self._trend_manager._pending_ticks,
                                required=self._trend_manager._confirmation_ticks)
             if confirmed:
+                logger.info(f"TREND CONFIRMED: score={score.total}/7, calling _open_trend_position")
                 self._open_trend_position(candles, score)
 
     def _open_trend_position(self, candles: pd.DataFrame, score):
-        sr_levels = self._trend_manager._sr.detect(candles)
-        atr = ATR(14)
-        closes = candles["close"]
-        atr_val = None
-        if "high" in candles.columns and "low" in candles.columns:
-            atr_val = atr.calculate(candles["high"], candles["low"], closes)
+        try:
+            sr_levels = self._trend_manager._sr.detect(candles)
+            atr = ATR(14)
+            closes = candles["close"]
+            atr_val = None
+            if "high" in candles.columns and "low" in candles.columns:
+                atr_val = atr.calculate(candles["high"], candles["low"], closes)
 
-        sl = self._trend_manager.calculate_stop_loss(self._last_price, sr_levels, atr_val)
-        tp = self._trend_manager.calculate_take_profit(self._last_price, sl)
+            sl = self._trend_manager.calculate_stop_loss(self._last_price, sr_levels, atr_val)
+            tp = self._trend_manager.calculate_take_profit(self._last_price, sl)
+            capital = self._position_manager._capital
 
-        amount = self._position_manager.calculate_position_size(self._last_price, sl)
-        if amount <= 0:
+            amount = self._position_manager.calculate_position_size(self._last_price, sl)
+            logger.info(f"TREND DEBUG: price={self._last_price:.2f} sl={sl:.2f} tp={tp:.2f} capital={capital:.2f} amount={amount:.4f} score={score.total}/7")
+            if amount <= 0:
+                logger.warning(f"TREND BLOCKED: amount={amount:.4f} (capital={capital:.2f} sl_dist={abs(self._last_price - sl):.4f})")
+                return
+        except Exception as e:
+            logger.error(f"TREND OPEN PRE-CHECK FAILED: {e}")
             return
 
         amount_dec = Decimal(str(amount)).quantize(Decimal("0.01"))
