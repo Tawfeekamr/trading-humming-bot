@@ -1036,40 +1036,28 @@ class TAGridTrendStrategy(StrategyV2Base):
                                pending=self._trend_manager._pending_ticks,
                                required=self._trend_manager._confirmation_ticks)
             if confirmed:
-                self.event_log.log("trend_open_called", score=score.total)
                 self._open_trend_position(candles, score)
 
     def _open_trend_position(self, candles: pd.DataFrame, score):
-        try:
-            sr_levels = self._trend_manager._sr.detect(candles)
-            atr = ATR(14)
-            closes = candles["close"]
-            atr_val = None
-            if "high" in candles.columns and "low" in candles.columns:
-                atr_val = atr.calculate(candles["high"], candles["low"], closes)
+        sr_levels = self._trend_manager._sr.detect(candles)
+        atr = ATR(14)
+        closes = candles["close"]
+        atr_val = None
+        if "high" in candles.columns and "low" in candles.columns:
+            atr_val = atr.calculate(candles["high"], candles["low"], closes)
 
-            sl = self._trend_manager.calculate_stop_loss(self._last_price, sr_levels, atr_val)
-            tp = self._trend_manager.calculate_take_profit(self._last_price, sl)
-            capital = self._position_manager._capital
+        sl = self._trend_manager.calculate_stop_loss(self._last_price, sr_levels, atr_val)
+        tp = self._trend_manager.calculate_take_profit(self._last_price, sl)
 
-            amount = self._position_manager.calculate_position_size(self._last_price, sl)
-            self.event_log.log("trend_open_debug", price=round(self._last_price, 2), sl=round(sl, 2),
-                               tp=round(tp, 2), capital=capital, amount=amount, score=score.total)
-            if amount <= 0:
-                self.event_log.log("trend_open_blocked", reason="amount_le_0", amount=amount, capital=capital,
-                                   sl_dist=round(abs(self._last_price - sl), 4))
-                return
-        except Exception as e:
-            self.event_log.log("trend_open_error", error=str(e))
+        amount = self._position_manager.calculate_position_size(self._last_price, sl)
+        if amount <= 0:
             return
 
         amount_dec = Decimal(str(amount)).quantize(Decimal("0.01"))
         try:
-            self.event_log.log("trend_buy_attempt", amount=str(amount_dec), price=self._last_price)
             order_id = self.buy(self.exchange, self.trading_pair, amount_dec, OrderType.LIMIT)
-            self.event_log.log("trend_buy_result", order_id=str(order_id), amount=str(amount_dec))
         except Exception as e:
-            self.event_log.log("trend_buy_error", error=str(e))
+            logger.error(f"Trend buy failed: {e}")
             return
 
         entry_time = datetime.now(timezone.utc).isoformat()
@@ -1083,8 +1071,6 @@ class TAGridTrendStrategy(StrategyV2Base):
             self.event_log.log("trend_entry", amount=round(amount, 2), price=self._last_price,
                                sl=sl, tp=tp, score=score.total)
             self._trend_breaker.set_peak_equity(self._position_manager._capital + pos.amount * self._last_price)
-        else:
-            self.event_log.log("trend_entry_failed", reason="position_not_created")
 
     def _close_all_trend_positions(self):
         logger.warning("Closing all trend positions...")
