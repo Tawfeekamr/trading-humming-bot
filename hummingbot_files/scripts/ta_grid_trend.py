@@ -1036,7 +1036,7 @@ class TAGridTrendStrategy(StrategyV2Base):
                                pending=self._trend_manager._pending_ticks,
                                required=self._trend_manager._confirmation_ticks)
             if confirmed:
-                logger.info(f"TREND CONFIRMED: score={score.total}/7, calling _open_trend_position")
+                self.event_log.log("trend_open_called", score=score.total)
                 self._open_trend_position(candles, score)
 
     def _open_trend_position(self, candles: pd.DataFrame, score):
@@ -1053,12 +1053,14 @@ class TAGridTrendStrategy(StrategyV2Base):
             capital = self._position_manager._capital
 
             amount = self._position_manager.calculate_position_size(self._last_price, sl)
-            logger.info(f"TREND DEBUG: price={self._last_price:.2f} sl={sl:.2f} tp={tp:.2f} capital={capital:.2f} amount={amount:.4f} score={score.total}/7")
+            self.event_log.log("trend_open_debug", price=round(self._last_price, 2), sl=round(sl, 2),
+                               tp=round(tp, 2), capital=capital, amount=amount, score=score.total)
             if amount <= 0:
-                logger.warning(f"TREND BLOCKED: amount={amount:.4f} (capital={capital:.2f} sl_dist={abs(self._last_price - sl):.4f})")
+                self.event_log.log("trend_open_blocked", reason="amount_le_0", amount=amount, capital=capital,
+                                   sl_dist=round(abs(self._last_price - sl), 4))
                 return
         except Exception as e:
-            logger.error(f"TREND OPEN PRE-CHECK FAILED: {e}")
+            self.event_log.log("trend_open_error", error=str(e))
             return
 
         amount_dec = Decimal(str(amount)).quantize(Decimal("0.01"))
