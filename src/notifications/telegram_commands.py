@@ -793,7 +793,7 @@ class TelegramCommandHandler:
 
                 # Count total positions across all pairs
                 for symbol, engine in strategy.pairs.items():
-                    pm = strategy._position_manager
+                    pm = strategy._position_managers.get(symbol)
                     if pm:
                         positions = pm.get_all_positions()
                         total_open += len(positions)
@@ -804,7 +804,7 @@ class TelegramCommandHandler:
 
                 # Show positions per pair
                 for symbol, engine in strategy.pairs.items():
-                    pm = strategy._position_manager
+                    pm = strategy._position_managers.get(symbol)
                     if not pm:
                         continue
 
@@ -857,20 +857,26 @@ class TelegramCommandHandler:
             logger.error(f"Error in /trend_status: {e}")
             update.message.reply_text(f"⚠️ Error getting trend status: {e}")
 
-    def _cmd_trend_capital(self, update, context):
+    def _cmd_trend_capital(self, update, context=None):
         try:
             logger.info("Telegram /trend_capital received")
             strategy = self.strategy
-            if not hasattr(strategy, '_position_manager') or strategy._position_manager is None:
+            if not hasattr(strategy, '_position_managers') and not hasattr(strategy, '_position_manager'):
                 update.message.reply_text("Trend engine not active")
                 return
 
             text = update.message.text.strip()
             parts = text.split()
 
+            # Get first available manager for display
+            if hasattr(strategy, '_position_managers') and strategy._position_managers:
+                first_pm = next(iter(strategy._position_managers.values()))
+            else:
+                first_pm = strategy._position_manager
+
             if len(parts) < 2:
                 update.message.reply_text(
-                    f"Current trend capital: ${strategy._position_manager._capital:.2f}\n"
+                    f"Current trend capital: ${first_pm._capital:.2f}\n"
                     f"Usage: /trend_capital &lt;amount&gt;"
                 )
                 return
@@ -885,8 +891,13 @@ class TelegramCommandHandler:
                 update.message.reply_text("Capital must be >= 0")
                 return
 
-            old = strategy._position_manager._capital
-            strategy._position_manager._capital = amount
+            old = first_pm._capital
+            # Update all per-pair managers
+            if hasattr(strategy, '_position_managers'):
+                for pm in strategy._position_managers.values():
+                    pm._capital = amount
+            else:
+                strategy._position_manager._capital = amount
             self.event_log.log("trend_capital_updated", old=old, new=amount)
             logger.info(f"Telegram /trend_capital: ${old:.2f} → ${amount:.2f}")
 
@@ -924,24 +935,29 @@ class TelegramCommandHandler:
             logger.error(f"Error in /trend_pnl: {e}")
             update.message.reply_text(f"⚠️ Error getting trend P&L: {e}")
 
-    def _cmd_trend_close(self, update, context):
+    def _cmd_trend_close(self, update, context=None):
         try:
             logger.info("Telegram /trend_close received")
             strategy = self.strategy
-            if not hasattr(strategy, '_position_manager') or strategy._position_manager is None:
+            if not hasattr(strategy, '_position_managers') and not hasattr(strategy, '_position_manager'):
                 update.message.reply_text("Trend engine not active")
                 return
 
-            pm = strategy._position_manager
-            positions = pm.get_all_positions()
+            # Count all positions across pairs
+            total_positions = 0
+            if hasattr(strategy, '_position_managers'):
+                for pm in strategy._position_managers.values():
+                    total_positions += len(pm.get_all_positions())
+            else:
+                total_positions = len(strategy._position_manager.get_all_positions())
 
-            if not positions:
+            if not total_positions:
                 update.message.reply_text("No open trend positions")
                 return
 
             strategy._trend_force_close = True
-            logger.info(f"Telegram /trend_close — closing {len(positions)} position(s)")
-            update.message.reply_text(f"Closing {len(positions)} trend position(s) on next tick...")
+            logger.info(f"Telegram /trend_close — closing {total_positions} position(s)")
+            update.message.reply_text(f"Closing {total_positions} trend position(s) on next tick...")
         except Exception as e:
             logger.error(f"Error in /trend_close: {e}")
             update.message.reply_text(f"⚠️ Error closing trend positions: {e}")

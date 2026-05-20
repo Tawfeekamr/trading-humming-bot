@@ -411,7 +411,18 @@ class TAGridTrendStrategy(StrategyV2Base):
         )
 
         trend_capital = float(os.environ.get("TREND_CAPITAL_USDT", trend_cfg.get("capital", 0)))
-        self._position_manager = PositionManager(
+        self._position_managers: Dict[str, PositionManager] = {}
+        for symbol in self.pairs:
+            self._position_managers[symbol] = PositionManager(
+                capital=trend_capital,
+                max_positions=trend_cfg.get("max_positions", 2),
+                risk_per_trade_pct=trend_cfg.get("risk_per_trade_pct", 2.0),
+                max_position_pct=trend_cfg.get("max_position_pct", 25.0),
+                trailing_stop_pct=trend_cfg.get("trailing_stop_pct", 1.5),
+                trailing_activation_pct=trend_cfg.get("trailing_activation_pct", 1.5),
+            )
+        # Backward compat
+        self._position_manager = list(self._position_managers.values())[0] if self._position_managers else PositionManager(
             capital=trend_capital,
             max_positions=trend_cfg.get("max_positions", 2),
             risk_per_trade_pct=trend_cfg.get("risk_per_trade_pct", 2.0),
@@ -528,7 +539,7 @@ class TAGridTrendStrategy(StrategyV2Base):
             self._load_grid_state(engine)
             trend_path = engine.trend_state_path
             if trend_path.exists():
-                self._position_manager.load_state(trend_path)
+                self._position_managers[symbol].load_state(trend_path)
 
         # Backward compat: load legacy state files
         legacy_grid_path = Path("data/grid_state.json")
@@ -536,8 +547,8 @@ class TAGridTrendStrategy(StrategyV2Base):
             self._load_grid_state(first_engine, legacy_path=legacy_grid_path)
 
         legacy_trend_path = Path("data/trend_state.json")
-        if legacy_trend_path.exists():
-            self._position_manager.load_state(legacy_trend_path)
+        if legacy_trend_path.exists() and first_engine:
+            self._position_managers[first_engine.symbol].load_state(legacy_trend_path)
 
         logger.info(f"Dual-engine strategy started on {self.exchange} with {len(self.pairs)} pair(s)")
 
@@ -602,18 +613,19 @@ class TAGridTrendStrategy(StrategyV2Base):
 
             # Update health (using first pair for backward compat)
             first_engine = list(self.pairs.values())[0] if self.pairs else None
+            total_trend_positions = sum(pm.open_count for pm in self._position_managers.values()) if self._position_managers else self._position_manager.open_count
             if first_engine:
                 update_health(
                     grid_state=self.state_machines[first_engine.symbol].state.value,
                     trend_healthy=not self._trend_breaker.halted,
-                    trend_positions=self._position_manager.open_count,
+                    trend_positions=total_trend_positions,
                     last_signal_score=self._last_trend_score.total if self._last_trend_score else 0,
                 )
             else:
                 update_health(
                     grid_state=self.state_machine.state.value,
                     trend_healthy=not self._trend_breaker.halted,
-                    trend_positions=self._position_manager.open_count,
+                    trend_positions=total_trend_positions,
                     last_signal_score=self._last_trend_score.total if self._last_trend_score else 0,
                 )
         except Exception as e:
@@ -827,13 +839,15 @@ class TAGridTrendStrategy(StrategyV2Base):
         if not self._trend_enabled:
             return
 
+        pm = self._position_managers.get(engine.symbol, self._position_manager)
+
         # Update trailing stops
         if self._last_price.get(engine.symbol, 0) > 0:
-            for pos in self._position_manager.get_all_positions():
-                self._position_manager.update_trailing(pos, self._last_price[engine.symbol])
+            for pos in pm.get_all_positions():
+                pm.update_trailing(pos, self._last_price[engine.symbol])
 
         # Check exits every tick
-        if self._position_manager.open_count > 0:
+        if pm.open_count > 0:
             self._check_trend_exits(engine)
 
         # Force close
@@ -843,7 +857,7 @@ class TAGridTrendStrategy(StrategyV2Base):
 
         # Evaluate signals every 55 ticks (~1 min apart)
         if (self._last_price.get(engine.symbol, 0) > 0
-                and self._position_manager._capital > 0
+                and pm._capital > 0
                 and self._trend_tick_count % 55 == 0):
             self._evaluate_trend_signals(engine)
 
@@ -852,8 +866,16 @@ class TAGridTrendStrategy(StrategyV2Base):
     def did_fill_order(self, event):
         try:
             order_id = str(getattr(event, 'order_id', getattr(event, 'client_order_id', '')))
-            # Route to trend if order_id matches a trend position's entry OR exit order ID
-            if self._position_manager.get_position(order_id) or self._position_manager.get_position_by_exit(order_id):
+            # Route to trend if order_id matches any per-pair position manager
+            is_trend = False
+            for pm in self._position_managers.values():
+                if pm.get_position(order_id) or pm.get_position_by_exit(order_id):
+                    is_trend = True
+                    break
+            if not is_trend:
+                is_trend = self._position_manager.get_position(order_id) or self._position_manager.get_position_by_exit(order_id)
+
+            if is_trend:
                 self._trend_fill(event)
             else:
                 self._grid_fill(event)
@@ -870,7 +892,16 @@ class TAGridTrendStrategy(StrategyV2Base):
         quantity = float(getattr(event, 'amount', 0))
         fee = quantity * price * self._fee_rate
 
-        pos = self._position_manager.get_position(order_id)
+        # Find which pair's manager owns this position
+        pm = None
+        for symbol, mgr in self._position_managers.items():
+            if mgr.get_position(order_id) or mgr.get_position_by_exit(order_id):
+                pm = mgr
+                break
+        if pm is None:
+            pm = self._position_manager
+
+        pos = pm.get_position(order_id)
         if pos:
             # It's an entry fill
             pos.entry_price = price
@@ -896,10 +927,10 @@ class TAGridTrendStrategy(StrategyV2Base):
                 pass
             return
 
-        pos = self._position_manager.get_position_by_exit(order_id)
+        pos = pm.get_position_by_exit(order_id)
         if pos:
             # It's an exit fill
-            closed = self._position_manager.finalize_exit(pos.entry_order_id, price, fee)
+            closed = pm.finalize_exit(pos.entry_order_id, price, fee)
             if closed:
                 self._trend_journal.log_trade(
                     side="SELL", entry_price=closed["entry_price"], exit_price=closed["exit_price"],
@@ -908,8 +939,9 @@ class TAGridTrendStrategy(StrategyV2Base):
                     take_profit=closed["take_profit"], exit_reason=closed["exit_reason"],
                     signal_score=0, duration_minutes=closed["duration_minutes"],
                 )
-                self._save_trend_state()
                 trend_pair = getattr(pos, 'pair', self.trading_pair)
+                trend_engine = self.pairs.get(trend_pair)
+                self._save_trend_state(trend_engine)
                 trend_display = trend_pair.replace("-", "/")
                 trend_base = trend_pair.split("-")[0]
                 logger.info(f"TREND EXIT FILLED ({closed['exit_reason']}): {closed['amount']:.1f} {trend_base} @ ${price:.2f} | PnL ${closed['pnl']:+.2f}")
@@ -1180,9 +1212,10 @@ class TAGridTrendStrategy(StrategyV2Base):
     def _check_trend_exits(self, engine: PairEngine):
         if not self._last_price.get(engine.symbol, 0):
             return
-        exits = self._position_manager.check_exits(self._last_price[engine.symbol])
+        pm = self._position_managers.get(engine.symbol, self._position_manager)
+        exits = pm.check_exits(self._last_price[engine.symbol])
         for exit_info in exits:
-            pos = self._position_manager.get_position(exit_info["order_id"])
+            pos = pm.get_position(exit_info["order_id"])
             if pos:
                 self._execute_trend_exit(pos, exit_info, engine)
 
@@ -1198,11 +1231,12 @@ class TAGridTrendStrategy(StrategyV2Base):
             logger.error(f"Trend sell failed for {engine.symbol}: {e}")
             return
 
-        self._position_manager.mark_exit_pending(pos.entry_order_id, str(order_id), reason)
+        self._position_managers.get(engine.symbol, self._position_manager).mark_exit_pending(pos.entry_order_id, str(order_id), reason)
         self._save_trend_state(engine)
 
     def _evaluate_trend_signals(self, engine: PairEngine):
-        if not self._position_manager.can_open():
+        pm = self._position_managers.get(engine.symbol, self._position_manager)
+        if not pm.can_open():
             return
         if self._trend_breaker.halted:
             return
@@ -1245,7 +1279,8 @@ class TAGridTrendStrategy(StrategyV2Base):
         sl = self._trend_manager.calculate_stop_loss(self._last_price[engine.symbol], sr_levels, atr_val)
         tp = self._trend_manager.calculate_take_profit(self._last_price[engine.symbol], sl)
 
-        amount = self._position_manager.calculate_position_size(self._last_price[engine.symbol], sl)
+        pm = self._position_managers.get(engine.symbol, self._position_manager)
+        amount = pm.calculate_position_size(self._last_price[engine.symbol], sl)
         if amount <= 0:
             return
 
@@ -1257,7 +1292,7 @@ class TAGridTrendStrategy(StrategyV2Base):
             return
 
         entry_time = datetime.now(timezone.utc).isoformat()
-        pos = self._position_manager.open_position(
+        pos = pm.open_position(
             entry_order_id=str(order_id), entry_price=self._last_price[engine.symbol],
             amount=amount, stop_loss=sl, take_profit=tp, entry_time=entry_time,
         )
@@ -1266,11 +1301,12 @@ class TAGridTrendStrategy(StrategyV2Base):
             self._save_trend_state(engine)
             self.event_log.log("trend_entry", amount=round(amount, 2), price=self._last_price[engine.symbol],
                                sl=sl, tp=tp, score=score.total, pair=engine.symbol)
-            self._trend_breaker.set_peak_equity(self._position_manager._capital + pos.amount * self._last_price[engine.symbol])
+            self._trend_breaker.set_peak_equity(pm._capital + pos.amount * self._last_price[engine.symbol])
 
     def _close_all_trend_positions(self, engine: PairEngine):
         logger.warning(f"Closing all trend positions for {engine.symbol}...")
-        for pos in self._position_manager.get_all_positions():
+        pm = self._position_managers.get(engine.symbol, self._position_manager)
+        for pos in pm.get_all_positions():
             self._execute_trend_exit(pos, {
                 "order_id": pos.entry_order_id,
                 "exit_price": self._last_price.get(engine.symbol, 0) or pos.entry_price,
@@ -1280,7 +1316,8 @@ class TAGridTrendStrategy(StrategyV2Base):
     def _save_trend_state(self, engine: PairEngine):
         path = engine.trend_state_path
         path.parent.mkdir(parents=True, exist_ok=True)
-        self._position_manager.save_state(path)
+        pm = self._position_managers.get(engine.symbol, self._position_manager)
+        pm.save_state(path)
 
     # ── Grid Helper Methods ──
 
