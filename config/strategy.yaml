@@ -1,10 +1,10 @@
 # ════════════════════════════════════════════════════════════════════
-#  TA-Enhanced SOL/USDT Grid Bot — Strategy Configuration
+#  TA-Enhanced DOGE/USDT Grid Bot — Strategy Configuration
 #  All non-secret settings live here. Loaded by the strategy script.
 # ════════════════════════════════════════════════════════════════════
 
 # ── Pair & Exchange ───────────────────────────────────────────────
-pair: "SOL-USDT"
+pair: "DOGE-USDT"
 exchange: "binance"
 timeframe: "1h"
 
@@ -14,7 +14,7 @@ grid:
   capital_usdt: 5000          # Total USDT allocated
   min_usdt_reserve: 100       # Always keep this in reserve
   order_refresh_time: 60      # Seconds between order refresh
-  step_size: 0.01             # Exchange quantity precision (SOL=0.01, BTC=0.00001, ETH=0.001)
+  step_size: 1                # Exchange quantity precision (DOGE=1, SOL=0.01, BTC=0.00001, ETH=0.001)
 
 # ── Indicator Settings ────────────────────────────────────────────
 indicators:
