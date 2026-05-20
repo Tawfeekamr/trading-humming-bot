@@ -350,7 +350,12 @@ class TelegramCommandHandler:
             logger.info("Telegram /balance received")
             strategy = self.strategy
             indicators = strategy.get_indicators_snapshot()
-            price = indicators[4] if indicators else 0
+            # Multi-pair: use first pair's price
+            if isinstance(indicators, dict):
+                first = next((v for v in indicators.values() if v is not None), None)
+                price = first[4] if first else 0
+            else:
+                price = indicators[4] if indicators else 0
 
             usdt = strategy._get_usdt_balance()
             base_bal = strategy._get_base_balance()
@@ -460,8 +465,13 @@ class TelegramCommandHandler:
     def _cmd_reset(self, update, context):
         try:
             indicators = self.strategy.get_indicators_snapshot()
-            equity = self.strategy._estimate_equity(
-                indicators[4] if indicators else 0
+            # Multi-pair: use first pair's price
+            if isinstance(indicators, dict):
+                first = next((v for v in indicators.values() if v is not None), None)
+                price = first[4] if first else 0
+            else:
+                price = indicators[4] if indicators else 0
+            equity = self.strategy._estimate_equity(price
             )
             self.circuit_breaker.reset(equity)
             self.event_log.log("circuit_breaker_reset", source="telegram", equity=round(equity, 2))
@@ -622,49 +632,84 @@ class TelegramCommandHandler:
     def _cmd_price(self, update, context):
         try:
             logger.info("Telegram /price received")
-            display_pair = getattr(self.strategy, 'display_pair', 'SOL/USDT')
+            snapshot = self.strategy.get_indicators_snapshot()
 
-            indicators = self.strategy.get_indicators_snapshot()
-            live_price = indicators[4] if indicators else None
+            # Multi-pair: snapshot is Dict[str, Optional[tuple]]
+            if isinstance(snapshot, dict):
+                args = context.args if context.args else []
+                target_symbol = args[0].upper().replace("/", "-") if args else None
 
-            if live_price is None:
+                # If specific pair requested, show detail view
+                if target_symbol:
+                    data = snapshot.get(target_symbol)
+                    if data is None:
+                        update.message.reply_text(f"⚠️ No data for {target_symbol}")
+                        return
+                    self._send_price_detail(update, target_symbol, data)
+                    return
+
+                # Show all pairs summary
+                lines = ["💲 <b>Live Prices</b>\n•••"]
+                for symbol, data in snapshot.items():
+                    if data is not None:
+                        price = data[4]
+                        display = symbol.replace("-", "/")
+                        lines.append(f"<b>{display}</b>: ${price:,.2f}")
+                    else:
+                        display = symbol.replace("-", "/")
+                        lines.append(f"<b>{display}</b>: ⏳ loading")
+                update.message.reply_text("\n".join(lines), parse_mode="HTML")
+                return
+
+            # Legacy single-pair: snapshot is a tuple
+            if not snapshot:
                 update.message.reply_text("⚠️ Could not fetch live price.")
                 return
 
-            if not indicators or not indicators[0]:
-                update.message.reply_text(f"💲 <b>{display_pair}</b>: ${live_price:,.2f}", parse_mode="HTML")
-                return
-
-            bb = indicators[0]
-            rsi = indicators[1]
-            ema = indicators[2]
-            atr = indicators[3]
-
-            bb_upper = bb.upper if bb else 0
-            bb_lower = bb.lower if bb else 0
-            bb_mid = bb.mid if bb else 0
-
-            pct_from_ema = ((live_price - ema) / ema * 100) if ema else 0
-            ema_emoji = "🟢" if pct_from_ema >= 0 else "🔴"
-            rsi_zone = "OVERBOUGHT" if rsi > 70 else "OVERSOLD" if rsi < 30 else "NEUTRAL"
-
-            update.message.reply_text(
-                f"◎ <b>{display_pair}</b>\n"
-                f"•••\n"
-                f"💲 <b>${live_price:,.2f}</b>\n"
-                f"•••\n"
-                f"📊 RSI (14): {rsi:.1f}  [{rsi_zone}]\n"
-                f"{ema_emoji} EMA 200: ${ema:,.2f}  ({pct_from_ema:+.1f}%)\n"
-                f"📏 ATR (14): ${atr:,.2f}\n"
-                f"•••\n"
-                f"📈 BB Upper: ${bb_upper:,.2f}\n"
-                f"📊 BB Mid:   ${bb_mid:,.2f}\n"
-                f"📉 BB Lower: ${bb_lower:,.2f}",
-                parse_mode="HTML"
-            )
+            display_pair = getattr(self.strategy, 'display_pair', 'SOL/USDT')
+            self._send_price_detail(update, display_pair, snapshot)
         except Exception as e:
             logger.error(f"Error in /price: {e}")
             update.message.reply_text(f"⚠️ Error getting price: {e}")
+
+    def _send_price_detail(self, update, display_pair, indicators):
+        """Send detailed price + indicators for a single pair."""
+        live_price = indicators[4] if indicators else None
+        if live_price is None:
+            update.message.reply_text(f"⚠️ No price for {display_pair}")
+            return
+
+        if not indicators or not indicators[0]:
+            update.message.reply_text(f"💲 <b>{display_pair}</b>: ${live_price:,.2f}", parse_mode="HTML")
+            return
+
+        bb = indicators[0]
+        rsi = indicators[1]
+        ema = indicators[2]
+        atr = indicators[3]
+
+        bb_upper = bb.upper if bb else 0
+        bb_lower = bb.lower if bb else 0
+        bb_mid = bb.mid if bb else 0
+
+        pct_from_ema = ((live_price - ema) / ema * 100) if ema else 0
+        ema_emoji = "🟢" if pct_from_ema >= 0 else "🔴"
+        rsi_zone = "OVERBOUGHT" if rsi > 70 else "OVERSOLD" if rsi < 30 else "NEUTRAL"
+
+        update.message.reply_text(
+            f"◎ <b>{display_pair}</b>\n"
+            f"•••\n"
+            f"💲 <b>${live_price:,.2f}</b>\n"
+            f"•••\n"
+            f"📊 RSI (14): {rsi:.1f}  [{rsi_zone}]\n"
+            f"{ema_emoji} EMA 200: ${ema:,.2f}  ({pct_from_ema:+.1f}%)\n"
+            f"📏 ATR (14): ${atr:,.2f}\n"
+            f"•••\n"
+            f"📈 BB Upper: ${bb_upper:,.2f}\n"
+            f"📊 BB Mid:   ${bb_mid:,.2f}\n"
+            f"📉 BB Lower: ${bb_lower:,.2f}",
+            parse_mode="HTML"
+        )
 
     def _cmd_server(self, update, context):
         try:
