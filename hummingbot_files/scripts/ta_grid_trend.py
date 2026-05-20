@@ -179,8 +179,13 @@ class TAGridTrendConfig(StrategyV2ConfigBase):
     env: str = Field(default="paper")
 
     def update_markets(self, markets: MarketDict) -> MarketDict:
-        # Register all enabled pairs from config, fallback to legacy single pair
-        cfg = self._load_config()
+        # Load YAML config directly (self._load_config is on strategy, not config)
+        cfg = {}
+        for p in [Path("config/strategy.yaml"), Path(__file__).parent.parent.parent / "config" / "strategy.yaml"]:
+            if p.exists():
+                with open(p) as f:
+                    cfg = yaml.safe_load(f)
+                break
         pairs_cfg = cfg.get("pairs", [])
         if pairs_cfg:
             # Multi-pair mode

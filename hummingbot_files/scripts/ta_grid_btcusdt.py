@@ -181,7 +181,12 @@ class TAGridConfig(StrategyV2ConfigBase):
         Called by Hummingbot v2 to configure which markets to connect to.
         Supports both multi-pair and legacy single-pair configurations.
         """
-        cfg = self._load_config()
+        cfg = {}
+        for p in [Path("config/strategy.yaml"), Path(__file__).parent.parent.parent / "config" / "strategy.yaml"]:
+            if p.exists():
+                with open(p) as f:
+                    cfg = yaml.safe_load(f)
+                break
         pairs_cfg = cfg.get("pairs", [])
         if pairs_cfg:
             # Multi-pair mode
