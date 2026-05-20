@@ -31,6 +31,7 @@ import streamlit_authenticator as stauth
 import yaml
 import secrets
 from yaml import SafeLoader
+from datetime import timedelta
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from src.journal.trade_journal import TradeJournal
@@ -99,6 +100,35 @@ with st.sidebar:
     if authenticator.logout("Logout", location="sidebar"):
         st.rerun()
 
+    # ── Trading Pair Selector ────────────────────────────────────────
+    st.markdown("---")
+
+    # Get all unique pairs from the journal
+    all_trades = journal.get_trades()
+    unique_pairs = list(set([t["pair"] for t in all_trades])) if all_trades else ["BTC/USDT"]
+    unique_pairs.sort()
+
+    selected_pair = st.selectbox(
+        "Trading Pair",
+        options=unique_pairs,
+        index=0,
+        key="selected_pair"
+    )
+
+    # ── Portfolio Overview ────────────────────────────────────────────
+    st.markdown("### Portfolio")
+
+    if all_trades:
+        # Show latest price for each pair
+        for pair in unique_pairs:
+            pair_trades = [t for t in all_trades if t["pair"] == pair]
+            if pair_trades:
+                latest_trade = pair_trades[0]  # Already sorted by timestamp DESC
+                latest_price = latest_trade.get("exit_price", 0)
+                st.metric(pair, f"${latest_price:.4f}")
+    else:
+        st.caption("No trade data yet")
+
 # ── Dark Theme CSS ─────────────────────────────────────────────────
 
 st.markdown("""
@@ -160,7 +190,7 @@ _mode_border = "#da3633" if _is_live else "#9e6a03"
 
 col_title, col_mode, col_refresh = st.columns([4, 1.5, 1])
 with col_title:
-    st.markdown("## 🤖 BTC/USDT Grid Bot — P&L Dashboard")
+    st.markdown(f"## 🤖 {selected_pair} Grid Bot — P&L Dashboard")
     st.caption(f"Last refreshed: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC")
 with col_mode:
     st.markdown(
@@ -182,10 +212,67 @@ with col_refresh:
 
 st.markdown('<div class="section-title">Performance Summary</div>', unsafe_allow_html=True)
 
-today  = journal.summary_today()
-week   = journal.summary_this_week()
-month  = journal.summary_this_month()
-alltime = journal.summary_all_time()
+# Get all trades and filter by selected pair
+all_trades = journal.get_trades()
+pair_trades = [t for t in all_trades if t["pair"] == selected_pair] if selected_pair != "All" else all_trades
+
+# Helper to calculate summary from filtered trades
+def calculate_summary(trades_list):
+    if not trades_list:
+        return {
+            "total_trades": 0,
+            "winning": 0,
+            "losing": 0,
+            "gross_pnl": 0,
+            "total_fees": 0,
+            "net_pnl": 0,
+            "best_trade": 0,
+            "worst_trade": 0,
+            "avg_pnl": 0,
+            "win_rate": 0
+        }
+
+    total = len(trades_list)
+    winning = sum(1 for t in trades_list if t["net_pnl"] > 0)
+    losing = sum(1 for t in trades_list if t["net_pnl"] < 0)
+    gross_pnl = sum(t["gross_pnl"] for t in trades_list)
+    total_fees = sum(t["fee"] for t in trades_list)
+    net_pnl = sum(t["net_pnl"] for t in trades_list)
+    best_trade = max((t["net_pnl"] for t in trades_list), default=0)
+    worst_trade = min((t["net_pnl"] for t in trades_list), default=0)
+    avg_pnl = net_pnl / total if total > 0 else 0
+    win_rate = round((winning / total * 100), 1) if total > 0 else 0
+
+    return {
+        "total_trades": total,
+        "winning": winning,
+        "losing": losing,
+        "gross_pnl": gross_pnl,
+        "total_fees": total_fees,
+        "net_pnl": net_pnl,
+        "best_trade": best_trade,
+        "worst_trade": worst_trade,
+        "avg_pnl": avg_pnl,
+        "win_rate": win_rate
+    }
+
+def filter_trades_by_period(trades_list, period_start):
+    return [t for t in trades_list if t["timestamp"] >= period_start]
+
+# Calculate summaries for different periods
+now = datetime.now(timezone.utc)
+today_start = now.strftime("%Y-%m-%d 00:00:00")
+week_start = (now - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
+month_start = now.strftime("%Y-%m-%d 01 00:00:00")
+
+today_trades = filter_trades_by_period(pair_trades, today_start)
+week_trades = filter_trades_by_period(pair_trades, week_start)
+month_trades = filter_trades_by_period(pair_trades, month_start)
+
+today  = calculate_summary(today_trades)
+week   = calculate_summary(week_trades)
+month  = calculate_summary(month_trades)
+alltime = calculate_summary(pair_trades)
 
 def metric_card(label, value, is_pnl=True):
     if is_pnl:
@@ -239,7 +326,31 @@ col_chart, col_period = st.columns([4, 1])
 with col_period:
     days = st.selectbox("Period", [7, 14, 30, 60, 90], index=2, label_visibility="collapsed")
 
-equity = journal.equity_curve(days=days)
+# Calculate equity curve from filtered trades
+since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+period_trades = [t for t in pair_trades if t["timestamp"] >= since]
+
+if period_trades:
+    # Group by date and calculate daily PnL
+    from collections import defaultdict
+    daily_pnl = defaultdict(float)
+    for t in period_trades:
+        date = t["timestamp"][:10]  # Extract date part
+        daily_pnl[date] += t["net_pnl"]
+
+    # Sort dates and calculate cumulative PnL
+    sorted_dates = sorted(daily_pnl.keys())
+    cumulative = 0
+    equity = []
+    for date in sorted_dates:
+        cumulative += daily_pnl[date]
+        equity.append({
+            "date": date,
+            "daily_pnl": daily_pnl[date],
+            "cumulative_pnl": cumulative
+        })
+else:
+    equity = []
 
 if equity:
     df_eq = pd.DataFrame(equity)
@@ -289,6 +400,10 @@ with col_filter2:
 
 trades = journal.get_trades()
 
+# Filter by selected pair
+if selected_pair != "All":
+    trades = [t for t in trades if t["pair"] == selected_pair]
+
 if trades:
     df = pd.DataFrame(trades)
 
@@ -302,13 +417,13 @@ if trades:
 
     # Format display columns
     display = df[[
-        "timestamp", "side", "entry_price", "exit_price",
+        "timestamp", "pair", "side", "entry_price", "exit_price",
         "quantity", "gross_pnl", "fee", "net_pnl",
         "grid_level", "duration_min", "rsi", "grid_state"
     ]].copy()
 
     display.columns = [
-        "Time", "Side", "Entry $", "Exit $",
+        "Time", "Pair", "Side", "Entry $", "Exit $",
         "Qty BTC", "Gross PnL", "Fee", "Net PnL",
         "Level", "Min", "RSI", "State"
     ]
@@ -348,7 +463,13 @@ else:
 
 st.markdown('<div class="section-title">Best & Worst Trades</div>', unsafe_allow_html=True)
 
-bw = journal.best_worst_trades(limit=5)
+# Get best and worst trades from filtered data
+sorted_by_pnl = sorted(pair_trades, key=lambda x: x["net_pnl"], reverse=True)
+best_trades = sorted_by_pnl[:5]
+worst_trades = sorted_by_pnl[-5:] if len(sorted_by_pnl) >= 5 else sorted_by_pnl
+worst_trades.reverse()  # Show worst first
+
+bw = {"best": best_trades, "worst": worst_trades}
 col_best, col_worst = st.columns(2)
 
 def render_trade_list(trades_list, title, emoji):
@@ -376,12 +497,14 @@ with col_worst:
 
 st.markdown('<div class="section-title">Period Breakdown</div>', unsafe_allow_html=True)
 
+hour_start = (now - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
+
 periods = {
-    "⏰ This Hour":  journal.summary_this_hour(),
-    "📅 Today":      journal.summary_today(),
-    "📆 This Week":  journal.summary_this_week(),
-    "🗓 This Month": journal.summary_this_month(),
-    "🏦 All Time":   journal.summary_all_time(),
+    "⏰ This Hour":  calculate_summary(filter_trades_by_period(pair_trades, hour_start)),
+    "📅 Today":      today,
+    "📆 This Week":  week,
+    "🗓 This Month": month,
+    "🏦 All Time":   alltime,
 }
 
 period_data = []
@@ -411,4 +534,4 @@ styled_p = df_periods.style \
 st.dataframe(styled_p, use_container_width=True, hide_index=True)
 
 st.markdown("---")
-st.caption(f"TA-Enhanced BTC/USDT Grid Bot · {_mode_label} · Hummingbot v2 · Binance FZE · Dubai, UAE")
+st.caption(f"TA-Enhanced {selected_pair} Grid Bot · {_mode_label} · Hummingbot v2 · Binance FZE · Dubai, UAE")
