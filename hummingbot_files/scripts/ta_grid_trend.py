@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from dotenv import load_dotenv
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 from dataclasses import dataclass as dataclass_fills
 from typing import Optional as Optional_fills
 import time as time_mod
@@ -83,6 +83,10 @@ from src.journal.trade_journal import TradeJournal, Trade
 from src.health import update_health, set_halted, start_health_server
 from src.logging.event_logger import EventLogger
 from src.monitoring.system_monitor import SystemAlertMonitor
+
+# Multi-pair support
+from hummingbot_files.scripts.pair_engine import PairEngine, PairConfig
+from hummingbot_files.scripts.capital_manager import CapitalManager
 
 try:
     from src.ml.regime_classifier import RegimeClassifier
@@ -169,7 +173,18 @@ class TAGridTrendConfig(StrategyV2ConfigBase):
     env: str = Field(default="paper")
 
     def update_markets(self, markets: MarketDict) -> MarketDict:
-        markets[self.exchange] = {self.trading_pair: {}}
+        # Register all enabled pairs from config, fallback to legacy single pair
+        cfg = self._load_config()
+        pairs_cfg = cfg.get("pairs", [])
+        if pairs_cfg:
+            # Multi-pair mode
+            for p in pairs_cfg:
+                if p.get("enabled", True):
+                    markets.setdefault(self.exchange, {})[p["symbol"]] = {}
+        else:
+            # Legacy single-pair mode
+            pair = cfg.get("pair", self.trading_pair)
+            markets[self.exchange] = {pair: {}}
         return markets
 
 
@@ -193,7 +208,6 @@ class TAGridTrendStrategy(StrategyV2Base):
 
         self.config = config
         self.exchange = config.exchange
-        self.trading_pair = config.trading_pair
 
         # Call parent constructor (required for v2)
         super().__init__(connectors, config)
@@ -205,15 +219,28 @@ class TAGridTrendStrategy(StrategyV2Base):
         risk_cfg = cfg.get("risk", {})
         trend_cfg = cfg.get("trend", {})
 
-        # Override pair from YAML config
-        if cfg.get("pair"):
-            self.trading_pair = cfg["pair"]
+        # Multi-pair support: parse pairs from config or fall back to legacy single pair
+        pairs_cfg = cfg.get("pairs", [])
+        if not pairs_cfg:
+            # Legacy single-pair fallback
+            pair = cfg.get("pair", config.trading_pair)
+            step = grid_cfg.get("step_size", config.step_size)
+            pairs_cfg = [{"symbol": pair, "step_size": step, "enabled": True}]
+
+        self.pairs: Dict[str, PairEngine] = {}
+        for p in pairs_cfg:
+            pc = PairConfig(symbol=p["symbol"], step_size=p["step_size"], enabled=p.get("enabled", True))
+            if pc.enabled:
+                self.pairs[pc.symbol] = PairEngine(pc, state_dir=Path("data"))
+
+        # Backward compat: set trading_pair to first enabled pair
+        self.trading_pair = list(self.pairs.keys())[0] if self.pairs else config.trading_pair
 
         # Environment
         self.env = os.environ.get("ENV", config.env)
         self.is_testnet = self.env == "paper"
 
-        # Pair helpers
+        # Pair helpers (backward compat - will be replaced by engine properties)
         self.base_asset = self.trading_pair.split("-")[0]
         self.binance_symbol = self.trading_pair.replace("-", "")
         self.display_pair = self.trading_pair.replace("-", "/")
@@ -221,12 +248,11 @@ class TAGridTrendStrategy(StrategyV2Base):
         # ── Health server ──
         start_health_server(port=8080)
 
-        # ── Grid engine ──
+        # ── Grid engine configuration ──
         self.levels = int(os.environ.get("GRID_LEVELS", grid_cfg.get("levels", config.levels)))
         self.capital_usdt = float(os.environ.get("GRID_CAPITAL_USDT", grid_cfg.get("capital_usdt", config.capital_usdt)))
         self.min_reserve = float(os.environ.get("MIN_USDT_RESERVE", grid_cfg.get("min_usdt_reserve", config.min_reserve)))
         self.order_refresh_time = grid_cfg.get("order_refresh_time", config.order_refresh_time)
-        self.step_size = float(grid_cfg.get("step_size", config.step_size))
 
         bb_cfg = ind_cfg.get("bollinger", {})
         self.bb_period = bb_cfg.get("period", config.bb_period)
@@ -241,32 +267,86 @@ class TAGridTrendStrategy(StrategyV2Base):
         self.atr_period = atr_cfg.get("period", config.atr_period)
         self.atr_multiplier = atr_cfg.get("spacing_multiplier", config.atr_multiplier)
 
-        self.bb = BollingerBands(self.bb_period, self.bb_std)
-        self.rsi = RSI(self.rsi_period)
-        self.ema = EMA(self.ema_period)
-        self.atr = ATR(self.atr_period, self.atr_multiplier)
+        # Initialize indicators for each pair engine
+        for engine in self.pairs.values():
+            engine.bb = BollingerBands(self.bb_period, self.bb_std)
+            engine.rsi = RSI(self.rsi_period)
+            engine.ema = EMA(self.ema_period)
+            engine.atr = ATR(self.atr_period, self.atr_multiplier)
 
-        self.grid_manager = GridManager(
-            levels=self.levels,
-            capital_usdt=self.capital_usdt,
-            min_reserve=self.min_reserve,
-            step_size=self.step_size,
-            spacing_multiplier=self.atr_multiplier,
-        )
+        # Backward compat: set single-pair indicators
+        first_engine = list(self.pairs.values())[0] if self.pairs else None
+        if first_engine:
+            self.bb = first_engine.bb
+            self.rsi = first_engine.rsi
+            self.ema = first_engine.ema
+            self.atr = first_engine.atr
+        else:
+            self.bb = BollingerBands(self.bb_period, self.bb_std)
+            self.rsi = RSI(self.rsi_period)
+            self.ema = EMA(self.ema_period)
+            self.atr = ATR(self.atr_period, self.atr_multiplier)
+
+        # Grid managers per pair
+        self.grid_managers: Dict[str, GridManager] = {}
+        self.state_machines: Dict[str, GridStateMachine] = {}
+        self.grid_order_trackers: Dict[str, OrderTracker] = {}
+        self.grid_circuit_breakers: Dict[str, CircuitBreaker] = {}
+        self.position_guards: Dict[str, PositionGuard] = {}
+
+        for symbol, engine in self.pairs.items():
+            self.grid_managers[symbol] = GridManager(
+                levels=self.levels,
+                capital_usdt=self.capital_usdt,  # Will be managed by CapitalManager
+                min_reserve=self.min_reserve,
+                step_size=engine.step_size,
+                spacing_multiplier=self.atr_multiplier,
+            )
+            self.state_machines[symbol] = GridStateMachine()
+            self.grid_order_trackers[symbol] = OrderTracker()
+            self.grid_circuit_breakers[symbol] = CircuitBreaker(
+                float(os.environ.get("MAX_DRAWDOWN_PCT", risk_cfg.get("max_drawdown_pct", config.max_drawdown_pct))),
+                risk_cfg.get("daily_loss_limit_pct", config.daily_loss_limit_pct),
+            )
+            self.grid_circuit_breakers[symbol].set_peak_equity(self.capital_usdt)
+            self.grid_circuit_breakers[symbol].set_start_of_day_equity(self.capital_usdt)
+            self.position_guards[symbol] = PositionGuard(
+                float(os.environ.get("MAX_BASE_EXPOSURE_PCT", risk_cfg.get("max_base_exposure_pct", config.max_base_exposure_pct))),
+                self.min_reserve, self.capital_usdt,
+            )
+
+        # Backward compat: set single-pair instances
+        if first_engine:
+            self.grid_manager = self.grid_managers[first_engine.symbol]
+            self.state_machine = self.state_machines[first_engine.symbol]
+            self._grid_order_tracker = self.grid_order_trackers[first_engine.symbol]
+            self.grid_circuit_breaker = self.grid_circuit_breakers[first_engine.symbol]
+            self.position_guard = self.position_guards[first_engine.symbol]
+            self.step_size = first_engine.step_size
+        else:
+            self.grid_manager = GridManager(
+                levels=self.levels,
+                capital_usdt=self.capital_usdt,
+                min_reserve=self.min_reserve,
+                step_size=config.step_size,
+                spacing_multiplier=self.atr_multiplier,
+            )
+            self.state_machine = GridStateMachine()
+            self._grid_order_tracker = OrderTracker()
+            self.grid_circuit_breaker = CircuitBreaker(
+                float(os.environ.get("MAX_DRAWDOWN_PCT", risk_cfg.get("max_drawdown_pct", config.max_drawdown_pct))),
+                risk_cfg.get("daily_loss_limit_pct", config.daily_loss_limit_pct),
+            )
+            self.grid_circuit_breaker.set_peak_equity(self.capital_usdt)
+            self.grid_circuit_breaker.set_start_of_day_equity(self.capital_usdt)
+            self.position_guard = PositionGuard(
+                float(os.environ.get("MAX_BASE_EXPOSURE_PCT", risk_cfg.get("max_base_exposure_pct", config.max_base_exposure_pct))),
+                self.min_reserve, self.capital_usdt,
+            )
+            self.step_size = float(grid_cfg.get("step_size", config.step_size))
+
         self._base_capital = self.capital_usdt
         self._initial_equity = None
-        self.state_machine = GridStateMachine()
-        self._grid_order_tracker = OrderTracker()
-        self.grid_circuit_breaker = CircuitBreaker(
-            float(os.environ.get("MAX_DRAWDOWN_PCT", risk_cfg.get("max_drawdown_pct", config.max_drawdown_pct))),
-            risk_cfg.get("daily_loss_limit_pct", config.daily_loss_limit_pct),
-        )
-        self.grid_circuit_breaker.set_peak_equity(self.capital_usdt)
-        self.grid_circuit_breaker.set_start_of_day_equity(self.capital_usdt)
-        self.position_guard = PositionGuard(
-            float(os.environ.get("MAX_BASE_EXPOSURE_PCT", risk_cfg.get("max_base_exposure_pct", config.max_base_exposure_pct))),
-            self.min_reserve, self.capital_usdt,
-        )
         self._peak_equity = self.capital_usdt
         self._open_buys: dict[str, FillRecord] = {}
         self._unmatched_sells: dict[str, FillRecord] = {}
@@ -282,14 +362,28 @@ class TAGridTrendStrategy(StrategyV2Base):
         self._last_grid_place_time = 0
         self._min_grid_refresh_sec = 300
 
-        # ── Shared candle feed ──
-        self.candle_feed = CandleFeed(
-            symbol=self.binance_symbol,
-            interval=trend_cfg.get("timeframe", "1h"),
-            testnet=self.is_testnet,
-        )
-        self._last_candle_time = None
-        self._cached_indicators = None
+        # ── Candle feeds per pair ──
+        self.candle_feeds: Dict[str, CandleFeed] = {}
+        for symbol, engine in self.pairs.items():
+            self.candle_feeds[symbol] = CandleFeed(
+                symbol=engine.binance_symbol,
+                interval=trend_cfg.get("timeframe", "1h"),
+                testnet=self.is_testnet,
+            )
+
+        # Backward compat: set single-pair candle feed
+        if first_engine:
+            self.candle_feed = self.candle_feeds[first_engine.symbol]
+        else:
+            self.candle_feed = CandleFeed(
+                symbol=self.binance_symbol,
+                interval=trend_cfg.get("timeframe", "1h"),
+                testnet=self.is_testnet,
+            )
+
+        self._last_candle_time: Dict[str, Optional[pd.Timestamp]] = {}
+        self._cached_indicators: Dict[str, Optional[tuple]] = {}
+        self._cached_candles: Dict[str, Optional[pd.DataFrame]] = {}
 
         # ── Trend engine ──
         self._trend_manager = TrendManager(
@@ -323,11 +417,11 @@ class TAGridTrendStrategy(StrategyV2Base):
             daily_loss_limit_pct=trend_cfg.get("daily_loss_limit_pct", 5.0),
         )
 
-        # ── ML Regime Classifier ──
+        # ── ML Regime Classifier (disabled for multi-pair) ──
         self._ml_classifier = None
         self._ml_confidence = 0.0
         self._ml_regime = 0
-        if ML_AVAILABLE:
+        if len(self.pairs) <= 1 and ML_AVAILABLE:
             try:
                 model_path = Path("models/regime_rf_v3.pkl")
                 if model_path.exists():
@@ -338,14 +432,29 @@ class TAGridTrendStrategy(StrategyV2Base):
                     logger.info("ML Regime Classifier model file not found.")
             except Exception as e:
                 logger.warning(f"Could not initialize ML Regime Classifier: {e}")
+        elif len(self.pairs) > 1:
+            logger.info("ML Regime Classifier disabled: multi-pair mode active")
 
         # ── Shared state ──
-        self._last_price: float = 0.0
+        self._last_price: Dict[str, float] = {}
         self._last_trend_score = None
         self._trend_force_close: bool = False
         self._tick_count = 0
         self._trend_tick_count: int = 0
         self._state_lock = threading.Lock()
+
+        # ── Capital Manager ──
+        total_cap = float(grid_cfg.get("capital_usdt", config.capital_usdt)) + float(trend_cfg.get("capital", 5000))
+        max_per_pair = float(trend_cfg.get("max_position_pct", 25.0)) / 100.0
+        self._capital_mgr = CapitalManager(total_capital=total_cap, state_dir=Path("data"), max_per_pair=max_per_pair)
+        self._capital_mgr.load()
+
+        # Initialize per-pair state containers
+        for symbol in self.pairs:
+            self._last_price[symbol] = 0.0
+            self._last_candle_time[symbol] = None
+            self._cached_indicators[symbol] = None
+            self._cached_candles[symbol] = None
 
         # ── Shared services ──
         self.telegram = TelegramBot()
@@ -403,15 +512,23 @@ class TAGridTrendStrategy(StrategyV2Base):
         except RuntimeError:
             pass
 
-        # ── Load state ──
-        self._state_file = Path("data/grid_state.json")
-        self._load_grid_state()
+        # ── Load state for each pair ──
+        for symbol, engine in self.pairs.items():
+            self._load_grid_state(engine)
+            trend_path = engine.trend_state_path
+            if trend_path.exists():
+                self._position_manager.load_state(trend_path)
 
-        trend_state_path = Path("data/trend_state.json")
-        if trend_state_path.exists():
-            self._position_manager.load_state(trend_state_path)
+        # Backward compat: load legacy state files
+        legacy_grid_path = Path("data/grid_state.json")
+        if legacy_grid_path.exists() and first_engine:
+            self._load_grid_state(first_engine, legacy_path=legacy_grid_path)
 
-        _logger.info(f"Dual-engine strategy started on {self.exchange} {self.trading_pair}")
+        legacy_trend_path = Path("data/trend_state.json")
+        if legacy_trend_path.exists():
+            self._position_manager.load_state(legacy_trend_path)
+
+        logger.info(f"Dual-engine strategy started on {self.exchange} with {len(self.pairs)} pair(s)")
 
         # Force-ready watchdog
         threading.Thread(target=self._force_connector_ready, daemon=True).start()
@@ -450,29 +567,44 @@ class TAGridTrendStrategy(StrategyV2Base):
             if self._telegram_commands:
                 self._telegram_commands.poll_once()
 
-            # Update current price
+            # Update current price for all pairs
             connector = self.connectors.get(self.exchange)
-            if connector:
+            if not connector:
+                return
+
+            for symbol, engine in self.pairs.items():
                 try:
-                    mid_price = connector.get_mid_price(self.trading_pair)
+                    mid_price = connector.get_mid_price(symbol)
                     if mid_price:
-                        self._last_price = float(mid_price)
+                        self._last_price[symbol] = float(mid_price)
+                        engine.last_price = float(mid_price)
                 except Exception:
                     pass
 
-            # ── Grid Engine ──
-            self._grid_tick()
+            # ── Grid Engine (all pairs) ──
+            for symbol, engine in self.pairs.items():
+                self._grid_tick(engine)
 
-            # ── Trend Engine ──
-            self._trend_tick()
+            # ── Trend Engine (all pairs) ──
+            for symbol, engine in self.pairs.items():
+                self._trend_tick(engine)
 
-            # Update health
-            update_health(
-                grid_state=self.state_machine.state.value,
-                trend_healthy=not self._trend_breaker.halted,
-                trend_positions=self._position_manager.open_count,
-                last_signal_score=self._last_trend_score.total if self._last_trend_score else 0,
-            )
+            # Update health (using first pair for backward compat)
+            first_engine = list(self.pairs.values())[0] if self.pairs else None
+            if first_engine:
+                update_health(
+                    grid_state=self.state_machines[first_engine.symbol].state.value,
+                    trend_healthy=not self._trend_breaker.halted,
+                    trend_positions=self._position_manager.open_count,
+                    last_signal_score=self._last_trend_score.total if self._last_trend_score else 0,
+                )
+            else:
+                update_health(
+                    grid_state=self.state_machine.state.value,
+                    trend_healthy=not self._trend_breaker.halted,
+                    trend_positions=self._position_manager.open_count,
+                    last_signal_score=self._last_trend_score.total if self._last_trend_score else 0,
+                )
         except Exception as e:
             import traceback
             tb = traceback.format_exc()
@@ -481,32 +613,34 @@ class TAGridTrendStrategy(StrategyV2Base):
 
     # ── Grid Engine Tick ──
 
-    def _grid_tick(self):
-        if self.grid_circuit_breaker.halted:
+    def _grid_tick(self, engine: PairEngine):
+        """Process grid tick for a single pair."""
+        circuit_breaker = self.grid_circuit_breakers[engine.symbol]
+        if circuit_breaker.halted:
             return
 
         if self._manual_pause:
             if self._grid_dirty:
-                self._cancel_all_orders("manual_pause")
+                self._cancel_all_orders(engine, "manual_pause")
                 self._grid_dirty = False
             return
 
         now = pd.Timestamp.now(tz="UTC")
 
-        # Start-of-day equity reset + daily report
+        # Start-of-day equity reset + daily report (only for first pair to avoid spam)
         today_str = now.strftime("%Y-%m-%d")
-        if self._last_sod_reset != today_str:
+        if self._last_sod_reset != today_str and engine.symbol == list(self.pairs.keys())[0]:
             equity = self._estimate_equity(
-                self._cached_indicators[4] if self._cached_indicators else 0
+                self._cached_indicators.get(engine.symbol, [None, None, None, None, 0])[4] or 0
             )
-            self.grid_circuit_breaker.set_start_of_day_equity(equity)
+            circuit_breaker.set_start_of_day_equity(equity)
             self._last_sod_reset = today_str
             self.event_log.log("daily_reset", equity=round(equity, 2))
             logger.info(f"Start-of-day equity reset: ${equity:.2f}")
             self._send_daily_report(equity)
 
-        # Overtrading check
-        if self._overtrading_alerted_today != today_str:
+        # Overtrading check (only for first pair)
+        if self._overtrading_alerted_today != today_str and engine.symbol == list(self.pairs.keys())[0]:
             try:
                 ot = self.journal.is_overtrading(threshold=0.30)
                 if ot["is_overtrading"]:
@@ -527,16 +661,17 @@ class TAGridTrendStrategy(StrategyV2Base):
             except Exception as e:
                 logger.error(f"Overtrading check failed: {e}")
 
+        # Fetch candles for this pair
         should_fetch = (
-            self._last_candle_time is None or
-            now - self._last_candle_time >= pd.Timedelta(minutes=55)
+            self._last_candle_time.get(engine.symbol) is None or
+            now - self._last_candle_time[engine.symbol] >= pd.Timedelta(minutes=55)
         )
 
         if should_fetch:
             try:
-                df = self.candle_feed.fetch_candles(limit=250)
+                df = self.candle_feeds[engine.symbol].fetch_candles(limit=250)
             except Exception as e:
-                logger.error(f"Candle fetch failed: {e}")
+                logger.error(f"Candle fetch failed for {engine.symbol}: {e}")
                 return
 
             if df.empty or len(df) < self.bb_period:
@@ -547,20 +682,20 @@ class TAGridTrendStrategy(StrategyV2Base):
             lows = df["low"]
             current_price = float(closes.iloc[-1])
 
-            bb_result = self.bb.calculate(closes)
-            rsi_value = self.rsi.calculate(closes)
-            ema_value = self.ema.calculate(closes)
-            atr_value = self.atr.calculate(highs, lows, closes)
+            bb_result = engine.bb.calculate(closes)
+            rsi_value = engine.rsi.calculate(closes)
+            ema_value = engine.ema.calculate(closes)
+            atr_value = engine.atr.calculate(highs, lows, closes)
 
             if any(v is None for v in [bb_result, rsi_value, ema_value, atr_value]):
                 return
 
-            self._cached_indicators = (bb_result, rsi_value, ema_value, atr_value, current_price)
-            self._last_candle_time = now
-            self._cached_candles = df
+            self._cached_indicators[engine.symbol] = (bb_result, rsi_value, ema_value, atr_value, current_price)
+            self._last_candle_time[engine.symbol] = now
+            self._cached_candles[engine.symbol] = df
             self._grid_dirty = True
-            
-            # ML Prediction
+
+            # ML Prediction (only for single-pair mode)
             if self._ml_classifier:
                 try:
                     df_features = calculate_technical_features(df)
@@ -594,17 +729,19 @@ class TAGridTrendStrategy(StrategyV2Base):
                 rsi=round(rsi_value, 2), bb_upper=round(bb_result.upper, 2),
                 bb_mid=round(bb_result.mid, 2), bb_lower=round(bb_result.lower, 2),
                 ema_200=round(ema_value, 2), atr=round(atr_value, 2),
-                price=round(current_price, 2), grid_state=self.state_machine.state.value,
-                ml_confidence=round(self._ml_confidence, 3), ml_regime=self._ml_regime
+                price=round(current_price, 2), grid_state=self.state_machines[engine.symbol].state.value,
+                ml_confidence=round(self._ml_confidence, 3), ml_regime=self._ml_regime,
+                pair=engine.symbol,
             )
         else:
-            if self._cached_indicators is None:
+            if self._cached_indicators.get(engine.symbol) is None:
                 return
-            bb_result, rsi_value, ema_value, atr_value, current_price = self._cached_indicators
+            bb_result, rsi_value, ema_value, atr_value, current_price = self._cached_indicators[engine.symbol]
 
         # Evaluate state
-        prev_state = self.state_machine.state
-        new_state = self.state_machine.evaluate(
+        state_machine = self.state_machines[engine.symbol]
+        prev_state = state_machine.state
+        new_state = state_machine.evaluate(
             price=current_price, rsi=rsi_value, ema_200=ema_value,
             bb_lower=bb_result.lower, bb_upper=bb_result.upper,
             rsi_overbought=self.rsi_overbought, rsi_oversold=self.rsi_oversold,
@@ -615,30 +752,32 @@ class TAGridTrendStrategy(StrategyV2Base):
             trigger_reason = self._determine_trigger_reason(
                 prev_state, new_state, current_price, rsi_value, ema_value, bb_result
             )
-            logger.info(f"Grid state: {prev_state.value} -> {new_state.value} ({trigger_reason})")
+            logger.info(f"Grid state for {engine.symbol}: {prev_state.value} -> {new_state.value} ({trigger_reason})")
             self.event_log.log("state_changed",
                 previous_state=prev_state.value, new_state=new_state.value,
                 trigger_reason=trigger_reason, price=round(current_price, 2),
                 rsi=round(rsi_value, 2), ema_200=round(ema_value, 2),
+                pair=engine.symbol,
             )
-            self._notify_state_change(new_state, prev_state, trigger_reason, current_price, rsi_value, bb_result, ema_value, atr_value, self._active_buy_spacing)
+            self._notify_state_change(new_state, prev_state, trigger_reason, current_price, rsi_value, bb_result, ema_value, atr_value, self._active_buy_spacing, engine)
             self._grid_dirty = True
 
-        if self.state_machine.is_paused:
+        if state_machine.is_paused:
             if self._grid_dirty:
-                self._cancel_all_orders("state_paused")
+                self._cancel_all_orders(engine, "state_paused")
                 self._grid_dirty = False
             return
 
-        equity = self._estimate_equity(current_price)
-        self.grid_circuit_breaker.update_peak(equity)
-        if self.grid_circuit_breaker.check(equity) or self.grid_circuit_breaker.check_daily(equity):
-            self._cancel_all_orders("circuit_breaker")
+        equity = self._estimate_equity(current_price, engine)
+        circuit_breaker.update_peak(equity)
+        if circuit_breaker.check(equity) or circuit_breaker.check_daily(equity):
+            self._cancel_all_orders(engine, "circuit_breaker")
             self.event_log.log("circuit_breaker",
                 drawdown_pct=round(((self._peak_equity - equity) / self._peak_equity) * 100, 2) if self._peak_equity > 0 else 0,
                 peak_equity=round(self._peak_equity, 2), current_equity=round(equity, 2),
+                pair=engine.symbol,
             )
-            logger.critical("Grid circuit breaker triggered!")
+            logger.critical(f"Grid circuit breaker triggered for {engine.symbol}!")
             set_halted("circuit_breaker")
             return
 
@@ -647,53 +786,55 @@ class TAGridTrendStrategy(StrategyV2Base):
             elapsed = now_ts - self._last_grid_place_time
             if elapsed < self._min_grid_refresh_sec:
                 return
-            live_equity = self._estimate_equity(current_price)
+            live_equity = self._estimate_equity(current_price, engine)
             if self._initial_equity is None:
                 self._initial_equity = live_equity
             growth_ratio = live_equity / self._initial_equity if self._initial_equity > 0 else 1.0
             compound_capital = self._base_capital * growth_ratio
             compound_capital = max(compound_capital, self._base_capital)
-            self.grid_manager.capital_usdt = compound_capital
-            grid = self.grid_manager.calculate_grid(bb_result, atr_value)
+            self.grid_managers[engine.symbol].capital_usdt = compound_capital
+            grid = self.grid_managers[engine.symbol].calculate_grid(bb_result, atr_value)
             self._active_buy_spacing = grid.buy_spacing
             self._active_sell_spacing = grid.sell_spacing
-            self._place_grid_orders(grid, current_price)
+            self._place_grid_orders(grid, current_price, engine)
             self._last_grid_place_time = now_ts
-            logger.info(f"Grid updated: buy_spacing=${grid.buy_spacing:.2f}, sell_spacing=${grid.sell_spacing:.2f} | compound=${compound_capital:.2f}")
+            logger.info(f"Grid updated for {engine.symbol}: buy_spacing=${grid.buy_spacing:.2f}, sell_spacing=${grid.sell_spacing:.2f} | compound=${compound_capital:.2f}")
             deployed = sum(l["price"] * l["quantity"] for l in grid.buy_levels)
             self.event_log.log("grid_recalculated",
                 bb_upper=round(bb_result.upper, 2), bb_lower=round(bb_result.lower, 2),
                 buy_spacing=round(grid.buy_spacing, 2), sell_spacing=round(grid.sell_spacing, 2),
                 num_buy_levels=len(grid.buy_levels), num_sell_levels=len(grid.sell_levels),
                 total_capital_deployed=round(deployed, 2),
+                pair=engine.symbol,
             )
             self._grid_dirty = False
 
     # ── Trend Engine Tick ──
 
-    def _trend_tick(self):
+    def _trend_tick(self, engine: PairEngine):
+        """Process trend tick for a single pair."""
         if not self._trend_enabled:
             return
 
         # Update trailing stops
-        if self._last_price > 0:
+        if self._last_price.get(engine.symbol, 0) > 0:
             for pos in self._position_manager.get_all_positions():
-                self._position_manager.update_trailing(pos, self._last_price)
+                self._position_manager.update_trailing(pos, self._last_price[engine.symbol])
 
         # Check exits every tick
         if self._position_manager.open_count > 0:
-            self._check_trend_exits()
+            self._check_trend_exits(engine)
 
         # Force close
         if self._trend_force_close:
-            self._close_all_trend_positions()
+            self._close_all_trend_positions(engine)
             self._trend_force_close = False
 
         # Evaluate signals every 55 ticks (~1 min apart)
-        if (self._last_price > 0
+        if (self._last_price.get(engine.symbol, 0) > 0
                 and self._position_manager._capital > 0
                 and self._trend_tick_count % 55 == 0):
-            self._evaluate_trend_signals()
+            self._evaluate_trend_signals(engine)
 
     # ── Fill Handler ──
 
@@ -998,37 +1139,37 @@ class TAGridTrendStrategy(StrategyV2Base):
 
     # ── Trend Engine Methods ──
 
-    def _check_trend_exits(self):
-        if not self._last_price:
+    def _check_trend_exits(self, engine: PairEngine):
+        if not self._last_price.get(engine.symbol, 0):
             return
-        exits = self._position_manager.check_exits(self._last_price)
+        exits = self._position_manager.check_exits(self._last_price[engine.symbol])
         for exit_info in exits:
             pos = self._position_manager.get_position(exit_info["order_id"])
             if pos:
-                self._execute_trend_exit(pos, exit_info)
+                self._execute_trend_exit(pos, exit_info, engine)
 
-    def _execute_trend_exit(self, pos, exit_info: dict):
+    def _execute_trend_exit(self, pos, exit_info: dict, engine: PairEngine):
         exit_price = exit_info["exit_price"]
         reason = exit_info["reason"]
         amount = Decimal(str(pos.amount)).quantize(Decimal("0.01"))
 
         try:
-            order_id = self.sell(self.exchange, self.trading_pair, amount, OrderType.LIMIT)
-            logger.info(f"Trend SELL order placed: {amount} SOL @ {exit_price}")
+            order_id = self.sell(self.exchange, engine.symbol, amount, OrderType.LIMIT)
+            logger.info(f"Trend SELL order placed for {engine.symbol}: {amount} {engine.base_asset} @ {exit_price}")
         except Exception as e:
-            logger.error(f"Trend sell failed: {e}")
+            logger.error(f"Trend sell failed for {engine.symbol}: {e}")
             return
 
         self._position_manager.mark_exit_pending(pos.entry_order_id, str(order_id), reason)
-        self._save_trend_state()
+        self._save_trend_state(engine)
 
-    def _evaluate_trend_signals(self):
+    def _evaluate_trend_signals(self, engine: PairEngine):
         if not self._position_manager.can_open():
             return
         if self._trend_breaker.halted:
             return
 
-        # ML gate: trend entries require ML confirmation
+        # ML gate: trend entries require ML confirmation (only for single-pair mode)
         if self._ml_classifier is not None:
             if self._ml_regime == 2:  # Danger regime — no trend entries
                 return
@@ -1037,24 +1178,25 @@ class TAGridTrendStrategy(StrategyV2Base):
             if self._ml_regime == 0 and self._ml_confidence >= 0.65:  # Confident ranging — no trend entries
                 return
 
-        candles = getattr(self, '_cached_candles', None)
+        candles = self._cached_candles.get(engine.symbol)
         if candles is None or len(candles) < 200:
             return
 
-        score = self._trend_manager.evaluate(candles, self._last_price)
+        score = self._trend_manager.evaluate(candles, self._last_price[engine.symbol])
         self._last_trend_score = score
 
-        self.event_log.log("trend_score", total=score.total, max=7, details=score.details)
+        self.event_log.log("trend_score", total=score.total, max=7, details=score.details, pair=engine.symbol)
 
         if self._trend_manager.should_enter(score):
             confirmed = self._trend_manager.confirm_entry(score)
             self.event_log.log("trend_confirm", score=score.total, confirmed=confirmed,
                                pending=self._trend_manager._pending_ticks,
-                               required=self._trend_manager._confirmation_ticks)
+                               required=self._trend_manager._confirmation_ticks,
+                               pair=engine.symbol)
             if confirmed:
-                self._open_trend_position(candles, score)
+                self._open_trend_position(candles, score, engine)
 
-    def _open_trend_position(self, candles: pd.DataFrame, score):
+    def _open_trend_position(self, candles: pd.DataFrame, score, engine: PairEngine):
         sr_levels = self._trend_manager._sr.detect(candles)
         atr = ATR(14)
         closes = candles["close"]
@@ -1062,64 +1204,65 @@ class TAGridTrendStrategy(StrategyV2Base):
         if "high" in candles.columns and "low" in candles.columns:
             atr_val = atr.calculate(candles["high"], candles["low"], closes)
 
-        sl = self._trend_manager.calculate_stop_loss(self._last_price, sr_levels, atr_val)
-        tp = self._trend_manager.calculate_take_profit(self._last_price, sl)
+        sl = self._trend_manager.calculate_stop_loss(self._last_price[engine.symbol], sr_levels, atr_val)
+        tp = self._trend_manager.calculate_take_profit(self._last_price[engine.symbol], sl)
 
-        amount = self._position_manager.calculate_position_size(self._last_price, sl)
+        amount = self._position_manager.calculate_position_size(self._last_price[engine.symbol], sl)
         if amount <= 0:
             return
 
         amount_dec = Decimal(str(amount)).quantize(Decimal("0.01"))
         try:
-            order_id = self.buy(self.exchange, self.trading_pair, amount_dec, OrderType.LIMIT)
+            order_id = self.buy(self.exchange, engine.symbol, amount_dec, OrderType.LIMIT)
         except Exception as e:
-            logger.error(f"Trend buy failed: {e}")
+            logger.error(f"Trend buy failed for {engine.symbol}: {e}")
             return
 
         entry_time = datetime.now(timezone.utc).isoformat()
         pos = self._position_manager.open_position(
-            entry_order_id=str(order_id), entry_price=self._last_price,
+            entry_order_id=str(order_id), entry_price=self._last_price[engine.symbol],
             amount=amount, stop_loss=sl, take_profit=tp, entry_time=entry_time,
         )
 
         if pos:
-            self._save_trend_state()
-            self.event_log.log("trend_entry", amount=round(amount, 2), price=self._last_price,
-                               sl=sl, tp=tp, score=score.total)
-            self._trend_breaker.set_peak_equity(self._position_manager._capital + pos.amount * self._last_price)
+            self._save_trend_state(engine)
+            self.event_log.log("trend_entry", amount=round(amount, 2), price=self._last_price[engine.symbol],
+                               sl=sl, tp=tp, score=score.total, pair=engine.symbol)
+            self._trend_breaker.set_peak_equity(self._position_manager._capital + pos.amount * self._last_price[engine.symbol])
 
-    def _close_all_trend_positions(self):
-        logger.warning("Closing all trend positions...")
+    def _close_all_trend_positions(self, engine: PairEngine):
+        logger.warning(f"Closing all trend positions for {engine.symbol}...")
         for pos in self._position_manager.get_all_positions():
             self._execute_trend_exit(pos, {
                 "order_id": pos.entry_order_id,
-                "exit_price": self._last_price or pos.entry_price,
+                "exit_price": self._last_price.get(engine.symbol, 0) or pos.entry_price,
                 "reason": "manual_close",
-            })
+            }, engine)
 
-    def _save_trend_state(self):
-        path = Path("data/trend_state.json")
+    def _save_trend_state(self, engine: PairEngine):
+        path = engine.trend_state_path
         path.parent.mkdir(parents=True, exist_ok=True)
         self._position_manager.save_state(path)
 
     # ── Grid Helper Methods ──
 
-    def _place_grid_orders(self, grid, current_price: float):
-        self._cancel_all_orders("grid_refresh")
+    def _place_grid_orders(self, grid, current_price: float, engine: PairEngine):
+        self._cancel_all_orders(engine, "grid_refresh")
         connector = self.connectors.get(self.exchange)
         if not connector:
             return
         if hasattr(connector, 'ready') and not connector.ready:
             return
 
-        usdt_bal = self._get_usdt_balance()
-        base_bal = self._get_base_balance()
-        equity = self._estimate_equity(current_price)
-        exposure_pct = self.position_guard.base_exposure_pct(base_bal, current_price, equity)
+        usdt_bal = self._get_usdt_balance(engine)
+        base_bal = self._get_base_balance(engine)
+        equity = self._estimate_equity(current_price, engine)
+        position_guard = self.position_guards[engine.symbol]
+        exposure_pct = position_guard.base_exposure_pct(base_bal, current_price, equity)
 
         buys_placed = 0
         sells_placed = 0
-        indicators = self._cached_indicators
+        indicators = self._cached_indicators.get(engine.symbol)
         current_rsi = indicators[1] if indicators else None
         filled_buy_levels = set(fill.grid_level for fill in self._open_buys.values())
         filled_buy_prices = [fill.price for fill in self._open_buys.values()]
@@ -1135,19 +1278,19 @@ class TAGridTrendStrategy(StrategyV2Base):
             if any(abs(level["price"] - fp) < min_spacing for fp in filled_buy_prices):
                 continue
             order_usdt = level["price"] * level["quantity"]
-            if not self.position_guard.can_place_order(
+            if not position_guard.can_place_order(
                 current_base=base_bal, base_price=current_price,
                 current_usdt=usdt_bal, order_usdt=order_usdt, equity=equity,
             ):
                 continue
             buys_placed += 1
             client_order_id = self.buy(
-                connector_name=self.exchange, trading_pair=self.trading_pair,
+                connector_name=self.exchange, trading_pair=engine.symbol,
                 amount=Decimal(str(level["quantity"])), order_type=OrderType.LIMIT,
                 price=Decimal(str(level["price"])),
             )
             if client_order_id:
-                self._grid_order_tracker.add(GridOrder(
+                self.grid_order_trackers[engine.symbol].add(GridOrder(
                     order_id=client_order_id, level=level["level"],
                     side=OrderSide.BUY, price=level["price"], quantity=level["quantity"],
                 ))
@@ -1165,37 +1308,41 @@ class TAGridTrendStrategy(StrategyV2Base):
                 continue
             if sell_price <= buy.price:
                 continue
-            base_balance = self._get_base_balance()
+            base_balance = self._get_base_balance(engine)
             if buy.quantity > base_balance:
                 continue
             sells_placed += 1
             client_order_id = self.sell(
-                connector_name=self.exchange, trading_pair=self.trading_pair,
+                connector_name=self.exchange, trading_pair=engine.symbol,
                 amount=Decimal(str(buy.quantity)), order_type=OrderType.LIMIT,
                 price=Decimal(str(sell_price)),
             )
             if client_order_id:
-                self._grid_order_tracker.add(GridOrder(
+                self.grid_order_trackers[engine.symbol].add(GridOrder(
                     order_id=client_order_id, level=buy.grid_level,
                     side=OrderSide.SELL, price=sell_price, quantity=buy.quantity,
                 ))
 
-        logger.info(f"Grid: buys={buys_placed} sells={sells_placed} | open_buys={len(self._open_buys)} unmatched={len(self._unmatched_sells)}")
+        logger.info(f"Grid for {engine.symbol}: buys={buys_placed} sells={sells_placed} | open_buys={len(self._open_buys)} unmatched={len(self._unmatched_sells)}")
 
-    def _cancel_all_orders(self, reason: str = "grid_refresh"):
+    def _cancel_all_orders(self, engine: PairEngine, reason: str = "grid_refresh"):
         try:
             active = self.get_active_orders(self.exchange)
         except Exception:
             active = []
         for order in active:
+            # Only cancel orders for this specific pair
+            if order.trading_pair != engine.symbol:
+                continue
             self.event_log.log("order_cancelled",
                 order_id=str(order.client_order_id),
                 side="BUY" if order.is_buy else "SELL",
                 price=float(order.price), reason=reason,
+                pair=engine.symbol,
             )
             self.cancel(self.exchange, order.trading_pair, order.client_order_id)
-        self._grid_order_tracker.cancel_all()
-        self._grid_order_tracker.clear_history()
+        self.grid_order_trackers[engine.symbol].cancel_all()
+        self.grid_order_trackers[engine.symbol].clear_history()
 
     def _regime_name(self) -> str:
         return {0: 'RANGING', 1: 'TRENDING', 2: 'DANGER'}.get(self._ml_regime, 'UNKNOWN')
@@ -1219,7 +1366,7 @@ class TAGridTrendStrategy(StrategyV2Base):
             return "initial_activation"
         return "unknown"
 
-    def _get_usdt_balance(self) -> float:
+    def _get_usdt_balance(self, engine: PairEngine = None) -> float:
         connector = self.connectors.get(self.exchange)
         if not connector:
             return 0.0
@@ -1228,17 +1375,18 @@ class TAGridTrendStrategy(StrategyV2Base):
             return 0.0
         return float(balance.available if hasattr(balance, 'available') else balance)
 
-    def _get_base_balance(self) -> float:
+    def _get_base_balance(self, engine: PairEngine = None) -> float:
         connector = self.connectors.get(self.exchange)
         if not connector:
             return 0.0
-        balance = getattr(connector, "get_balance", lambda x: None)(self.base_asset)
+        base_asset = engine.base_asset if engine else self.base_asset
+        balance = getattr(connector, "get_balance", lambda x: None)(base_asset)
         if balance is None:
             return 0.0
         return float(balance.available if hasattr(balance, 'available') else balance)
 
-    def _estimate_equity(self, base_price: float) -> float:
-        return self._get_usdt_balance() + (self._get_base_balance() * base_price)
+    def _estimate_equity(self, base_price: float, engine: PairEngine = None) -> float:
+        return self._get_usdt_balance(engine) + (self._get_base_balance(engine) * base_price)
 
     def _send_daily_report(self, equity: float):
         try:
@@ -1293,8 +1441,9 @@ class TAGridTrendStrategy(StrategyV2Base):
         except Exception as e:
             logger.error(f"Failed to send daily report: {e}")
 
-    def _notify_state_change(self, new_state, prev_state, trigger_reason, price, rsi, bb, ema, atr, actual_spacing=0):
-        state_key = new_state.value
+    def _notify_state_change(self, new_state, prev_state, trigger_reason, price, rsi, bb, ema, atr, actual_spacing=0, engine: PairEngine = None):
+        display_pair = engine.display_pair if engine else self.display_pair
+        state_key = f"{new_state.value}_{engine.symbol}" if engine else new_state.value
         now = time_mod.time()
         last_alert = self._last_state_alert_time.get(state_key, 0)
         if now - last_alert < self._state_alert_cooldown:
@@ -1306,7 +1455,7 @@ class TAGridTrendStrategy(StrategyV2Base):
 
         if new_state == GridState.ACTIVE:
             msg = (
-                f"🟢 <b>Grid ACTIVATED — {self.display_pair}</b>\n"
+                f"🟢 <b>Grid ACTIVATED — {display_pair}</b>\n"
                 f"•••\n"
                 f"💵 <b>Price:</b> ${price:,.2f}\n"
                 f"📐 <b>Range:</b> ${bb.lower:,.0f} → ${bb.upper:,.0f}\n"
@@ -1317,7 +1466,7 @@ class TAGridTrendStrategy(StrategyV2Base):
             )
         elif new_state == GridState.PAUSED:
             msg = (
-                f"⏸️ <b>Grid PAUSED — {self.display_pair}</b>\n"
+                f"⏸️ <b>Grid PAUSED — {display_pair}</b>\n"
                 f"•••\n"
                 f"💵 <b>Price:</b> ${price:,.2f}\n"
                 f"📊 RSI: {rsi:.1f}  |  EMA200: ${ema:,.0f}\n"
@@ -1327,7 +1476,7 @@ class TAGridTrendStrategy(StrategyV2Base):
             )
         elif new_state == GridState.REACTIVATING:
             msg = (
-                f"🔄 <b>Grid REACTIVATING — {self.display_pair}</b>\n"
+                f"🔄 <b>Grid REACTIVATING — {display_pair}</b>\n"
                 f"•••\n"
                 f"💵 <b>Price:</b> ${price:,.2f}\n"
                 f"📐 <b>Range:</b> ${bb.lower:,.0f} → ${bb.upper:,.0f}\n"
@@ -1337,7 +1486,7 @@ class TAGridTrendStrategy(StrategyV2Base):
             )
         elif new_state == GridState.DANGER:
             msg = (
-                f"🔴 <b>Grid DANGER MODE — {self.display_pair}</b>\n"
+                f"🔴 <b>Grid DANGER MODE — {display_pair}</b>\n"
                 f"•••\n"
                 f"💵 <b>Price:</b> ${price:,.2f}\n"
                 f"🤖 ML: DANGER ({self._ml_confidence*100:.0f}%)\n"
@@ -1355,10 +1504,21 @@ class TAGridTrendStrategy(StrategyV2Base):
 
     # ── Grid State Persistence ──
 
-    def _save_grid_state(self):
+    def _save_grid_state(self, engine: PairEngine = None):
+        """Save grid state for a specific pair or all pairs."""
+        if engine:
+            self._save_grid_state_single(engine)
+        else:
+            # Save all pairs
+            for eng in self.pairs.values():
+                self._save_grid_state_single(eng)
+
+    def _save_grid_state_single(self, engine: PairEngine):
+        """Save grid state for a single pair."""
         try:
-            if not self._state_file.parent.exists():
-                self._state_file.parent.mkdir(parents=True, exist_ok=True)
+            path = engine.grid_state_path
+            if not path.parent.exists():
+                path.parent.mkdir(parents=True, exist_ok=True)
             data = {
                 "last_sod_reset": self._last_sod_reset,
                 "open_buys": {
@@ -1376,26 +1536,34 @@ class TAGridTrendStrategy(StrategyV2Base):
                     for oid, f in self._unmatched_sells.items()
                 }
             }
-            tmp = self._state_file.with_suffix('.tmp')
+            tmp = path.with_suffix('.tmp')
             with open(tmp, "w") as f:
                 json.dump(data, f, indent=2)
-            os.replace(tmp, self._state_file)
+            os.replace(tmp, path)
         except Exception as e:
-            logger.error(f"Failed to save grid state: {e}")
+            logger.error(f"Failed to save grid state for {engine.symbol}: {e}")
 
-    def _load_grid_state(self):
+    def _load_grid_state(self, engine: PairEngine = None, legacy_path: Path = None):
+        """Load grid state for a specific pair or from legacy path."""
+        if legacy_path:
+            self._load_grid_state_single(legacy_path, engine)
+        elif engine:
+            self._load_grid_state_single(engine.grid_state_path, engine)
+
+    def _load_grid_state_single(self, path: Path, engine: PairEngine = None):
+        """Load grid state from a specific path."""
         try:
-            if self._state_file.exists():
-                with open(self._state_file, "r") as f:
+            if path.exists():
+                with open(path, "r") as f:
                     data = json.load(f)
                     self._last_sod_reset = data.get("last_sod_reset", "")
                     for oid, d in data.get("open_buys", {}).items():
                         self._open_buys[oid] = FillRecord(**d)
                     for oid, d in data.get("unmatched_sells", {}).items():
                         self._unmatched_sells[oid] = FillRecord(**d)
-                logger.info(f"Restored {len(self._open_buys)} open buys, {len(self._unmatched_sells)} unmatched sells")
+                logger.info(f"Restored {len(self._open_buys)} open buys, {len(self._unmatched_sells)} unmatched sells from {path}")
         except Exception as e:
-            logger.error(f"Failed to load grid state: {e}")
+            logger.error(f"Failed to load grid state from {path}: {e}")
 
     def _cleanup_orphans(self):
         now = time_mod.time()
@@ -1408,7 +1576,7 @@ class TAGridTrendStrategy(StrategyV2Base):
             self._open_buys.pop(oid)
             changed = True
         if changed:
-            self._save_grid_state()
+            self._save_grid_state()  # Save all pairs
 
     # ── Thread-safe accessors for Telegram commands ──
 
@@ -1453,15 +1621,24 @@ class TAGridTrendStrategy(StrategyV2Base):
     # ── Graceful Shutdown ──
 
     def on_stop(self):
-        self._save_grid_state()
-        self._save_trend_state()
+        # Save state for all pairs
+        for engine in self.pairs.values():
+            self._save_grid_state(engine)
+            self._save_trend_state(engine)
+
+        # Save capital manager state
+        if hasattr(self, '_capital_mgr'):
+            self._capital_mgr.save()
+
         super().on_stop()
         if hasattr(self, "_sys_monitor"):
             self._sys_monitor.stop()
         if hasattr(self, "_telegram_commands"):
             self._telegram_commands.stop()
         try:
-            self._cancel_all_orders("graceful_shutdown")
+            # Cancel orders for all pairs
+            for engine in self.pairs.values():
+                self._cancel_all_orders(engine, "graceful_shutdown")
         except Exception as e:
             logger.error(f"Error cancelling orders on stop: {e}")
         self.event_log.log("bot_stopped", reason="graceful stop")
@@ -1472,4 +1649,4 @@ class TAGridTrendStrategy(StrategyV2Base):
                 loop.create_task(self.telegram.alert_shutdown("graceful stop"))
         except RuntimeError:
             pass
-        logger.info("Dual-engine strategy stopped — all orders cancelled")
+        logger.info(f"Dual-engine strategy stopped — all orders cancelled for {len(self.pairs)} pair(s)")
