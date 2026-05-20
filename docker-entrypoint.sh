@@ -47,6 +47,15 @@ YAML
     echo "Created conf_client.yml with mosquitto MQTT config"
 fi
 
+# Suppress noisy "Unexpected error while processing event 901" from paper_trade_exchange
+# by raising the order_book logger to CRITICAL. This is a known Hummingbot bug where
+# the paper trade listener crashes on real Binance order book events.
+LOG_CONF="/home/hummingbot/conf/hummingbot_logs.yml"
+if [ -f "$LOG_CONF" ] && ! grep -q "order_book:" "$LOG_CONF"; then
+    printf '    hummingbot.core.data_type.order_book:\n        level: CRITICAL\n        propagate: false\n        handlers:\n            - file_handler\n' >> "$LOG_CONF"
+    echo "Suppressed order_book event 901 errors in logging config"
+fi
+
 # Patch MQTT retry loop to break after first failure instead of retrying forever.
 # Without this, the infinite retry blocks the event loop and prevents ticks (Issue #8012).
 MQTT_CMD="/home/hummingbot/hummingbot/client/command/mqtt_command.py"
