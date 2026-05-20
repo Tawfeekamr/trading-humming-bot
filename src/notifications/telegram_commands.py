@@ -629,14 +629,14 @@ class TelegramCommandHandler:
             logger.error(f"Error in /fees: {e}")
             update.message.reply_text(f"⚠️ Error getting fee analysis: {e}")
 
-    def _cmd_price(self, update, context):
+    def _cmd_price(self, update, context=None):
         try:
             logger.info("Telegram /price received")
             snapshot = self.strategy.get_indicators_snapshot()
 
             # Multi-pair: snapshot is Dict[str, Optional[tuple]]
             if isinstance(snapshot, dict):
-                args = context.args if context.args else []
+                args = getattr(context, 'args', None) or []
                 target_symbol = args[0].upper().replace("/", "-") if args else None
 
                 # If specific pair requested, show detail view
