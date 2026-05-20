@@ -244,10 +244,10 @@ class TAGridSOLUSDT(StrategyV2Base):
 
         # Exchange and trading pair from config
         self.exchange = config.exchange
-        self.trading_pair = config.trading_pair
-        self.base_asset = self.trading_pair.split("-")[0]  # e.g. "SOL"
-        self.binance_symbol = self.trading_pair.replace("-", "")  # e.g. "SOLUSDT"
-        self.display_pair = self.trading_pair.replace("-", "/")  # e.g. "SOL/USDT"
+        self.trading_pair = cfg.get("pair", config.trading_pair)
+        self.base_asset = self.trading_pair.split("-")[0]
+        self.binance_symbol = self.trading_pair.replace("-", "")
+        self.display_pair = self.trading_pair.replace("-", "/")
 
         # Call parent constructor (required for v2)
         super().__init__(connectors, config)

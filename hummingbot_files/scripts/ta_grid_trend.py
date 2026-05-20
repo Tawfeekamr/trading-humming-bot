@@ -205,6 +205,10 @@ class TAGridTrendStrategy(StrategyV2Base):
         risk_cfg = cfg.get("risk", {})
         trend_cfg = cfg.get("trend", {})
 
+        # Override pair from YAML config
+        if cfg.get("pair"):
+            self.trading_pair = cfg["pair"]
+
         # Environment
         self.env = os.environ.get("ENV", config.env)
         self.is_testnet = self.env == "paper"
