@@ -91,6 +91,7 @@ class PnLReporter:
         best  = bw["best"][0]  if bw["best"]  else None
         worst = bw["worst"][0] if bw["worst"] else None
 
+        # Build base message
         msg = (
             f"📅 <b>Daily Report — {datetime.utcnow().strftime('%b %d, %Y')}</b>\n"
             f"•••\n"
@@ -101,6 +102,19 @@ class PnLReporter:
             f"💰 <b>Gross:</b> {sign_d}${s['gross_pnl']:.2f}\n"
             f"💸 <b>Fees:</b> -${abs(s['total_fees']):.2f}\n"
             f"<b>📈 NET: {sign_d}${s['net_pnl']:.2f}</b>\n"
+        )
+
+        # Add per-pair breakdown if we have multiple pairs
+        today_str = datetime.utcnow().strftime("%Y-%m-%d 00:00:00")
+        pair_breakdown = self.journal.summary_by_pair(today_str)
+        if pair_breakdown and len(pair_breakdown) > 0:
+            msg += f"•••\n📊 <b>PER PAIR</b>\n"
+            for pair, data in pair_breakdown.items():
+                pair_sign = "+" if data['net_pnl'] >= 0 else ""
+                msg += f"  {pair}: {pair_sign}${data['net_pnl']:.2f}\n"
+
+        # Add weekly/monthly stats
+        msg += (
             f"•••\n"
             f"📆 This Week:   {sign_w}${sw['net_pnl']:.2f}\n"
             f"🗓 This Month:  {sign_m}${sm['net_pnl']:.2f}\n"

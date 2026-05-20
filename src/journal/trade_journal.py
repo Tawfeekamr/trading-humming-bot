@@ -260,3 +260,31 @@ class TradeJournal:
             GROUP BY DATE(timestamp)
             ORDER BY date ASC
         """, (since,))
+
+    def summary_by_pair(self, since: str) -> dict:
+        """Get P&L breakdown by trading pair for a period."""
+        rows = self._query("""
+            SELECT
+                pair                AS pair,
+                SUM(net_pnl)        AS net_pnl,
+                COUNT(*)            AS total_trades,
+                SUM(CASE WHEN net_pnl >= 0 THEN 1 ELSE 0 END) AS winning,
+                SUM(CASE WHEN net_pnl < 0 THEN 1 ELSE 0 END) AS losing
+            FROM trades
+            WHERE timestamp >= ?
+            GROUP BY pair
+            ORDER BY net_pnl DESC
+        """, (since,))
+
+        result = {}
+        for r in rows:
+            pair = r["pair"]
+            total = r["total_trades"] or 0
+            result[pair] = {
+                "net_pnl": r["net_pnl"] or 0,
+                "total_trades": total,
+                "winning": r["winning"] or 0,
+                "losing": r["losing"] or 0,
+                "win_rate": round((r["winning"] / total * 100), 1) if total > 0 else 0
+            }
+        return result

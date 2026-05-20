@@ -110,6 +110,11 @@ class TelegramCommandHandler:
                     "Commands: /status /pnl /balance /capital /price /trades /pending /fees /system /clear /help\n"
                     "Trend: /trend_status /trend_capital /trend_pnl /trend_close /trend_history"
                 )
+
+                # Add active pairs info if multi-pair mode
+                if hasattr(self.strategy, 'pairs') and self.strategy.pairs:
+                    pairs_list = "\n  • ".join([engine.display_pair for engine in self.strategy.pairs.values()])
+                    ping_text += f"\n\n📊 <b>Active pairs:</b>\n  • {pairs_list}"
                 self._tg_post("sendMessage", data={
                     "chat_id": self._chat_id,
                     "text": ping_text,
@@ -247,34 +252,71 @@ class TelegramCommandHandler:
             hours, remainder = divmod(uptime_s, 3600)
             minutes, secs = divmod(remainder, 60)
 
-            state = self.state_machine.state.value
             mode = self.strategy.env.upper()
             cb_status = "🛑 HALTED" if self.circuit_breaker.halted else "✅ OK"
-            pending = self.strategy.order_tracker.total_pending
-            levels = self.strategy.levels
-            spacing_buy = getattr(self.strategy, '_active_buy_spacing', 0)
-            spacing_sell = getattr(self.strategy, '_active_sell_spacing', 0)
-            base_capital = getattr(self.strategy, '_base_capital', self.strategy.capital_usdt)
-            compound = self.strategy.grid_manager.capital_usdt
-            growth_pct = ((compound - base_capital) / base_capital * 100) if base_capital > 0 else 0
 
-            logger.info(f"Telegram /status response: state={state}, mode={mode}, cb={cb_status}, pending={pending}")
-            update.message.reply_text(
-                f"📊 <b>Bot Status</b>\n"
-                f"•••\n"
-                f"Grid: <b>{state}</b>\n"
-                f"Mode: {mode}\n"
-                f"CB: {cb_status}\n"
-                f"⏱ <b>Up:</b> {hours}h {minutes}m {secs}s\n"
-                f"•••\n"
-                f"📐 Grid: {levels} buy + {levels} sell levels\n"
-                f"📏 <b>Space:</b> ${spacing_buy:.0f}/${spacing_sell:.0f}\n"
-                f"📋 <b>Pending:</b> {pending}\n"
-                f"•••\n"
-                f"💰 <b>Base:</b> ${base_capital:,.0f}\n"
-                f"📈 <b>Comp:</b> ${compound:,.2f} ({growth_pct:+.1f}%)",
-                parse_mode="HTML"
-            )
+            # Check if multi-pair mode
+            if hasattr(self.strategy, 'pairs') and self.strategy.pairs:
+                # Multi-pair mode: show all pairs
+                lines = [
+                    f"📊 <b>Bot Status</b>",
+                    "•••",
+                    f"Mode: {mode} | CB: {cb_status}",
+                    f"⏱ <b>Up:</b> {hours}h {minutes}m {secs}s",
+                    "•••"
+                ]
+
+                # Get capital info from CapitalManager
+                total_capital = getattr(self.strategy, '_capital_mgr', None)
+                if total_capital:
+                    capital_info = f"💰 Capital: ${total_capital.total_capital:,.0f} | Available: ${total_capital.available:,.0f}"
+                else:
+                    capital_info = "💰 Capital: N/A"
+
+                # Show each pair's grid state
+                for symbol, engine in self.strategy.pairs.items():
+                    state_machine = self.strategy.state_machines.get(symbol)
+                    grid_manager = self.strategy.grid_managers.get(symbol)
+                    order_tracker = getattr(self.strategy, 'order_tracker', None)
+
+                    if state_machine and grid_manager:
+                        state = state_machine.state.value
+                        pending = order_tracker.total_pending if order_tracker else 0
+                        lines.append(f"{engine.display_pair} | Grid: <b>{state}</b> | Pending: {pending}")
+
+                lines.append("•••")
+                lines.append(capital_info)
+
+                logger.info(f"Telegram /status response: multi-pair mode with {len(self.strategy.pairs)} pairs")
+                update.message.reply_text("\n".join(lines), parse_mode="HTML")
+            else:
+                # Single-pair mode (backward compatibility)
+                state = self.state_machine.state.value
+                pending = self.strategy.order_tracker.total_pending
+                levels = self.strategy.levels
+                spacing_buy = getattr(self.strategy, '_active_buy_spacing', 0)
+                spacing_sell = getattr(self.strategy, '_active_sell_spacing', 0)
+                base_capital = getattr(self.strategy, '_base_capital', self.strategy.capital_usdt)
+                compound = self.strategy.grid_manager.capital_usdt
+                growth_pct = ((compound - base_capital) / base_capital * 100) if base_capital > 0 else 0
+
+                logger.info(f"Telegram /status response: state={state}, mode={mode}, cb={cb_status}, pending={pending}")
+                update.message.reply_text(
+                    f"📊 <b>Bot Status</b>\n"
+                    f"•••\n"
+                    f"Grid: <b>{state}</b>\n"
+                    f"Mode: {mode}\n"
+                    f"CB: {cb_status}\n"
+                    f"⏱ <b>Up:</b> {hours}h {minutes}m {secs}s\n"
+                    f"•••\n"
+                    f"📐 Grid: {levels} buy + {levels} sell levels\n"
+                    f"📏 <b>Space:</b> ${spacing_buy:.0f}/${spacing_sell:.0f}\n"
+                    f"📋 <b>Pending:</b> {pending}\n"
+                    f"•••\n"
+                    f"💰 <b>Base:</b> ${base_capital:,.0f}\n"
+                    f"📈 <b>Comp:</b> ${compound:,.2f} ({growth_pct:+.1f}%)",
+                    parse_mode="HTML"
+                )
         except Exception as e:
             logger.error(f"Error in /status: {e}")
             update.message.reply_text(f"⚠️ Error getting status: {e}")
@@ -696,27 +738,76 @@ class TelegramCommandHandler:
                 update.message.reply_text("Trend engine not active")
                 return
 
-            tm = strategy._trend_manager
-            pm = strategy._position_manager
-            lines = ["🤖 <b>TREND ENGINE</b>", "•••"]
-            positions = pm.get_all_positions()
-            lines.append(f"Open positions: {len(positions)}/{pm._max_positions}")
+            # Check if multi-pair mode
+            if hasattr(strategy, 'pairs') and strategy.pairs:
+                # Multi-pair mode: show all pairs' trend positions
+                lines = ["🤖 <b>TREND ENGINE</b>", "•••"]
 
-            for pos in positions:
-                current = getattr(strategy, '_last_price', pos.entry_price)
-                pnl_pct = (current - pos.entry_price) / pos.entry_price * 100 if current and pos.entry_price else 0
-                lines.append(f"  {pos.amount:.2f} SOL @ ${pos.entry_price:.2f} | SL ${pos.stop_loss:.2f} TP ${pos.take_profit:.2f}")
-                lines.append(f"  P&L: {pnl_pct:+.1f}% | Trail: ${pos.trailing_stop:.2f}")
+                total_open = 0
+                total_max = 0
 
-            lines.append(f"Capital: ${pm._capital:.2f}")
+                # Count total positions across all pairs
+                for symbol, engine in strategy.pairs.items():
+                    pm = strategy._position_manager
+                    if pm:
+                        positions = pm.get_all_positions()
+                        total_open += len(positions)
+                        total_max = getattr(pm, '_max_positions', 8)
 
-            if hasattr(strategy, '_last_trend_score') and strategy._last_trend_score:
-                score = strategy._last_trend_score
-                lines.append(f"Signal score: {score.total}/7")
-                for d in score.details:
-                    lines.append(f"  +{d['points']} {d['signal']}: {d['note']}")
+                lines.append(f"Open positions: {total_open}/{total_max}")
+                lines.append("•••")
 
-            update.message.reply_text("\n".join(lines), parse_mode="HTML")
+                # Show positions per pair
+                for symbol, engine in strategy.pairs.items():
+                    pm = strategy._position_manager
+                    if not pm:
+                        continue
+
+                    positions = pm.get_all_positions()
+                    if positions:
+                        lines.append(f"{engine.display_pair} ({len(positions)} open)")
+                        for pos in positions:
+                            current_price = strategy._last_price.get(symbol, pos.entry_price) if hasattr(strategy, '_last_price') else pos.entry_price
+                            pnl_pct = (current_price - pos.entry_price) / pos.entry_price * 100 if current_price and pos.entry_price else 0
+                            sign = "+" if pnl_pct >= 0 else ""
+                            lines.append(f"  {pos.amount:.2f} {engine.base_asset} @ ${pos.entry_price:.2f} | SL ${pos.stop_loss:.2f} TP ${pos.take_profit:.2f}")
+                            lines.append(f"  P&L: {sign}{pnl_pct:.1f}% | Trail: ${pos.trailing_stop:.2f}")
+                    else:
+                        lines.append(f"{engine.display_pair} — No positions")
+
+                lines.append("•••")
+
+                # Get capital info from CapitalManager
+                if hasattr(strategy, '_capital_mgr'):
+                    lines.append(f"Capital: ${strategy._capital_mgr.total_capital:.2f} | Available: ${strategy._capital_mgr.available:.2f}")
+                elif hasattr(strategy, '_position_manager'):
+                    lines.append(f"Capital: ${strategy._position_manager._capital:.2f}")
+
+                logger.info(f"Telegram /trend_status response: multi-pair mode with {total_open} positions")
+                update.message.reply_text("\n".join(lines), parse_mode="HTML")
+            else:
+                # Single-pair mode (backward compatibility)
+                tm = strategy._trend_manager
+                pm = strategy._position_manager
+                lines = ["🤖 <b>TREND ENGINE</b>", "•••"]
+                positions = pm.get_all_positions()
+                lines.append(f"Open positions: {len(positions)}/{pm._max_positions}")
+
+                for pos in positions:
+                    current = getattr(strategy, '_last_price', pos.entry_price)
+                    pnl_pct = (current - pos.entry_price) / pos.entry_price * 100 if current and pos.entry_price else 0
+                    lines.append(f"  {pos.amount:.2f} SOL @ ${pos.entry_price:.2f} | SL ${pos.stop_loss:.2f} TP ${pos.take_profit:.2f}")
+                    lines.append(f"  P&L: {pnl_pct:+.1f}% | Trail: ${pos.trailing_stop:.2f}")
+
+                lines.append(f"Capital: ${pm._capital:.2f}")
+
+                if hasattr(strategy, '_last_trend_score') and strategy._last_trend_score:
+                    score = strategy._last_trend_score
+                    lines.append(f"Signal score: {score.total}/7")
+                    for d in score.details:
+                        lines.append(f"  +{d['points']} {d['signal']}: {d['note']}")
+
+                update.message.reply_text("\n".join(lines), parse_mode="HTML")
         except Exception as e:
             logger.error(f"Error in /trend_status: {e}")
             update.message.reply_text(f"⚠️ Error getting trend status: {e}")
