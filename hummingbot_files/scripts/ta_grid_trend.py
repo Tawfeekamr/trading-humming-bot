@@ -642,7 +642,7 @@ class TAGridTrendStrategy(StrategyV2Base):
         today_str = now.strftime("%Y-%m-%d")
         if self._last_sod_reset != today_str and engine.symbol == list(self.pairs.keys())[0]:
             equity = self._estimate_equity(
-                self._cached_indicators.get(engine.symbol, [None, None, None, None, 0])[4] or 0
+                (self._cached_indicators.get(engine.symbol) or [None, None, None, None, 0])[4] or 0
             )
             circuit_breaker.set_start_of_day_equity(equity)
             self._last_sod_reset = today_str
@@ -875,12 +875,15 @@ class TAGridTrendStrategy(StrategyV2Base):
             # It's an entry fill
             pos.entry_price = price
             pos.amount = quantity  # update to actual filled amount
-            logger.info(f"TREND ENTRY FILLED: {quantity} SOL @ ${price:,.2f}")
+            trend_pair = getattr(pos, 'pair', self.trading_pair)
+            trend_display = trend_pair.replace("-", "/")
+            trend_base = trend_pair.split("-")[0]
+            logger.info(f"TREND ENTRY FILLED: {quantity} {trend_base} @ ${price:,.2f}")
             msg = (
-                f"🚀 <b>TREND IN: {self.display_pair}</b>\n"
+                f"🚀 <b>TREND IN: {trend_display}</b>\n"
                 f"•••\n"
                 f"💵 <b>Price:</b> ${price:,.2f}\n"
-                f"📦 <b>Size:</b> {quantity} {self.base_asset}\n"
+                f"📦 <b>Size:</b> {quantity} {trend_base}\n"
                 f"🛑 <b>SL:</b> ${pos.stop_loss:,.2f}\n"
                 f"🎯 <b>TP:</b> ${pos.take_profit:,.2f}\n"
                 f"⚙️ <b>Env:</b> {self.env.upper()}"
@@ -906,17 +909,20 @@ class TAGridTrendStrategy(StrategyV2Base):
                     signal_score=0, duration_minutes=closed["duration_minutes"],
                 )
                 self._save_trend_state()
-                logger.info(f"TREND EXIT FILLED ({closed['exit_reason']}): {closed['amount']:.1f} SOL @ ${price:.2f} | PnL ${closed['pnl']:+.2f}")
-                
+                trend_pair = getattr(pos, 'pair', self.trading_pair)
+                trend_display = trend_pair.replace("-", "/")
+                trend_base = trend_pair.split("-")[0]
+                logger.info(f"TREND EXIT FILLED ({closed['exit_reason']}): {closed['amount']:.1f} {trend_base} @ ${price:.2f} | PnL ${closed['pnl']:+.2f}")
+
                 pnl_sign = "+" if closed["pnl"] >= 0 else ""
                 emoji = "💚" if closed["pnl"] >= 0 else "🔴"
                 msg = (
-                    f"{emoji} <b>TREND OUT: {self.display_pair}</b>\n"
+                    f"{emoji} <b>TREND OUT: {trend_display}</b>\n"
                     f"•••\n"
                     f"🔔 <b>{closed['exit_reason'].upper()}</b> ({closed['duration_minutes']}m)\n"
                     f"🔵 <b>In:</b>  ${closed['entry_price']:,.2f}\n"
                     f"⚪️ <b>Out:</b> ${price:,.2f}\n"
-                    f"📦 <b>Size:</b> {closed['amount']} {self.base_asset}\n"
+                    f"📦 <b>Size:</b> {closed['amount']} {trend_base}\n"
                     f"•••\n"
                     f"<b>📊 NET: {pnl_sign}${closed['pnl'] - fee:.2f}</b>\n"
                     f"💸 <i>Fee: -${fee:.2f}</i>\n"
@@ -928,6 +934,14 @@ class TAGridTrendStrategy(StrategyV2Base):
                         loop.create_task(self.telegram.send(msg))
                 except RuntimeError:
                     pass
+
+    def _resolve_fill_pair(self, order_id: str):
+        """Find which pair a fill belongs to by checking per-pair order trackers."""
+        for symbol, tracker in self.grid_order_trackers.items():
+            if tracker.get(order_id):
+                return symbol
+        # Fallback: try the legacy single-pair tracker
+        return self.trading_pair if not self.pairs else list(self.pairs.keys())[0]
 
     def _grid_fill(self, event):
         """Handle fill for a grid order."""
@@ -943,17 +957,29 @@ class TAGridTrendStrategy(StrategyV2Base):
             tt_name = "UNKNOWN"
             is_buy = order_id.startswith("buy_")
         side = "BUY" if is_buy else "SELL"
-        logger.info(f"Grid fill: side={side} price=${price:,.2f} qty={quantity} order_id={order_id}")
+
+        # Resolve which pair this fill belongs to
+        fill_symbol = self._resolve_fill_pair(order_id)
+        engine = self.pairs.get(fill_symbol) if self.pairs else None
+        display_pair = fill_symbol.replace("-", "/")
+        base_asset = fill_symbol.split("-")[0]
+
+        # Use per-pair state
+        state_machine = self.state_machines.get(fill_symbol, self.state_machine)
+        order_tracker = self.grid_order_trackers.get(fill_symbol, self._grid_order_tracker)
+
+        logger.info(f"Grid fill: side={side} pair={fill_symbol} price=${price:,.2f} qty={quantity} order_id={order_id}")
 
         rsi_val = 0.0
         bb_upper = 0.0
         bb_lower = 0.0
         ema_val = 0.0
         atr_val = 0.0
-        grid_state_val = self.state_machine.state.value
+        grid_state_val = state_machine.state.value
 
-        if self._cached_indicators:
-            bb_r, rsi_r, ema_r, atr_r, _ = self._cached_indicators
+        cached = self._cached_indicators.get(fill_symbol)
+        if cached is not None:
+            bb_r, rsi_r, ema_r, atr_r, _ = cached
             rsi_val = rsi_r
             bb_upper = bb_r.upper
             bb_lower = bb_r.lower
@@ -961,11 +987,11 @@ class TAGridTrendStrategy(StrategyV2Base):
             atr_val = atr_r
 
         grid_level = 0
-        grid_order = self._grid_order_tracker.mark_filled(order_id)
+        grid_order = order_tracker.mark_filled(order_id)
         if grid_order:
             grid_level = grid_order.level
-        elif self._cached_indicators:
-            bb_r = self._cached_indicators[0]
+        elif cached is not None:
+            bb_r = cached[0]
             mid = bb_r.mid
             spacing = self._active_buy_spacing if is_buy else self._active_sell_spacing
             if spacing <= 0:
@@ -976,7 +1002,8 @@ class TAGridTrendStrategy(StrategyV2Base):
         usdt_bal = self._get_usdt_balance()
         base_bal = self._get_base_balance()
         equity = self._estimate_equity(price)
-        exposure_pct = self.position_guard.base_exposure_pct(base_bal, price, equity)
+        position_guard = self.position_guards.get(fill_symbol, self.position_guard)
+        exposure_pct = position_guard.base_exposure_pct(base_bal, price, equity)
 
         self.event_log.log("trade_filled",
             side=side, price=round(price, 2), quantity=quantity,
@@ -985,7 +1012,7 @@ class TAGridTrendStrategy(StrategyV2Base):
             bb_lower=round(bb_lower, 2), ema_200=round(ema_val, 2),
             atr=round(atr_val, 2), usdt_balance=round(usdt_bal, 2),
             base_balance=round(base_bal, 4), equity=round(equity, 2),
-            engine="grid",
+            engine="grid", pair=fill_symbol,
         )
 
         if side == "BUY":
@@ -1010,7 +1037,7 @@ class TAGridTrendStrategy(StrategyV2Base):
 
                 trade = Trade(
                     timestamp=pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d %H:%M:%S"),
-                    pair=self.display_pair, side="SELL", entry_price=entry_price, exit_price=price,
+                    pair=display_pair, side="SELL", entry_price=entry_price, exit_price=price,
                     quantity=quantity, gross_pnl=round(gross_pnl, 4), fee=round(total_fee, 4),
                     net_pnl=round(net_pnl, 4), grid_level=grid_level, duration_min=duration_min,
                     rsi=rsi_val, bb_upper=bb_upper, bb_lower=bb_lower, ema_200=ema_val, atr=atr_val,
@@ -1020,13 +1047,13 @@ class TAGridTrendStrategy(StrategyV2Base):
 
                 pnl_sign = "+" if net_pnl >= 0 else ""
                 telegram_msg = (
-                    f"{'💚' if net_pnl >= 0 else '🔴'} <b>Trade Closed — {self.display_pair}</b>\n"
+                    f"{'💚' if net_pnl >= 0 else '🔴'} <b>Trade Closed — {display_pair}</b>\n"
                     f"•••\n"
                     f"📈 BUY closed SELL position  |  Grid Level {grid_level}\n"
                     f"⏱ <b>Dur:</b> {duration_min}m\n"
                     f"🔵 <b>In:</b>  ${entry_price:,.2f}\n"
-                    f"⚪️ <b>Out:</b> ${exit_price:,.2f}\n"  # noqa: F821 - price from scope
-                    f"📦 <b>Size:</b> {quantity} {self.base_asset}\n"
+                    f"⚪️ <b>Out:</b> ${price:,.2f}\n"
+                    f"📦 <b>Size:</b> {quantity} {base_asset}\n"
                     f"•••\n"
                     f"💰 <b>Gross:</b> {pnl_sign}${gross_pnl:.2f}\n"
                     f"💸 <b>Fee:</b> -${total_fee:.2f}\n"
@@ -1046,17 +1073,17 @@ class TAGridTrendStrategy(StrategyV2Base):
                 self._open_buys[order_id] = buy_fill
                 trade = Trade(
                     timestamp=pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d %H:%M:%S"),
-                    pair=self.display_pair, side="BUY", entry_price=price, exit_price=price,
+                    pair=display_pair, side="BUY", entry_price=price, exit_price=price,
                     quantity=quantity, gross_pnl=0.0, fee=fee_est, net_pnl=-fee_est,
                     grid_level=grid_level, duration_min=0, rsi=rsi_val, bb_upper=bb_upper,
                     bb_lower=bb_lower, ema_200=ema_val, atr=atr_val, grid_state=grid_state_val,
                 )
                 self.journal.log_trade(trade)
                 buy_msg = (
-                    f"📈 <b>BUY Filled — {self.display_pair}</b>\n"
+                    f"📈 <b>BUY Filled — {display_pair}</b>\n"
                     f"•••\n"
                     f"💵 <b>Price:</b> ${price:,.2f}\n"
-                    f"📦 <b>Size:</b> {quantity} {self.base_asset}\n"
+                    f"📦 <b>Size:</b> {quantity} {base_asset}\n"
                     f"📊 Level {grid_level}  |  RSI: {rsi_val:.1f}\n"
                     f"🏦 <b>Eq:</b> ${equity:,.2f}  |  <b>Exp:</b> {exposure_pct:.0f}%\n"
                     f"⚙️ <b>Env:</b> {self.env.upper()}"
@@ -1067,9 +1094,9 @@ class TAGridTrendStrategy(StrategyV2Base):
                         loop.create_task(self.telegram.send(buy_msg))
                 except RuntimeError:
                     pass
-                logger.info(f"BUY filled: {quantity} {self.base_asset} @ ${price:,.2f} | Level {grid_level}")
+                logger.info(f"BUY filled: {quantity} {base_asset} @ ${price:,.2f} | Level {grid_level}")
 
-            self._save_grid_state()
+            self._save_grid_state(engine)
             self._grid_dirty = True
 
         elif side == "SELL":
@@ -1079,7 +1106,7 @@ class TAGridTrendStrategy(StrategyV2Base):
                 oldest_id = min(self._open_buys, key=lambda k: self._open_buys[k].timestamp)
                 matching_buy = self._open_buys.pop(oldest_id)
 
-            self._save_grid_state()
+            self._save_grid_state(engine)
 
             if matching_buy:
                 entry_price = matching_buy.price
@@ -1090,7 +1117,7 @@ class TAGridTrendStrategy(StrategyV2Base):
 
                 trade = Trade(
                     timestamp=pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d %H:%M:%S"),
-                    pair=self.display_pair, side="SELL", entry_price=entry_price, exit_price=price,
+                    pair=display_pair, side="SELL", entry_price=entry_price, exit_price=price,
                     quantity=quantity, gross_pnl=round(gross_pnl, 4), fee=round(total_fee, 4),
                     net_pnl=round(net_pnl, 4), grid_level=grid_level, duration_min=duration_min,
                     rsi=rsi_val, bb_upper=bb_upper, bb_lower=bb_lower, ema_200=ema_val, atr=atr_val,
@@ -1100,13 +1127,13 @@ class TAGridTrendStrategy(StrategyV2Base):
 
                 pnl_sign = "+" if net_pnl >= 0 else ""
                 telegram_msg = (
-                    f"{'💚' if net_pnl >= 0 else '🔴'} <b>Trade Closed — {self.display_pair}</b>\n"
+                    f"{'💚' if net_pnl >= 0 else '🔴'} <b>Trade Closed — {display_pair}</b>\n"
                     f"•••\n"
                     f"📉 SELL  |  Grid Level {grid_level}\n"
                     f"⏱ <b>Dur:</b> {duration_min}m\n"
                     f"🔵 <b>In:</b> ${entry_price:,.2f}\n"
                     f"⚪️ <b>Out:</b> ${price:,.2f}\n"
-                    f"📦 <b>Size:</b> {quantity} {self.base_asset}\n"
+                    f"📦 <b>Size:</b> {quantity} {base_asset}\n"
                     f"•••\n"
                     f"💰 <b>Gross:</b> {pnl_sign}${gross_pnl:.2f}\n"
                     f"💸 <b>Fee:</b> -${total_fee:.2f}\n"
@@ -1122,17 +1149,17 @@ class TAGridTrendStrategy(StrategyV2Base):
                     rsi=rsi_val, bb_upper=bb_upper, bb_lower=bb_lower,
                     ema_200=ema_val, atr=atr_val, grid_state=grid_state_val, fee=fee,
                 )
-                self._save_grid_state()
+                self._save_grid_state(engine)
                 self.event_log.log("sell_buffered",
                     side="SELL", price=price, quantity=quantity, grid_level=grid_level,
                     fee_estimate=round(fee, 4), unmatched_sell_count=len(self._unmatched_sells),
                 )
                 telegram_msg = (
-                    f"🟡 <b>SELL Filled (buffered) — {self.display_pair}</b>\n"
+                    f"🟡 <b>SELL Filled (buffered) — {display_pair}</b>\n"
                     f"•••\n"
                     f"📉 SELL  |  Grid Level {grid_level}\n"
                     f"💵 <b>Price:</b> ${price:,.2f}\n"
-                    f"📦 <b>Size:</b> {quantity} {self.base_asset}\n"
+                    f"📦 <b>Size:</b> {quantity} {base_asset}\n"
                     f"🔄 Buffered sells: {len(self._unmatched_sells)}\n"
                     f"🏦 <b>Eq:</b> ${equity:,.2f}\n"
                     f"⚙️ <b>Env:</b> {self.env.upper()}"
@@ -1145,7 +1172,7 @@ class TAGridTrendStrategy(StrategyV2Base):
             except RuntimeError:
                 pass
 
-            logger.info(f"SELL filled: {quantity} {self.base_asset} @ ${price:,.2f} | Level {grid_level}")
+            logger.info(f"SELL filled: {quantity} {base_asset} @ ${price:,.2f} | Level {grid_level}")
             self._grid_dirty = True
 
     # ── Trend Engine Methods ──
