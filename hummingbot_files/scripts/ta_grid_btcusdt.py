@@ -88,6 +88,8 @@ try:
     from hummingbot_files.scripts.pair_engine import PairEngine, PairConfig
     from hummingbot_files.scripts.capital_manager import CapitalManager
 except ImportError:
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
     from pair_engine import PairEngine, PairConfig
     from capital_manager import CapitalManager
 
