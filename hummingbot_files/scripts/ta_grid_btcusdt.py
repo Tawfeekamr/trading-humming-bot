@@ -84,8 +84,12 @@ from src.logging.event_logger import EventLogger
 from src.monitoring.system_monitor import SystemAlertMonitor
 
 # Multi-pair support
-from hummingbot_files.scripts.pair_engine import PairEngine, PairConfig
-from hummingbot_files.scripts.capital_manager import CapitalManager
+try:
+    from hummingbot_files.scripts.pair_engine import PairEngine, PairConfig
+    from hummingbot_files.scripts.capital_manager import CapitalManager
+except ImportError:
+    from pair_engine import PairEngine, PairConfig
+    from capital_manager import CapitalManager
 
 try:
     from hummingbot.strategy.strategy_v2_base import StrategyV2Base, StrategyV2ConfigBase

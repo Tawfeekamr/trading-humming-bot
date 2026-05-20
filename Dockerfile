@@ -13,6 +13,8 @@ COPY src/ /home/hummingbot/src/
 # Copy strategy scripts to hummingbot's scripts/ directory
 COPY hummingbot_files/scripts/ta_grid_btcusdt.py /home/hummingbot/scripts/ta_grid_btcusdt.py
 COPY hummingbot_files/scripts/ta_grid_trend.py /home/hummingbot/scripts/ta_grid_trend.py
+COPY hummingbot_files/scripts/pair_engine.py /home/hummingbot/scripts/pair_engine.py
+COPY hummingbot_files/scripts/capital_manager.py /home/hummingbot/scripts/capital_manager.py
 
 # Copy diagnostic scripts
 COPY scripts/diagnose_telegram.py /home/hummingbot/scripts/diagnose_telegram.py
