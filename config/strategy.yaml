@@ -1,10 +1,26 @@
 # ════════════════════════════════════════════════════════════════════
-#  TA-Enhanced DOGE/USDT Grid Bot — Strategy Configuration
+#  TA-Enhanced Multi-Pair Grid Bot — Strategy Configuration
 #  All non-secret settings live here. Loaded by the strategy script.
 # ════════════════════════════════════════════════════════════════════
 
-# ── Pair & Exchange ───────────────────────────────────────────────
-pair: "DOGE-USDT"
+# ── Pairs & Exchange ─────────────────────────────────────────────
+pairs:
+  - symbol: "DOGE-USDT"
+    step_size: 1
+    enabled: true
+  - symbol: "ETH-USDT"
+    step_size: 0.001
+    enabled: true
+  - symbol: "BTC-USDT"
+    step_size: 0.00001
+    enabled: false
+  - symbol: "BNB-USDT"
+    step_size: 0.01
+    enabled: true
+  - symbol: "XRP-USDT"
+    step_size: 0.1
+    enabled: true
+
 exchange: "binance"
 timeframe: "1h"
 
@@ -14,7 +30,6 @@ grid:
   capital_usdt: 5000          # Total USDT allocated
   min_usdt_reserve: 100       # Always keep this in reserve
   order_refresh_time: 60      # Seconds between order refresh
-  step_size: 1                # Exchange quantity precision (DOGE=1, SOL=0.01, BTC=0.00001, ETH=0.001)
 
 # ── Indicator Settings ────────────────────────────────────────────
 indicators:
