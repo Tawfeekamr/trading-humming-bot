@@ -274,14 +274,15 @@ class TelegramCommandHandler:
                     capital_info = "💰 Capital: N/A"
 
                 # Show each pair's grid state
+                grid_order_trackers = getattr(self.strategy, 'grid_order_trackers', {})
                 for symbol, engine in self.strategy.pairs.items():
                     state_machine = self.strategy.state_machines.get(symbol)
                     grid_manager = self.strategy.grid_managers.get(symbol)
-                    order_tracker = getattr(self.strategy, 'order_tracker', None)
+                    per_pair_tracker = grid_order_trackers.get(symbol)
 
                     if state_machine and grid_manager:
                         state = state_machine.state.value
-                        pending = order_tracker.total_pending if order_tracker else 0
+                        pending = per_pair_tracker.total_pending if per_pair_tracker else 0
                         lines.append(f"{engine.display_pair} | Grid: <b>{state}</b> | Pending: {pending}")
 
                 lines.append("•••")
@@ -924,8 +925,8 @@ class TelegramCommandHandler:
 
             lines = ["📈 <b>TREND P&L</b>", "•••"]
             lines.append(f"Total trades: {summary['total_trades']}")
-            lines.append(f"Win rate: {summary['win_rate']:.1f}% ({summary['wins']}W / {summary['losses']}L)")
-            lines.append(f"Total P&L: ${summary['total_pnl']:.2f}")
+            lines.append(f"Win rate: {summary['win_rate']:.1f}% ({summary['winning']}W / {summary['losing']}L)")
+            lines.append(f"Total P&L: ${summary['net_pnl']:.2f}")
             lines.append(f"Profit factor: {perf['profit_factor']:.2f}")
             lines.append(f"Avg win: ${perf['avg_win']:.2f} | Avg loss: ${perf['avg_loss']:.2f}")
             lines.append(f"Avg duration: {perf['avg_duration']:.0f} min")
