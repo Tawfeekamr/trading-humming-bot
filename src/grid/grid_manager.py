@@ -18,6 +18,10 @@ class GridManager:
     TICK_SIZE = 0.01          # $0.01 price step
     FEE_RATE = 0.001          # 0.1% per side (Binance default)
 
+    # Asymmetric grid: geometric scaling factors (buy-side only)
+    SPACING_FACTOR = 0.10    # α: levels spread wider as price drops
+    SIZE_FACTOR = 0.08       # β: buy more at lower prices
+
     def __init__(self, levels: int = 8, capital_usdt: float = 200,
                  min_reserve: float = 50, spacing_multiplier: float = 0.8,
                  step_size: float = 0.01):
@@ -67,21 +71,31 @@ class GridManager:
             sell_spacing = max(sell_spacing, min_profit_spacing)
 
         deployable = self.capital_usdt - self.min_reserve
-        # Still divide by (levels * 2) to maintain the same conservative capital allocation
-        order_value = deployable / (self.levels * 2)
+        deployable_buy = deployable / 2
+        deployable_sell = deployable / 2
+
+        # Buy side: geometric scaling — spacing widens, size grows with depth
+        alpha = self.SPACING_FACTOR
+        beta = self.SIZE_FACTOR
+        geometric_sum = sum((1 + beta) ** i for i in range(1, self.levels + 1))
+        base_buy_value = deployable_buy / geometric_sum if geometric_sum > 0 else 0
+
+        # Sell side: uniform allocation
+        order_value_sell = deployable_sell / self.levels if self.levels > 0 else 0
 
         buy_levels = []
         sell_levels = []
 
         for i in range(1, self.levels + 1):
-            # Buy levels: step DOWN from mid
-            buy_price = bb.mid - (buy_spacing * i)
-            buy_qty = order_value / buy_price
+            # Buy levels: geometric spacing stepping DOWN from mid
+            buy_price = bb.mid - (buy_spacing * (1 + alpha) ** i)
+            buy_value = base_buy_value * (1 + beta) ** i
+            buy_qty = buy_value / buy_price if buy_price > 0 else 0
             buy_price, buy_qty = self._validate_order(buy_price, buy_qty)
 
-            # Sell levels: step UP from mid
+            # Sell levels: uniform spacing stepping UP from mid
             sell_price = bb.mid + (sell_spacing * i)
-            sell_qty = order_value / sell_price
+            sell_qty = order_value_sell / sell_price if sell_price > 0 else 0
             sell_price, sell_qty = self._validate_order(sell_price, sell_qty)
 
             if buy_price and buy_qty:
