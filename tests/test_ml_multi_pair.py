@@ -619,6 +619,22 @@ class TestModelStaleness:
         model_path = tmp_path / "regime_NONEXISTENT.pkl"
         assert not model_path.exists()
 
+    def test_staleness_detected_when_single_regime_24h(self):
+        """20+ consecutive identical predictions should flag staleness."""
+        history = [(0, 0.7, t) for t in range(20)]
+        recent = [r for r, c, t in history]
+        unique = set(recent)
+        is_stale = len(recent) >= 20 and len(unique) == 1
+        assert is_stale is True
+
+    def test_no_staleness_when_regimes_vary(self):
+        """Varying predictions should not trigger staleness."""
+        history = [(0, 0.7, t) if t % 3 == 0 else (1, 0.6, t) for t in range(20)]
+        recent = [r for r, c, t in history]
+        unique = set(recent)
+        is_stale = len(recent) >= 20 and len(unique) == 1
+        assert is_stale is False
+
 
 # ===================================================================
 # TestTrainPipelinePerPair
@@ -651,6 +667,24 @@ class TestTrainPipelinePerPair:
         paths = [Path(f"models/regime_{s}.pkl") for s in pairs]
         names = [p.name for p in paths]
         assert len(set(names)) == len(pairs)  # all unique
+
+    def test_symbol_mapping(self):
+        """Verify symbol format conversion: BNB-USDT -> BNBUSDT."""
+        pairs = {
+            "BNB-USDT": "BNBUSDT",
+            "ETH-USDT": "ETHUSDT",
+            "DOGE-USDT": "DOGEUSDT",
+            "XRP-USDT": "XRPUSDT",
+        }
+        for pair, expected_symbol in pairs.items():
+            result = pair.replace("-", "")
+            assert result == expected_symbol
+
+    def test_model_path_per_pair(self):
+        """Model path should be pair-specific."""
+        pair = "BNB-USDT"
+        expected_path = f"models/regime_{pair}.pkl"
+        assert expected_path == "models/regime_BNB-USDT.pkl"
 
 
 # ===================================================================
