@@ -26,7 +26,7 @@ timeframe: "1h"
 
 # ── Grid Parameters ───────────────────────────────────────────────
 grid:
-  levels: 2                   # Orders on each side of mid price
+  levels: 5                   # Orders on each side of mid price
   capital_usdt: 5000          # Total USDT allocated
   min_usdt_reserve: 100       # Always keep this in reserve
   order_refresh_time: 60      # Seconds between order refresh
