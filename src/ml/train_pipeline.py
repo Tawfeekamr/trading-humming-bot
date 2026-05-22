@@ -83,9 +83,13 @@ def main():
                         help='Train on a single timeframe only (e.g., 1h). Default: all timeframes.')
     parser.add_argument('--candles', type=int, default=1000,
                         help='Number of candles per timeframe (default: 1000). Use 2000+ for single-TF training.')
+    parser.add_argument('--pair', type=str, default="SOL-USDT",
+                        help='Trading pair for per-pair model training (e.g., BNB-USDT). '
+                             'Default: SOL-USDT (legacy behavior)')
     args = parser.parse_args()
 
-    print("Fetching real SOL/USDT market data from Binance...")
+    symbol = args.pair.replace("-", "")  # BNB-USDT -> BNBUSDT
+    print(f"Fetching real {args.pair} market data from Binance...")
     interval_configs = {
         "15m": {"forward_window": 48, "trend_threshold": 0.015, "trend_atr_k": 1.2},
         "1h":  {"forward_window": 12, "trend_threshold": 0.02,  "trend_atr_k": 1.5},
@@ -102,7 +106,7 @@ def main():
 
     datasets = []
     for interval, cfg in interval_configs.items():
-        df = load_real_data("SOLUSDT", intervals=[interval], candles_per_interval=args.candles)
+        df = load_real_data(symbol, intervals=[interval], candles_per_interval=args.candles)
         datasets.append((interval, cfg, df))
 
     feature_cols = [
@@ -149,7 +153,8 @@ def main():
         name = {0: "ranging", 1: "trending", 2: "danger"}.get(c, f"class_{c}")
         print(f"  Test:      {sum(y_test == c)} {name}")
 
-    classifier = RegimeClassifier(model_path='models/regime_rf_v3.pkl', model_type='random_forest')
+    model_path = f'models/regime_{args.pair}.pkl'
+    classifier = RegimeClassifier(model_path=model_path, model_type='random_forest')
     best_params = classifier.tune_hyperparameters(X_trainval, y_trainval, n_iter=20, cv=3)
 
     print("\n--- Evaluation on Test Set ---")
@@ -166,7 +171,7 @@ def main():
         print(f"  {feat:25s} {imp:.4f}")
 
     classifier.save_model()
-    print(f"\nPipeline complete. Model saved to {classifier.model_path}")
+    print(f"\nPipeline complete. Model saved to {classifier.model_path} for {args.pair}")
 
 
 if __name__ == '__main__':
