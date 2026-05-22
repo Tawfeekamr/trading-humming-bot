@@ -440,23 +440,46 @@ class TAGridTrendStrategy(StrategyV2Base):
             daily_loss_limit_pct=trend_cfg.get("daily_loss_limit_pct", 5.0),
         )
 
-        # ── ML Regime Classifier (disabled for multi-pair) ──
-        self._ml_classifier = None
-        self._ml_confidence = 0.0
-        self._ml_regime = 0
-        if len(self.pairs) <= 1 and ML_AVAILABLE:
-            try:
-                model_path = Path("models/regime_rf_v3.pkl")
+        # ── ML Regime Classifier (per-pair) ──
+        self._ml_models: Dict[str, RegimeClassifier] = {}
+        self._ml_predictions: Dict[str, tuple] = {}
+        self._ml_prediction_history: Dict[str, list] = {}
+        self._ml_gc_counter = 0
+
+        if ML_AVAILABLE:
+            for symbol in self.pairs:
+                self._ml_predictions[symbol] = (None, 0.0, 0.0)
+                self._ml_prediction_history[symbol] = []
+                model_path = Path(f"models/regime_{symbol}.pkl")
                 if model_path.exists():
-                    self._ml_classifier = RegimeClassifier(model_path=str(model_path))
-                    self._ml_classifier.load_model()
-                    logger.info(f"Loaded ML Regime Classifier from {model_path}")
+                    try:
+                        clf = RegimeClassifier(model_path=str(model_path))
+                        clf.load_model()
+                        self._ml_models[symbol] = clf
+                        logger.info(f"ML model loaded for {symbol} from {model_path}")
+                    except Exception as e:
+                        logger.warning(f"ML model load failed for {symbol}: {e}")
                 else:
-                    logger.info("ML Regime Classifier model file not found.")
-            except Exception as e:
-                logger.warning(f"Could not initialize ML Regime Classifier: {e}")
-        elif len(self.pairs) > 1:
-            logger.info("ML Regime Classifier disabled: multi-pair mode active")
+                    logger.warning(f"No ML model for {symbol} (rule-based fallback)")
+
+            # Startup summary
+            loaded = [s for s in self.pairs if s in self._ml_models]
+            missing = [s for s in self.pairs if s not in self._ml_models]
+            logger.info(
+                f"ML Regime Classifier: {len(loaded)}/{len(self.pairs)} pairs loaded"
+                + (f" — missing: {missing}" if missing else "")
+            )
+        else:
+            for symbol in self.pairs:
+                self._ml_predictions[symbol] = (None, 0.0, 0.0)
+            logger.info("ML Regime Classifier: sklearn not available (rule-based only)")
+
+        # Backward compat: single-pair ML classifier reference
+        self._ml_classifier = list(self._ml_models.values())[0] if self._ml_models else None
+
+        # Defaults for code that still reads shared scalars (will be removed in Task 3-4)
+        self._ml_regime = 0
+        self._ml_confidence = 0.0
 
         # ── Shared state ──
         self._last_price: Dict[str, float] = {}
