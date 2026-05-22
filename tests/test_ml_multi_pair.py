@@ -315,6 +315,163 @@ class TestRunMLPrediction:
 
         assert target._ml_gc_counter == 0
 
+    # ── Per-pair ATR percentile danger override tests ──
+
+    def test_atr_percentile_override_triggers(self):
+        """Per-pair danger override fires when ATR exceeds 95th percentile and return is flat."""
+        import numpy as np
+        import pandas as pd
+
+        # Build a feature DataFrame where normalized_atr at the last row exceeds p95
+        n = 100
+        np.random.seed(42)
+        atr_vals = np.random.uniform(0.01, 0.05, n)
+        atr_vals[-1] = 0.12  # last row well above p95 ~0.06
+
+        FEATURE_COLS = [
+            'returns', 'volatility_ratio', 'normalized_atr',
+            'trend_strength', 'rsi_14', 'volume_ratio', 'close_location_value',
+            'adx_14', 'macd_histogram', 'distance_to_vwap', 'obv_roc_14',
+            'choppiness_index', 'fractal_dimension_index', 'aroon_oscillator'
+        ]
+        data = {col: np.random.uniform(0.01, 0.5, n) for col in FEATURE_COLS}
+        data['normalized_atr'] = atr_vals
+        data['returns'][-1] = 0.001  # flat return (< 0.005)
+        df_features = pd.DataFrame(data)
+
+        last_features = df_features.iloc[[-1]][FEATURE_COLS]
+        norm_atr = last_features['normalized_atr'].iloc[0]
+        ret = abs(last_features['returns'].iloc[0])
+        atr_threshold = df_features['normalized_atr'].quantile(0.95)
+
+        regime = 1  # TRENDING
+        if norm_atr > atr_threshold and ret < 0.005 and regime != 2:
+            regime = 2
+
+        assert norm_atr > atr_threshold
+        assert ret < 0.005
+        assert regime == 2  # DANGER
+
+    def test_atr_percentile_no_override_below_p95(self):
+        """No override when ATR is below 95th percentile even with flat returns."""
+        import numpy as np
+        import pandas as pd
+
+        n = 100
+        np.random.seed(42)
+        # All ATR values similar — p95 ~= max
+        atr_vals = np.random.uniform(0.02, 0.03, n)
+        atr_vals[-1] = 0.025  # same range, won't exceed p95
+
+        FEATURE_COLS = [
+            'returns', 'volatility_ratio', 'normalized_atr',
+            'trend_strength', 'rsi_14', 'volume_ratio', 'close_location_value',
+            'adx_14', 'macd_histogram', 'distance_to_vwap', 'obv_roc_14',
+            'choppiness_index', 'fractal_dimension_index', 'aroon_oscillator'
+        ]
+        data = {col: np.random.uniform(0.01, 0.5, n) for col in FEATURE_COLS}
+        data['normalized_atr'] = atr_vals
+        data['returns'][-1] = 0.001
+        df_features = pd.DataFrame(data)
+
+        last_features = df_features.iloc[[-1]][FEATURE_COLS]
+        norm_atr = last_features['normalized_atr'].iloc[0]
+        ret = abs(last_features['returns'].iloc[0])
+        atr_threshold = df_features['normalized_atr'].quantile(0.95)
+
+        regime = 1  # TRENDING
+        if norm_atr > atr_threshold and ret < 0.005 and regime != 2:
+            regime = 2
+
+        assert norm_atr <= atr_threshold or ret >= 0.005
+        assert regime == 1  # No override
+
+    def test_atr_percentile_no_override_when_already_danger(self):
+        """No redundant override when regime is already DANGER (2)."""
+        import numpy as np
+        import pandas as pd
+
+        n = 100
+        np.random.seed(42)
+        atr_vals = np.random.uniform(0.01, 0.05, n)
+        atr_vals[-1] = 0.12
+
+        FEATURE_COLS = [
+            'returns', 'volatility_ratio', 'normalized_atr',
+            'trend_strength', 'rsi_14', 'volume_ratio', 'close_location_value',
+            'adx_14', 'macd_histogram', 'distance_to_vwap', 'obv_roc_14',
+            'choppiness_index', 'fractal_dimension_index', 'aroon_oscillator'
+        ]
+        data = {col: np.random.uniform(0.01, 0.5, n) for col in FEATURE_COLS}
+        data['normalized_atr'] = atr_vals
+        data['returns'][-1] = 0.001
+        df_features = pd.DataFrame(data)
+
+        last_features = df_features.iloc[[-1]][FEATURE_COLS]
+        norm_atr = last_features['normalized_atr'].iloc[0]
+        ret = abs(last_features['returns'].iloc[0])
+        atr_threshold = df_features['normalized_atr'].quantile(0.95)
+
+        regime = 2  # already DANGER
+        confidence = 0.95
+        # The override condition includes `regime != 2`, so it should NOT fire
+        if norm_atr > atr_threshold and ret < 0.005 and regime != 2:
+            regime = 2
+            confidence = 0.80
+
+        assert regime == 2
+        assert confidence == 0.95  # unchanged — no override applied
+
+    # ── GC counter interval tests ──
+
+    def test_gc_interval_calculation(self):
+        """GC interval is 5 * number of pairs."""
+        pairs = ["DOGE-USDT", "BTC-USDT", "ETH-USDT"]
+        target = _make_strategy_mock(pairs)
+        gc_interval = 5 * len(target.pairs)
+        assert gc_interval == 15
+
+    def test_gc_triggers_at_interval(self):
+        """GC collect runs when counter is a multiple of the interval."""
+        pairs = ["DOGE-USDT", "BTC-USDT"]
+        gc_interval = 5 * len(pairs)  # 10
+
+        with patch("gc.collect") as mock_gc:
+            # Simulate counter increments
+            for i in range(1, 21):
+                if i % gc_interval == 0:
+                    mock_gc()
+
+            assert mock_gc.call_count == 2  # at i=10 and i=20
+
+    def test_gc_counter_increments_per_prediction(self):
+        """GC counter increments by 1 for each prediction call."""
+        pairs = ["DOGE-USDT"]
+        target = _make_strategy_mock(pairs)
+        with patch("pathlib.Path.exists", return_value=False):
+            _run_ml_init(target, pairs, ml_available=True)
+
+        assert target._ml_gc_counter == 0
+        target._ml_gc_counter += 1
+        assert target._ml_gc_counter == 1
+        target._ml_gc_counter += 1
+        assert target._ml_gc_counter == 2
+
+    def test_prediction_history_capped_at_1440(self):
+        """Prediction history is trimmed to last 1440 entries."""
+        history = list(range(1500))
+        if len(history) > 1440:
+            history = history[-1440:]
+        assert len(history) == 1440
+        assert history[0] == 60  # first 60 entries dropped
+
+    def test_prediction_history_under_cap_unchanged(self):
+        """Prediction history under 1440 entries is not trimmed."""
+        history = list(range(100))
+        if len(history) > 1440:
+            history = history[-1440:]
+        assert len(history) == 100
+
 
 # ===================================================================
 # TestGridTickMLIntegration

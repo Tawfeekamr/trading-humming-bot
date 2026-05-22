@@ -203,6 +203,13 @@ class TAGridTrendConfig(StrategyV2ConfigBase):
 class TAGridTrendStrategy(StrategyV2Base):
     """Dual-engine strategy: grid bot + trend following."""
 
+    FEATURE_COLS = [
+        'returns', 'volatility_ratio', 'normalized_atr',
+        'trend_strength', 'rsi_14', 'volume_ratio', 'close_location_value',
+        'adx_14', 'macd_histogram', 'distance_to_vwap', 'obv_roc_14',
+        'choppiness_index', 'fractal_dimension_index', 'aroon_oscillator'
+    ]
+
     @staticmethod
     def _load_config() -> dict:
         config_paths = [
@@ -855,6 +862,71 @@ class TAGridTrendStrategy(StrategyV2Base):
                 pair=engine.symbol,
             )
             self._grid_dirty = False
+
+    # ── ML Prediction ──
+
+    def _run_ml_prediction(self, pair: str):
+        """Run ML regime prediction for a single pair. Updates self._ml_predictions[pair]."""
+        import gc as gc_mod
+
+        if pair not in self._ml_models:
+            return
+
+        candles = self._cached_candles.get(pair)
+        if candles is None or len(candles) < 50:
+            return
+
+        try:
+            df_features = calculate_technical_features(candles)
+            if df_features.empty:
+                return
+
+            last_features = df_features.iloc[[-1]][self.FEATURE_COLS]
+
+            # Check for NaN in features
+            if last_features.isna().any(axis=1).iloc[0]:
+                logger.warning(f"ML features contain NaN for {pair}, skipping prediction")
+                return
+
+            model = self._ml_models[pair]
+            regime = model.predict_class(last_features)
+            regime_probs = model.predict_proba_full(last_features)
+            confidence = regime_probs.get(regime, 0.0)
+
+            # Per-pair danger override using rolling ATR percentile
+            norm_atr = last_features['normalized_atr'].iloc[0]
+            ret = abs(last_features['returns'].iloc[0])
+            atr_threshold = df_features['normalized_atr'].quantile(0.95)
+
+            if norm_atr > atr_threshold and ret < 0.005 and regime != 2:
+                regime = 2
+                confidence = 0.80
+                logger.info(f"ML Danger override for {pair}: ATR={norm_atr:.4f} > p95={atr_threshold:.4f}")
+
+            # Update cache
+            self._ml_predictions[pair] = (regime, confidence, time_mod.time())
+
+            # Track prediction history for staleness detection
+            self._ml_prediction_history[pair].append((regime, confidence, time_mod.time()))
+            if len(self._ml_prediction_history[pair]) > 1440:
+                self._ml_prediction_history[pair] = self._ml_prediction_history[pair][-1440:]
+
+            # GC management: collect every ~5 minutes
+            self._ml_gc_counter += 1
+            gc_interval = 5 * len(self.pairs)
+            if self._ml_gc_counter % gc_interval == 0:
+                gc_mod.collect()
+
+            # Cleanup intermediate objects
+            del df_features, last_features
+
+            REGIME_NAMES = {0: 'RANGING', 1: 'TRENDING', 2: 'DANGER'}
+            logger.info(
+                f"ML {pair}: {REGIME_NAMES.get(regime, 'UNKNOWN')} "
+                f"({confidence*100:.1f}%) | probs={regime_probs}"
+            )
+        except Exception as e:
+            logger.error(f"ML prediction failed for {pair}: {e}")
 
     # ── Trend Engine Tick ──
 
