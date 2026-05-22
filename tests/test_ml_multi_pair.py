@@ -76,10 +76,11 @@ def _run_ml_init(target, pairs, ml_available=True, model_paths=None):
         for symbol in pairs:
             target._ml_predictions[symbol] = (None, 0.0, 0.0)
             target._ml_prediction_history[symbol] = []
-            model_path = model_paths.get(symbol) if model_paths else None
-            if model_path is None:
+            if model_paths is not None:
+                model_path = model_paths.get(symbol)
+            else:
                 model_path = Path(f"models/regime_{symbol}.pkl")
-            if model_path.exists():
+            if model_path is not None and model_path.exists():
                 try:
                     clf = RegimeClassifier(model_path=str(model_path))
                     clf.load_model()
