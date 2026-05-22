@@ -476,6 +476,20 @@ class TAGridTrendStrategy(StrategyV2Base):
                 f"ML Regime Classifier: {len(loaded)}/{len(self.pairs)} pairs loaded"
                 + (f" — missing: {missing}" if missing else "")
             )
+
+            # Telegram ML status notification
+            if self._ml_models:
+                ml_msg = f"🧠 <b>ML Models Loaded: {len(loaded)}/{len(self.pairs)}</b>\n"
+                for s in loaded:
+                    ml_msg += f"  ✅ {s}\n"
+                for s in missing:
+                    ml_msg += f"  ❌ {s} (rule-based)\n"
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        loop.create_task(self.telegram.send(ml_msg))
+                except RuntimeError:
+                    pass
         else:
             for symbol in self.pairs:
                 self._ml_predictions[symbol] = (None, 0.0, 0.0)
@@ -894,6 +908,10 @@ class TAGridTrendStrategy(StrategyV2Base):
             if self._ml_gc_counter % gc_interval == 0:
                 gc_mod.collect()
 
+            # Periodic staleness check (~every 20th prediction for this pair)
+            if len(self._ml_prediction_history[pair]) % 20 == 0:
+                self._check_ml_staleness(pair)
+
             # Cleanup intermediate objects
             del df_features, last_features
 
@@ -904,6 +922,27 @@ class TAGridTrendStrategy(StrategyV2Base):
             )
         except Exception as e:
             logger.error(f"ML prediction failed for {pair}: {e}")
+
+    def _check_ml_staleness(self, pair: str):
+        """Check if ML predictions for a pair are stuck on one regime."""
+        history = self._ml_prediction_history.get(pair, [])
+        if len(history) < 20:
+            return
+
+        cutoff = time_mod.time() - 86400  # last 24h
+        recent = [(r, c, t) for r, c, t in history if t >= cutoff]
+        if len(recent) < 20:
+            return
+
+        regimes = set(r for r, c, t in recent)
+        if len(regimes) == 1:
+            stuck_regime = recent[0][0]
+            REGIME_NAMES = {0: 'RANGING', 1: 'TRENDING', 2: 'DANGER'}
+            logger.warning(
+                f"ML model for {pair} may be stale — predicted "
+                f"{REGIME_NAMES.get(stuck_regime, 'UNKNOWN')} for {len(recent)} "
+                f"consecutive predictions over 24h"
+            )
 
     # ── Trend Engine Tick ──
 
