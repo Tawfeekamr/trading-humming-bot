@@ -477,19 +477,14 @@ class TAGridTrendStrategy(StrategyV2Base):
                 + (f" — missing: {missing}" if missing else "")
             )
 
-            # Telegram ML status notification
+            # Telegram ML status notification (deferred — self.telegram not yet initialized)
+            self._ml_startup_msg = None
             if self._ml_models:
-                ml_msg = f"🧠 <b>ML Models Loaded: {len(loaded)}/{len(self.pairs)}</b>\n"
+                self._ml_startup_msg = f"🧠 <b>ML Models Loaded: {len(loaded)}/{len(self.pairs)}</b>\n"
                 for s in loaded:
-                    ml_msg += f"  ✅ {s}\n"
+                    self._ml_startup_msg += f"  ✅ {s}\n"
                 for s in missing:
-                    ml_msg += f"  ❌ {s} (rule-based)\n"
-                try:
-                    loop = asyncio.get_event_loop()
-                    if loop.is_running():
-                        loop.create_task(self.telegram.send(ml_msg))
-                except RuntimeError:
-                    pass
+                    self._ml_startup_msg += f"  ❌ {s} (rule-based)\n"
         else:
             for symbol in self.pairs:
                 self._ml_predictions[symbol] = (None, 0.0, 0.0)
@@ -562,6 +557,16 @@ class TAGridTrendStrategy(StrategyV2Base):
             strategy=self,
         )
         self._telegram_commands.start()
+
+        # Send deferred ML startup notification (telegram not available during ML init)
+        if getattr(self, '_ml_startup_msg', None):
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    loop.create_task(self.telegram.send(self._ml_startup_msg))
+                self._ml_startup_msg = None
+            except RuntimeError:
+                pass
 
         # System monitor
         self._sys_monitor = SystemAlertMonitor(self.telegram, interval_sec=300)
