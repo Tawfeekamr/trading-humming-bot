@@ -30,6 +30,10 @@ class OrderTracker:
         self._orders: dict[str, GridOrder] = {}
         self._lock = threading.Lock()
 
+    def get(self, order_id: str) -> Optional[GridOrder]:
+        with self._lock:
+            return self._orders.get(order_id)
+
     def add(self, order: GridOrder) -> None:
         with self._lock:
             self._orders[order.order_id] = order
