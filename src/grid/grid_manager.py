@@ -1,3 +1,4 @@
+import math
 from dataclasses import dataclass
 from src.indicators.bollinger import BBResult
 
@@ -33,10 +34,11 @@ class GridManager:
         self.step_size = step_size
 
     def _validate_order(self, price: float, quantity: float) -> tuple:
-        """Round to exchange tick/step sizes and check min notional. Returns (price, qty) or (None, None)."""
+        if not (math.isfinite(price) and math.isfinite(quantity) and price > 0 and quantity > 0):
+            return None, None
         price = round(price / self.TICK_SIZE) * self.TICK_SIZE
         quantity = round(quantity / self.step_size) * self.step_size
-        if price * quantity < self.MIN_NOTIONAL:
+        if not (math.isfinite(price) and math.isfinite(quantity)) or price * quantity < self.MIN_NOTIONAL:
             return None, None
         return round(price, 2), round(quantity, 8)
 

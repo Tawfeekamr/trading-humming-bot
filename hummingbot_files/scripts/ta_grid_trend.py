@@ -7,6 +7,7 @@ Both engines share one connector but have isolated capital and state.
 import os
 import asyncio
 import logging
+import math
 import threading
 import json
 import traceback as traceback_mod
@@ -1358,6 +1359,8 @@ class TAGridTrendStrategy(StrategyV2Base):
                 current_usdt=usdt_bal, order_usdt=order_usdt, equity=equity,
             ):
                 continue
+            if not (math.isfinite(level["price"]) and math.isfinite(level["quantity"]) and level["price"] > 0):
+                continue
             buys_placed += 1
             client_order_id = self.buy(
                 connector_name=self.exchange, trading_pair=engine.symbol,
@@ -1385,6 +1388,8 @@ class TAGridTrendStrategy(StrategyV2Base):
                 continue
             base_balance = self._get_base_balance(engine)
             if buy.quantity > base_balance:
+                continue
+            if not (math.isfinite(sell_price) and sell_price > 0 and math.isfinite(buy.quantity) and buy.quantity > 0):
                 continue
             sells_placed += 1
             client_order_id = self.sell(
