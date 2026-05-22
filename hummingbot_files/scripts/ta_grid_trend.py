@@ -749,42 +749,20 @@ class TAGridTrendStrategy(StrategyV2Base):
             self._cached_candles[engine.symbol] = df
             self._grid_dirty = True
 
-            # ML Prediction (only for single-pair mode)
-            if self._ml_classifier:
-                try:
-                    df_features = calculate_technical_features(df)
-                    if not df_features.empty:
-                        last_features = df_features.iloc[[-1]][[
-                            'returns', 'volatility_ratio', 'normalized_atr',
-                            'trend_strength', 'rsi_14', 'volume_ratio', 'close_location_value',
-                            'adx_14', 'macd_histogram', 'distance_to_vwap', 'obv_roc_14',
-                            'choppiness_index', 'fractal_dimension_index', 'aroon_oscillator'
-                        ]]
-                        prob = self._ml_classifier.predict_proba(last_features)[0]
-                        regime_probs = self._ml_classifier.predict_proba_full(last_features)
-                        self._ml_regime = self._ml_classifier.predict_class(last_features)
-                        self._ml_confidence = regime_probs[self._ml_regime]
+            # ML Prediction (per-pair, throttled to 60s)
+            now_ts = time_mod.time()
+            _, _, last_ts = self._ml_predictions.get(engine.symbol, (None, 0.0, 0.0))
+            if now_ts - last_ts >= 60:
+                self._run_ml_prediction(engine.symbol)
 
-                        # Volatility-based Danger override: extreme ATR + flat price = whipsaw
-                        norm_atr = last_features['normalized_atr'].iloc[0]
-                        ret = abs(last_features['returns'].iloc[0])
-                        if norm_atr > 0.06 and ret < 0.005 and self._ml_regime != 2:
-                            self._ml_regime = 2
-                            self._ml_confidence = 0.80
-                            logger.info(f"ML Danger override: ATR={norm_atr:.4f}, ret={ret:.5f}")
-
-                        REGIME_NAMES = {0: 'RANGING', 1: 'TRENDING', 2: 'DANGER'}
-                        regime_name = REGIME_NAMES.get(self._ml_regime, 'UNKNOWN')
-                        logger.info(f"ML Regime: {regime_name} ({self._ml_confidence*100:.1f}%) | probs={regime_probs}")
-                except Exception as e:
-                    logger.error(f"ML classification failed: {e}")
-
+            ml_regime, ml_confidence, _ = self._ml_predictions.get(engine.symbol, (None, 0.0, 0.0))
             self.event_log.log("indicators_updated",
                 rsi=round(rsi_value, 2), bb_upper=round(bb_result.upper, 2),
                 bb_mid=round(bb_result.mid, 2), bb_lower=round(bb_result.lower, 2),
                 ema_200=round(ema_value, 2), atr=round(atr_value, 2),
                 price=round(current_price, 2), grid_state=self.state_machines[engine.symbol].state.value,
-                ml_confidence=round(self._ml_confidence, 3), ml_regime=self._ml_regime,
+                ml_confidence=round(ml_confidence, 3),
+                ml_regime=ml_regime if ml_regime is not None else 0,
                 pair=engine.symbol,
             )
         else:
@@ -795,11 +773,13 @@ class TAGridTrendStrategy(StrategyV2Base):
         # Evaluate state
         state_machine = self.state_machines[engine.symbol]
         prev_state = state_machine.state
+        ml_regime, ml_confidence, _ = self._ml_predictions.get(engine.symbol, (None, 0.0, 0.0))
         new_state = state_machine.evaluate(
             price=current_price, rsi=rsi_value, ema_200=ema_value,
             bb_lower=bb_result.lower, bb_upper=bb_result.upper,
             rsi_overbought=self.rsi_overbought, rsi_oversold=self.rsi_oversold,
-            ml_regime=self._ml_regime, ml_confidence=self._ml_confidence,
+            ml_regime=ml_regime if ml_regime is not None else 0,
+            ml_confidence=ml_confidence,
         )
 
         if new_state != prev_state:
