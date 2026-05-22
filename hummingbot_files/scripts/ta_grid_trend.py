@@ -484,10 +484,6 @@ class TAGridTrendStrategy(StrategyV2Base):
         # Backward compat: single-pair ML classifier reference
         self._ml_classifier = list(self._ml_models.values())[0] if self._ml_models else None
 
-        # Defaults for code that still reads shared scalars (will be removed in Task 3-4)
-        self._ml_regime = 0
-        self._ml_confidence = 0.0
-
         # ── Shared state ──
         self._last_price: Dict[str, float] = {}
         self._last_trend_score = None
@@ -784,7 +780,8 @@ class TAGridTrendStrategy(StrategyV2Base):
 
         if new_state != prev_state:
             trigger_reason = self._determine_trigger_reason(
-                prev_state, new_state, current_price, rsi_value, ema_value, bb_result
+                prev_state, new_state, current_price, rsi_value, ema_value, bb_result,
+                ml_confidence=ml_confidence,
             )
             logger.info(f"Grid state for {engine.symbol}: {prev_state.value} -> {new_state.value} ({trigger_reason})")
             self.event_log.log("state_changed",
@@ -1317,14 +1314,18 @@ class TAGridTrendStrategy(StrategyV2Base):
         if self._trend_breaker.halted:
             return
 
-        # ML gate: trend entries require ML confirmation (only for single-pair mode)
-        if self._ml_classifier is not None:
-            if self._ml_regime == 2:  # Danger regime — no trend entries
-                return
-            if self._ml_regime == 1 and self._ml_confidence < 0.5:  # Trending but uncertain
-                return
-            if self._ml_regime == 0 and self._ml_confidence >= 0.65:  # Confident ranging — no trend entries
-                return
+        # ML gate: per-pair regime check
+        if engine.symbol in self._ml_models:
+            ml_regime, ml_confidence, _ = self._ml_predictions.get(
+                engine.symbol, (None, 0.0, 0.0)
+            )
+            if ml_regime is not None:
+                if ml_regime == 2:  # Danger — block all entries
+                    return
+                if ml_regime == 1 and ml_confidence < 0.5:  # Uncertain trending
+                    return
+                if ml_regime == 0 and ml_confidence >= 0.65:  # Confident ranging — grid only
+                    return
 
         candles = self._cached_candles.get(engine.symbol)
         if candles is None or len(candles) < 200:
@@ -1499,10 +1500,22 @@ class TAGridTrendStrategy(StrategyV2Base):
         self.grid_order_trackers[engine.symbol].cancel_all()
         self.grid_order_trackers[engine.symbol].clear_history()
 
-    def _regime_name(self) -> str:
-        return {0: 'RANGING', 1: 'TRENDING', 2: 'DANGER'}.get(self._ml_regime, 'UNKNOWN')
+    def _regime_name(self, regime: int = None) -> str:
+        if regime is None:
+            regime = 0
+        return {0: 'RANGING', 1: 'TRENDING', 2: 'DANGER'}.get(regime, 'UNKNOWN')
 
-    def _determine_trigger_reason(self, prev_state, new_state, price, rsi, ema_200, bb) -> str:
+    def _ml_summary(self) -> str:
+        """One-line ML status for all pairs with models (used in daily report)."""
+        parts = []
+        for symbol in self._ml_models:
+            r, c, _ = self._ml_predictions.get(symbol, (0, 0.0, 0.0))
+            if r is None:
+                r = 0
+            parts.append(f"{symbol}: {self._regime_name(r)} ({c*100:.0f}%)")
+        return " | ".join(parts) if parts else ""
+
+    def _determine_trigger_reason(self, prev_state, new_state, price, rsi, ema_200, bb, ml_confidence: float = 0.0) -> str:
         if new_state == GridState.PAUSED:
             if rsi > self.rsi_overbought:
                 return f"rsi_overbought ({rsi:.1f} > {self.rsi_overbought})"
@@ -1512,7 +1525,7 @@ class TAGridTrendStrategy(StrategyV2Base):
         if new_state == GridState.REACTIVATING:
             return f"rsi_oversold_bounce ({rsi:.1f} < {self.rsi_oversold}, near BB lower)"
         if new_state == GridState.DANGER:
-            return f"ml_danger_regime (confidence={self._ml_confidence:.0%})"
+            return f"ml_danger_regime (confidence={ml_confidence:.0%})"
         if new_state == GridState.ACTIVE:
             if prev_state == GridState.PAUSED:
                 return f"conditions_cleared (rsi={rsi:.1f}, price>ema)"
@@ -1583,7 +1596,7 @@ class TAGridTrendStrategy(StrategyV2Base):
                 f"🗓 Net Month: {fmt(total_net_month)}\n"
                 f"•••\n"
                 f"🏦 <b>Eq:</b> ${equity:,.2f} ({growth_pct:+.1f}% vs base)\n"
-                f"{'🤖 ML: ' + self._regime_name() + f' ({self._ml_confidence*100:.0f}%)' + chr(10) if self._ml_classifier else ''}"
+                f"{'🤖 ML: ' + self._ml_summary() + chr(10) if self._ml_classifier else ''}"
                 f"⚙️ <b>Env:</b> {self.env.upper()}"
             )
 
@@ -1606,7 +1619,15 @@ class TAGridTrendStrategy(StrategyV2Base):
         self._last_state_alert_time[state_key] = now
 
         spacing = actual_spacing if actual_spacing > 0 else (atr * self.atr_multiplier if atr else 0)
-        ml_line = f"🤖 ML: {self._regime_name()} ({self._ml_confidence*100:.0f}%)" if self._ml_classifier else ""
+        # Resolve per-pair ML regime for notifications
+        ml_regime, ml_confidence, _ = (0, 0.0, 0.0)
+        if engine and engine.symbol in self._ml_models:
+            ml_regime, ml_confidence, _ = self._ml_predictions.get(
+                engine.symbol, (0, 0.0, 0.0)
+            )
+            if ml_regime is None:
+                ml_regime = 0
+        ml_line = f"🤖 ML: {self._regime_name(ml_regime)} ({ml_confidence*100:.0f}%)" if engine and engine.symbol in self._ml_models else ""
 
         if new_state == GridState.ACTIVE:
             msg = (
@@ -1644,7 +1665,7 @@ class TAGridTrendStrategy(StrategyV2Base):
                 f"🔴 <b>Grid DANGER MODE — {display_pair}</b>\n"
                 f"•••\n"
                 f"💵 <b>Price:</b> ${price:,.2f}\n"
-                f"🤖 ML: DANGER ({self._ml_confidence*100:.0f}%)\n"
+                f"🤖 ML: DANGER ({ml_confidence*100:.0f}%)\n"
                 f"⚠️ Both engines paused — market whipsaw detected.\n"
                 f"💤 Holding all positions until regime clears."
             )

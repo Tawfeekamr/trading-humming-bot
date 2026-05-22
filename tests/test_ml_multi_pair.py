@@ -95,10 +95,6 @@ def _run_ml_init(target, pairs, ml_available=True, model_paths=None):
             target._ml_predictions[symbol] = (None, 0.0, 0.0)
         target._ml_classifier = None
 
-    # Defaults for code that still reads shared scalars
-    target._ml_regime = 0
-    target._ml_confidence = 0.0
-
 
 # ===================================================================
 # TestPerPairMLInit
@@ -191,15 +187,14 @@ class TestPerPairMLInit:
 
         assert target._ml_classifier is None
 
-    def test_default_shared_scalars_set(self):
-        """_ml_regime and _ml_confidence defaults are always set."""
+    def test_default_per_pair_predictions_set(self):
+        """Per-pair predictions default to (None, 0.0, 0.0) when no model is loaded."""
         pairs = ["DOGE-USDT"]
         target = _make_strategy_mock(pairs)
         with patch("pathlib.Path.exists", return_value=False):
             _run_ml_init(target, pairs, ml_available=True)
 
-        assert target._ml_regime == 0
-        assert target._ml_confidence == 0.0
+        assert target._ml_predictions["DOGE-USDT"] == (None, 0.0, 0.0)
 
 
 # ===================================================================
@@ -541,15 +536,16 @@ class TestGridTickMLIntegration:
 class TestTrendEntryMLGate:
     """Test ML gate logic for trend entries (from _evaluate_trend_signals)."""
 
-    def _gate_allows(self, ml_regime, ml_confidence, ml_classifier_exists=True):
-        """Replicate the ML gate logic from _evaluate_trend_signals."""
-        if ml_classifier_exists:
-            if ml_regime == 2:  # Danger
-                return False
-            if ml_regime == 1 and ml_confidence < 0.5:  # Uncertain trending
-                return False
-            if ml_regime == 0 and ml_confidence >= 0.65:  # Confident ranging
-                return False
+    def _gate_allows(self, ml_regime, ml_confidence, has_model=True):
+        """Replicate the per-pair ML gate logic from _evaluate_trend_signals."""
+        if has_model:
+            if ml_regime is not None:
+                if ml_regime == 2:  # Danger — block all entries
+                    return False
+                if ml_regime == 1 and ml_confidence < 0.5:  # Uncertain trending
+                    return False
+                if ml_regime == 0 and ml_confidence >= 0.65:  # Confident ranging — grid only
+                    return False
         return True
 
     def test_danger_regime_blocks_entry(self):
@@ -568,8 +564,15 @@ class TestTrendEntryMLGate:
         assert self._gate_allows(ml_regime=0, ml_confidence=0.5) is True
 
     def test_no_model_allows_entry(self):
+        """If pair has no ML model, trend entries should not be blocked by ML."""
         assert self._gate_allows(
-            ml_regime=0, ml_confidence=0.0, ml_classifier_exists=False
+            ml_regime=0, ml_confidence=0.0, has_model=False
+        ) is True
+
+    def test_no_prediction_allows_entry(self):
+        """If pair has a model but no prediction yet (regime=None), entry is allowed."""
+        assert self._gate_allows(
+            ml_regime=None, ml_confidence=0.0, has_model=True
         ) is True
 
     def test_moderate_trending_allows_entry(self):
@@ -686,8 +689,8 @@ class TestMLMultiPairIntegration:
             pred = target._ml_predictions[sym]
             assert pred[0] is None  # No ML regime — rule-based fallback
 
-    def test_no_shared_scalar_leakage(self):
-        """Per-pair predictions don't affect shared scalars."""
+    def test_per_pair_predictions_isolated(self):
+        """Per-pair predictions are independent -- setting one doesn't affect another."""
         pairs = ["DOGE-USDT", "BTC-USDT"]
         target = _make_strategy_mock(pairs)
         with patch("pathlib.Path.exists", return_value=False):
@@ -697,9 +700,9 @@ class TestMLMultiPairIntegration:
         target._ml_predictions["DOGE-USDT"] = (2, 0.95, time.time())
         target._ml_predictions["BTC-USDT"] = (0, 0.70, time.time())
 
-        # Shared scalars remain at defaults
-        assert target._ml_regime == 0
-        assert target._ml_confidence == 0.0
+        # Each pair retains its own prediction
+        assert target._ml_predictions["DOGE-USDT"][0] == 2
+        assert target._ml_predictions["BTC-USDT"][0] == 0
 
     def test_throttle_timing_per_pair(self):
         """Each pair's prediction has independent throttle timing."""
