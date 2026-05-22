@@ -14,6 +14,8 @@ logger = logging.getLogger(__name__)
 
 
 class EventLogger:
+    _MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB per event file
+
     def __init__(self, log_dir: str = "logs"):
         self._log_dir = Path(log_dir)
         self._log_dir.mkdir(parents=True, exist_ok=True)
@@ -29,6 +31,11 @@ class EventLogger:
             path = self._log_dir / f"events_{today}.jsonl"
             self._file = open(path, "a", encoding="utf-8")
             self._current_date = today
+        # Rotate if file exceeds size limit
+        if self._file and self._file.tell() > self._MAX_FILE_SIZE:
+            self._file.close()
+            path = self._log_dir / f"events_{today}.jsonl"
+            self._file = open(path, "a", encoding="utf-8")
         return self._file
 
     def log(self, event_type: str, **kwargs) -> None:

@@ -47,14 +47,28 @@ YAML
     echo "Created conf_client.yml with mosquitto MQTT config"
 fi
 
-# Suppress noisy "Unexpected error while processing event 901" from paper_trade_exchange
-# by raising the order_book logger to CRITICAL. This is a known Hummingbot bug where
-# the paper trade listener crashes on real Binance order book events.
+# Configure Hummingbot log rotation and suppress noisy loggers
 LOG_CONF="/home/hummingbot/conf/hummingbot_logs.yml"
-if [ -f "$LOG_CONF" ] && ! grep -q "order_book:" "$LOG_CONF"; then
-    printf '    hummingbot.core.data_type.order_book:\n        level: CRITICAL\n        propagate: false\n        handlers:\n            - file_handler\n' >> "$LOG_CONF"
-    echo "Suppressed order_book event 901 errors in logging config"
+if [ -f "$LOG_CONF" ]; then
+    # Add log rotation (max 50MB, 3 backups) if not already configured
+    if ! grep -q "maxBytes:" "$LOG_CONF"; then
+        sed -i 's/class: FileHandler/class: logging.handlers.RotatingFileHandler/' "$LOG_CONF"
+        sed -i '/class: logging.handlers.RotatingFileHandler/a\        maxBytes: 52428800\n        backupCount: 3' "$LOG_CONF"
+        echo "Added log rotation to Hummingbot logging config"
+    fi
+    # Suppress noisy order_book event 901 errors (known Hummingbot paper trade bug)
+    if ! grep -q "order_book:" "$LOG_CONF"; then
+        printf '    hummingbot.core.data_type.order_book:\n        level: CRITICAL\n        propagate: false\n        handlers:\n            - file_handler\n' >> "$LOG_CONF"
+        echo "Suppressed order_book event 901 errors in logging config"
+    fi
 fi
+
+# Clean up old logs (keep last 7 days)
+find /home/hummingbot/logs -name "bot_*.log*" -mtime +7 -delete 2>/dev/null
+find /home/hummingbot/logs -name "events_*.jsonl" -mtime +7 -delete 2>/dev/null
+find /home/hummingbot/logs -name "logs_*.log*" -mtime +3 -delete 2>/dev/null
+find /home/hummingbot/logs -name "crashes.log*" -mtime +7 -delete 2>/dev/null
+echo "Cleaned up old logs"
 
 # Patch MQTT retry loop to break after first failure instead of retrying forever.
 # Without this, the infinite retry blocks the event loop and prevents ticks (Issue #8012).
