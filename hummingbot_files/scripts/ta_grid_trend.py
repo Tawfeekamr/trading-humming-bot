@@ -452,6 +452,7 @@ class TAGridTrendStrategy(StrategyV2Base):
         self._ml_predictions: Dict[str, tuple] = {}
         self._ml_prediction_history: Dict[str, list] = {}
         self._ml_gc_counter = 0
+        self._ml_model_mtimes: Dict[str, float] = {}
 
         if ML_AVAILABLE:
             for symbol in self.pairs:
@@ -471,6 +472,7 @@ class TAGridTrendStrategy(StrategyV2Base):
                         clf = RegimeClassifier(model_path=str(model_path))
                         clf.load_model()
                         self._ml_models[symbol] = clf
+                        self._ml_model_mtimes[symbol] = os.path.getmtime(str(model_path))
                         logger.info(f"ML model loaded for {symbol} from {model_path}")
                     except Exception as e:
                         logger.warning(f"ML model load failed for {symbol}: {e}")
@@ -885,6 +887,31 @@ class TAGridTrendStrategy(StrategyV2Base):
 
         if pair not in self._ml_models:
             return
+
+        # Hot-reload: check if model file was updated
+        model_path = Path(f"models/regime_{pair}.pkl")
+        if model_path.exists():
+            current_mtime = os.path.getmtime(str(model_path))
+            last_mtime = self._ml_model_mtimes.get(pair, 0.0)
+            if current_mtime > last_mtime:
+                try:
+                    new_clf = RegimeClassifier(model_path=str(model_path))
+                    new_clf.load_model()
+                    self._ml_models[pair] = new_clf
+                    self._ml_model_mtimes[pair] = current_mtime
+                    logger.info(f"Hot-reloaded ML model for {pair} (mtime changed)")
+                    try:
+                        loop = asyncio.get_event_loop()
+                        if loop.is_running():
+                            loop.create_task(self.telegram.send(
+                                f"🔄 <b>ML Model Hot-Reloaded</b>\n"
+                                f"Pair: {pair}\n"
+                                f"Reason: model file updated"
+                            ))
+                    except RuntimeError:
+                        pass
+                except Exception as e:
+                    logger.warning(f"Hot-reload failed for {pair}: {e} — keeping existing model")
 
         candles = self._cached_candles.get(pair)
         if candles is None or len(candles) < 50:
