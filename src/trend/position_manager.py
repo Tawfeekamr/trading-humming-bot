@@ -144,15 +144,18 @@ class PositionManager:
             if new_trail > pos.trailing_stop:
                 pos.trailing_stop = round(new_trail, 4)
 
-    def calculate_position_size(self, entry_price: float, stop_loss_price: float) -> float:
+    def calculate_position_size(self, entry_price: float, stop_loss_price: float,
+                                confidence: float = None) -> float:
         sl_distance = abs(entry_price - stop_loss_price)
         if sl_distance == 0:
             return 0.0
-        risk_amount = self._capital * self._risk_per_trade_pct
-        # Calculate size based on risk amount and stop loss distance
+        if confidence is not None:
+            risk_pct = max(0.005, min(0.03, 0.005 + confidence * 0.02))
+        else:
+            risk_pct = self._risk_per_trade_pct
+        risk_amount = self._capital * risk_pct
         size = risk_amount / sl_distance
         max_notional = self._capital * self._max_position_pct
-        # Cap position size at max notional
         max_size = max_notional / entry_price
         size = min(size, max_size)
         return round(size, 4)

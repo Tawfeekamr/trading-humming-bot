@@ -88,6 +88,33 @@ class TestPositionManager:
         expected_size = (2000.0 * 0.02) / (94.0 - 91.3)
         assert abs(size - expected_size) < 0.01
 
+    def test_confidence_sizing_low_confidence(self, manager):
+        """Low confidence (0.2) should reduce risk to ~0.9%."""
+        size = manager.calculate_position_size(entry_price=94.0, stop_loss_price=91.3, confidence=0.2)
+        risk_pct = 0.005 + 0.2 * 0.02  # 0.009
+        expected = (2000.0 * risk_pct) / (94.0 - 91.3)
+        assert abs(size - expected) < 0.01
+        assert size < manager.calculate_position_size(94.0, 91.3)  # smaller than default
+
+    def test_confidence_sizing_high_confidence(self, manager):
+        """High confidence (0.9) should increase risk — size larger than default."""
+        size_default = manager.calculate_position_size(entry_price=94.0, stop_loss_price=91.3)
+        size_high = manager.calculate_position_size(entry_price=100.0, stop_loss_price=90.0, confidence=0.9)
+        size_low = manager.calculate_position_size(entry_price=100.0, stop_loss_price=90.0, confidence=0.2)
+        assert size_high > size_low  # high confidence = bigger position
+
+    def test_confidence_sizing_clamped(self, manager):
+        """Very high confidence should clamp risk_pct to 3% max."""
+        size = manager.calculate_position_size(entry_price=100.0, stop_loss_price=90.0, confidence=5.0)
+        expected_size = 2000.0 * 0.03 / (100.0 - 90.0)  # risk capped at 3%
+        assert abs(size - expected_size) < 0.01
+
+    def test_confidence_none_uses_default(self, manager):
+        """No confidence = default 2% risk (backward compat)."""
+        size_default = manager.calculate_position_size(entry_price=94.0, stop_loss_price=91.3)
+        size_none = manager.calculate_position_size(entry_price=94.0, stop_loss_price=91.3, confidence=None)
+        assert size_default == size_none
+
     def test_position_size_capped_at_25pct(self):
         mgr = PositionManager(capital=100.0, max_position_pct=25.0)
         size = mgr.calculate_position_size(entry_price=94.0, stop_loss_price=93.99)

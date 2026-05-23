@@ -842,6 +842,15 @@ class TAGridTrendStrategy(StrategyV2Base):
             growth_ratio = live_equity / self._initial_equity if self._initial_equity > 0 else 1.0
             compound_capital = self._base_capital * growth_ratio
             compound_capital = max(compound_capital, self._base_capital)
+            # Scale grid capital by ML regime confidence
+            ml_regime_gr, ml_confidence_gr, _ = self._ml_predictions.get(engine.symbol, (None, 0.0, 0.0))
+            if ml_regime_gr == 0:  # RANGING
+                scale = 1.0 if ml_confidence_gr > 0.7 else 0.8
+            elif ml_regime_gr == 1:  # TRENDING
+                scale = 0.6
+            else:
+                scale = 1.0
+            compound_capital *= scale
             self.grid_managers[engine.symbol].capital_usdt = compound_capital
             grid = self.grid_managers[engine.symbol].calculate_grid(bb_result, atr_value)
             self._active_buy_spacing = grid.buy_spacing
@@ -1401,7 +1410,9 @@ class TAGridTrendStrategy(StrategyV2Base):
         tp = self._trend_manager.calculate_take_profit(self._last_price[engine.symbol], sl)
 
         pm = self._position_managers.get(engine.symbol, self._position_manager)
-        amount = pm.calculate_position_size(self._last_price[engine.symbol], sl)
+        _, ml_confidence, _ = self._ml_predictions.get(engine.symbol, (None, 0.0, 0.0))
+        amount = pm.calculate_position_size(self._last_price[engine.symbol], sl,
+                                            confidence=ml_confidence)
         if amount <= 0:
             return
 
