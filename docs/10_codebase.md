@@ -13,11 +13,12 @@ trading-humming-bot/
 ├── Dockerfile.dashboard                # Dashboard (Python 3.12)
 ├── requirements.txt                    # Python dependencies
 ├── config/
-│   ├── strategy.yaml                   # Grid params, indicators, risk
+│   ├── strategy.yaml                   # Grid params, indicators, risk, pairs
 │   └── ta_grid_btcusdt_conf.yml        # Hummingbot v2 script config
 ├── hummingbot_files/
 │   └── scripts/
-│       └── ta_grid_btcusdt.py          # Main strategy (StrategyV2Base)
+│       ├── ta_grid_trend.py            # Dual-engine strategy (Grid + Trend)
+│       └── capital_manager.py          # Multi-pair capital allocation
 ├── src/
 │   ├── indicators/
 │   │   ├── bollinger.py                # Bollinger Bands calculator
@@ -25,12 +26,19 @@ trading-humming-bot/
 │   │   ├── ema.py                      # EMA calculator
 │   │   └── atr.py                      # ATR + grid spacing
 │   ├── grid/
-│   │   ├── grid_manager.py             # Grid level calculation
-│   │   ├── grid_state.py               # State machine (ACTIVE/PAUSED/REACTIVATING)
+│   │   ├── grid_manager.py             # Grid level calculation (asymmetric spacing)
+│   │   ├── grid_state.py               # State machine (ACTIVE/PAUSED/REACTIVATING/DANGER)
 │   │   └── order_tracker.py            # Order status tracking
 │   ├── risk/
 │   │   ├── circuit_breaker.py          # Drawdown + daily loss halt
-│   │   └── position_guard.py           # Exposure + reserve limits
+│   │   ├── position_guard.py           # Exposure + reserve limits
+│   │   └── bnb_rebalancer.py           # BNB balance management for fee optimization
+│   ├── trend/
+│   │   ├── trend_manager.py            # Trend engine with trailing stops
+│   │   └── position_manager.py         # Confidence-weighted position sizing
+│   ├── ml/
+│   │   ├── regime_classifier.py        # Per-pair ML regime classifier
+│   │   └── train_pipeline.py           # ML model training with Binance data
 │   ├── data/
 │   │   ├── candle_feed.py              # Binance REST candle fetcher
 │   │   └── ws_feed.py                  # Binance WebSocket feed
@@ -43,37 +51,41 @@ trading-humming-bot/
 │   │   └── event_logger.py             # JSONL structured event logs
 │   ├── health.py                       # HTTP health check server
 │   └── logging_config.py              # Logging setup
+├── models/                             # Per-pair ML models (regime_{symbol}.pkl)
 ├── tests/                              # Unit tests
 ├── iac/aws-tokyo/                      # Terraform infrastructure
 ├── .github/workflows/deploy.yml        # CI/CD pipeline
+├── .github/workflows/sweep.yml         # Weekly VectorBT parameter sweep
+├── .github/workflows/retrain.yml       # Monthly ML model retraining
 └── docs/                               # Documentation
 ```
 
-## Strategy Script (`hummingbot_files/scripts/ta_grid_btcusdt.py`)
+## Strategy Script (`hummingbot_files/scripts/ta_grid_trend.py`)
 
-The core strategy extending Hummingbot v2's `StrategyV2Base`.
+The dual-engine strategy extending Hummingbot v2's `StrategyV2Base`. Runs both a grid engine and a trend engine across multiple pairs simultaneously.
 
 ### Config Class
 
 ```python
 class TAGridConfig(StrategyV2ConfigBase):
-    script_file_name: str = "ta_grid_btcusdt.py"
+    script_file_name: str = "ta_grid_trend.py"
     exchange: str = "binance_paper_trade"    # or "binance" for live
     trading_pair: str = "BTC-USDT"
-    levels: int = 8
+    levels: int = 5
     capital_usdt: float = 200.0
     # ... indicators, risk params
 ```
 
 ### Lifecycle
 
-1. **`__init__`** — Loads config, initializes all modules (indicators, grid, risk, telegram, journal), starts health server and Telegram command handler
+1. **`__init__`** — Loads config, initializes all modules per pair (indicators, grid, ML, trend, risk, telegram, journal), starts health server and Telegram command handler
 2. **`on_tick`** — Called every second by Hummingbot's clock:
-   - Fetches candles every 55 minutes from Binance
-   - Calculates BB, RSI, EMA200, ATR indicators
-   - Evaluates grid state machine transitions
+   - Fetches candles every 55 minutes from Binance per pair
+   - Calculates BB, RSI, EMA200, ATR indicators per pair
+   - Runs per-pair ML regime classification
+   - Evaluates grid state machine transitions (including DANGER regime)
    - Checks circuit breaker and position guard
-   - Places/cancels grid orders via Hummingbot connector
+   - Places/cancels grid orders and manages trend positions via Hummingbot connector
 3. **`did_fill_order`** — Called on each fill:
    - Logs trade to journal with indicator snapshot
    - Matches BUY/SELL pairs for round-trip P&L
@@ -90,6 +102,9 @@ class TAGridConfig(StrategyV2ConfigBase):
 | `_get_usdt_balance()` / `_get_btc_balance()` | Reads connector balances (handles v1/v2 API) |
 | `_estimate_equity(price)` | USDT + (BTC x price) |
 | `_notify_state_change(...)` | Sends Telegram alert with cooldown |
+| `_btc_danger_active()` | Checks if BTC regime is DANGER for correlation gate |
+| `_run_ml_prediction(pair)` | Runs ML regime classification with hot-reload check |
+| BNB rebalancer integration | `_grid_tick` calls rebalancer on first pair's indicator refresh |
 
 ## Indicators (`src/indicators/`)
 
@@ -103,14 +118,15 @@ Each indicator is a stateless class with a `calculate()` method taking a pandas 
 ## Grid System (`src/grid/`)
 
 ### GridManager
-Generates symmetric buy/sell levels around Bollinger mid price:
-- Buy levels: `mid - (spacing x i)`, clamped to BB lower
-- Sell levels: `mid + (spacing x i)`, clamped to BB upper
-- Each level has `{level, price, quantity}` where quantity is split evenly from capital
+Generates buy/sell levels around Bollinger mid price with asymmetric spacing:
+- Buy levels: geometric spacing `base × (1 + α)^i`, clamped to BB lower — wider during dips
+- Sell levels: uniform spacing `mid + (spacing × i)`, clamped to BB upper
+- Each level has `{level, price, quantity}` where buy-side sizes also scale geometrically
 
 ### GridStateMachine
-Three states with deterministic transitions:
+Four states with deterministic transitions:
 - ACTIVE → PAUSED: RSI > 70 or price < EMA200
+- ACTIVE → DANGER: ML regime classifier returns DANGER
 - PAUSED → REACTIVATING: RSI < 35 AND price near BB lower (within 2%)
 - REACTIVATING → ACTIVE: Conditions normalize
 
@@ -129,7 +145,37 @@ Once halted, the `halted` flag must be manually reset via Telegram `/reset`.
 ### PositionGuard
 Blocks orders that would:
 - Leave USDT balance below `min_reserve` ($50)
-- Push BTC exposure above `max_btc_exposure_pct` (80%) of total capital
+- Push base asset exposure above `max_exposure_pct` (80%) of total capital
+
+### BNBRebalancer
+Maintains BNB balance for fee payments. Evaluates current BNB balance against configurable thresholds (min $10, target $20, max $50). Returns a `RebalanceResult` indicating buy/sell/hold action with amount. Includes cooldown mechanism (default 3600s) to prevent rapid-fire rebalancing.
+
+## Trend Engine (`src/trend/`)
+
+### TrendManager
+Manages directional trend trades with:
+- ML-gated entry: only enters when regime is TRENDING with sufficient confidence
+- Trailing stop mechanism that locks in gains as price moves favorably
+- Independent capital pool from grid engine
+
+### PositionManager
+Thread-safe position manager with confidence-weighted sizing:
+- Risk percentage scales with ML confidence: `0.5% + (confidence × 2.0%)`, clamped to `[0.5%, 3.0%]`
+- Per-pair isolation with separate instances
+- State persistence for recovery after restart
+
+## ML Regime Classifier (`src/ml/`)
+
+### RegimeClassifier
+Per-pair Random Forest classifier that labels market regime:
+- `RANGING` (0): Grid engine active at full capital
+- `TRENDING` (1): Grid capital reduced, trend engine enabled
+- `DANGER` (2): All trading paused
+- Each pair has its own model file: `models/regime_{symbol}.pkl`
+- Confidence score (0–1) drives position sizing via PositionManager
+- BTC-USDT is always loaded as a systemic signal for the correlation gate, even when BTC trading is disabled
+- Hot-reload: tracks file modification time per model, reloads on change with zero downtime
+- Training pipeline: `train_pipeline.py` fetches latest Binance data and retrains models with `--pair` and `--output` flags
 
 ## Data Feeds (`src/data/`)
 
@@ -155,6 +201,17 @@ Streamlit app with `streamlit-authenticator` for login. Reads from the same SQLi
 ## Event Logger (`src/logging/`)
 
 JSONL files in `logs/` directory with daily rotation (`events_YYYY-MM-DD.jsonl`). Each line is a JSON object with timestamp, event type, and contextual data.
+
+## GitHub Actions Workflows
+
+### deploy.yml
+Tests (pytest) on push to main, then deploys to EC2 via AWS SSM with `docker compose up -d --build`.
+
+### sweep.yml
+Weekly (Sunday 00:00 UTC) VectorBT parameter sweep. Matrix strategy for 4 active pairs. Compares sweep results against current config. Commits parameter updates if Sharpe improves >5%. Uses `[skip ci]` to prevent deploy loop.
+
+### retrain.yml
+Monthly (1st of month) ML model retraining. Fetches latest data from Binance public API. Retrains per-pair Random Forest models. Accuracy-gated: only deploys if new model beats current by >1%. Outputs comparison report.
 
 ## Health Check (`src/health.py`)
 

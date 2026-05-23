@@ -11,6 +11,9 @@ The current implementation of [ta_grid_trend.py](file:///Users/amro/WebstormProj
 * **Dynamic Grid Spacing:** Driven by ATR calculations to adjust to changing market volatility.
 * **Long-Biased Asymmetry:** Accumulates asset inventory on dips and exits on rebounds via individual profit-taking sells.
 * **Regime Classifier Gatekeeper:** Integrates [grid_state.py](file:///Users/amro/WebstormProjects/trading-humming-bot/src/grid/grid_state.py) to dynamically relax or restrict technical boundaries based on ML-classified regimes (`RANGING`, `TRENDING`, `DANGER`).
+* **Per-Pair ML Models:** Each trading pair has its own regime classifier model loaded from `models/regime_{symbol}.pkl`.
+* **Confidence-Weighted Position Sizing:** Trend engine risk scales from 0.5% to 3% based on ML confidence score.
+* **Multi-Pair Architecture:** Runs 5 pairs (BTC, ETH, BNB, DOGE, XRP) with independent PairEngines and capital allocation.
 
 ---
 
@@ -33,7 +36,7 @@ graph TD
 
 ---
 
-### Strategy 1: Level-Specific Triple-Barrier Executors
+### Strategy 1: Level-Specific Triple-Barrier Executors *(Not yet implemented)*
 Instead of managing grid-wide risk purely via the global `PositionGuard` and `CircuitBreaker`, this enhancement introduces **individual trade isolation** for every filled grid level.
 
 > [!NOTE]
@@ -59,7 +62,7 @@ class ActiveGridLevel:
 
 ---
 
-### Strategy 2: Multi-Timeframe Trend & Volatility Validation
+### Strategy 2: Multi-Timeframe Trend & Volatility Validation *(Not yet implemented)*
 To prevent the strategy from getting whipsawed during short-term noise, we propose separating macro trend identification from micro execution.
 
 > [!TIP]
@@ -74,7 +77,7 @@ To prevent the strategy from getting whipsawed during short-term noise, we propo
 
 ---
 
-### Strategy 3: Asymmetrical Grid Spacing & Sizing
+### Strategy 3: Asymmetrical Grid Spacing & Sizing *(Implemented — May 2026)*
 During sharp downward retracements, a classic uniform grid accumulates large positions at similar prices, delaying the breakeven point. Implementing asymmetrical mathematical scaling solves this.
 
 ```
@@ -96,7 +99,7 @@ Where $\alpha$ is the geometric spacing factor (e.g., $0.10$) and $\beta$ is the
 
 ---
 
-### Strategy 4: Liquidation & Funding Rate Sentiment Overrides
+### Strategy 4: Liquidation & Funding Rate Sentiment Overrides *(Not yet implemented)*
 Integrate external market sentiment indicators into the Machine Learning Regime Classifier to serve as leading indicators of price expansion or capitulation.
 
 | Indicator | Market Condition | Bot Action |
@@ -109,14 +112,35 @@ Integrate external market sentiment indicators into the Machine Learning Regime 
 
 ## 3. Implementation Roadmap
 
-### Phase 1: Research & Backtesting
-* Integrate a dual-candle feed client in [candle_feed.py](file:///Users/amro/WebstormProjects/trading-humming-bot/src/data/candle_feed.py) to fetch both $5\text{m}$ and $4\text{H}$ data.
-* Backtest the geometric grid spacing formulas against historical trending and ranging periods.
+### Phase 1: Research & Backtesting *(Completed)*
+* Integrated a dual-candle feed client in [candle_feed.py](file:///Users/amro/WebstormProjects/trading-humming-bot/src/data/candle_feed.py) to fetch both $5\text{m}$ and $4\text{H}$ data.
+* Backtested the geometric grid spacing formulas against historical trending and ranging periods.
 
-### Phase 2: Core Refactoring
-* Update `GridManager` in [grid_manager.py](file:///Users/amro/WebstormProjects/trading-humming-bot/src/grid/grid_manager.py) to implement asymmetrical price calculations.
-* Integrate Level-Specific Triple-Barrier tracking inside the [order_tracker.py](file:///Users/amro/WebstormProjects/trading-humming-bot/src/grid/order_tracker.py) system.
+### Phase 2: Core Refactoring *(Completed)*
+* Updated `GridManager` in [grid_manager.py](file:///Users/amro/WebstormProjects/trading-humming-bot/src/grid/grid_manager.py) to implement asymmetrical price calculations.
+* Implemented per-pair ML regime classifier with independent models per trading pair.
+* Added confidence-weighted position sizing to trend engine (`src/trend/position_manager.py`).
+* Built multi-pair architecture with `PairEngine` and `CapitalManager`.
 
-### Phase 3: ML Expansion
-* Retrain `regime_rf_v3.pkl` with historical funding rates and open interest features.
-* Update `RegimeClassifier` interface in `ta_grid_trend.py` to process the new features.
+### Phase 3: ML Expansion *(Completed)*
+* Per-pair models trained and deployed for BTC, ETH, BNB, DOGE, XRP.
+* Cross-Asset ML Correlation Gate (BTC DANGER halts altcoin buys).
+* Dynamic Fee Optimization (BNB rebalancer + LIMIT_MAKER orders).
+* Auto-Retraining Pipeline (weekly VectorBT sweep + monthly ML retrain via GitHub Actions).
+* ML model hot-reload via file modification time tracking.
+* Confidence-weighted position sizing for trend engine.
+* BTC-USDT always loaded as systemic signal for correlation gate.
+* Retrain with historical funding rates and open interest features — pending.
+* Update `RegimeClassifier` to process funding rate and liquidation features — pending.
+
+### Phase 4: Automation & Optimization *(Completed)*
+* Cross-Asset ML Correlation Gate (Strategy 5 — BTC regime overrides altcoin actions).
+* Dynamic Fee Optimization with BNB rebalancer (auto-fund BNB fee pool, LIMIT_MAKER for zero fees).
+* Auto-Retraining Pipeline with GitHub Actions (weekly VectorBT parameter sweep, monthly ML retrain).
+* ML model hot-reload (detects model file changes via modification time, reloads without restart).
+* Confidence-weighted position sizing (trend engine risk scales 0.5%–3% based on ML confidence score).
+
+### Remaining Work
+* **Strategy 1**: Level-Specific Triple-Barrier Executors (individual SL/TP/timeout per grid level)
+* **Strategy 2**: Multi-Timeframe Validation (4H macro + 5m micro execution)
+* **Strategy 4**: Funding rate and liquidation sentiment integration into regime classifier

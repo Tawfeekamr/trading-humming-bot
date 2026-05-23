@@ -1,7 +1,7 @@
-# 🤖 TA-Enhanced BTC/USDT Grid Bot
-### Intelligent Algorithmic Grid Trading | Hummingbot v2 | Binance FZE | Dubai, UAE
+# 🤖 TA-Enhanced Multi-Pair Grid + Trend Bot
+### Dual-Engine Strategy | ML Regime Classifier | 5 Trading Pairs | Hummingbot v2 | Binance FZE | Dubai, UAE
 
-> A fully automated **BTC/USDT Grid Bot** powered by real-time Technical Analysis. Uses Bollinger Bands to set the grid range, RSI to pause/resume activity, EMA 200 for trend bias, and ATR for dynamic spacing — all running inside a Hummingbot v2 custom Python script on Binance FZE (VARA-licensed).
+> A fully automated **Multi-Pair Grid + Trend Bot** powered by real-time Technical Analysis and a per-pair ML regime classifier. Runs two engines in parallel — a grid engine for ranging markets and a trend engine for directional moves — across BTC-USDT, ETH-USDT, BNB-USDT, DOGE-USDT, and XRP-USDT. Uses Bollinger Bands, RSI, EMA 200, ATR, and a Random Forest regime classifier (RANGING/TRENDING/DANGER) to dynamically switch strategies, with a cross-asset correlation gate that halts altcoin buys when BTC enters DANGER — all on Binance FZE (VARA-licensed).
 
 ---
 
@@ -10,43 +10,59 @@
 | Field                   | Details                                                  |
 |-------------------------|----------------------------------------------------------|
 | **Framework**           | Hummingbot v2 (Script API)                               |
-| **Strategy**            | TA-Enhanced Grid Bot                                     |
-| **Pair**                | BTC/USDT (Spot)                                          |
+| **Strategy**            | TA-Enhanced Multi-Pair Grid + Trend Bot                  |
+| **Pair**                | BTC-USDT, ETH-USDT, BNB-USDT, DOGE-USDT, XRP-USDT (multi-pair) |
 | **Exchange**            | Binance FZE — VARA + ADGM licensed (UAE)                 |
-| **Indicators**          | Bollinger Bands · RSI · EMA 200 · ATR                    |
+| **Indicators**          | Bollinger Bands · RSI · EMA 200 · ATR · ML Regime Classifier |
 | **Timeframe**           | 1h candles for TA signals                                |
 | **Language**            | Python 3.11+                                             |
 | **Deployment**          | AWS EC2 (Tokyo) via GitHub Actions + Docker               |
 | **Notifications**       | Telegram real-time alerts + interactive commands          |
-| **Status**              | ✅ Paper Trading                                          |
+| **Status**              | Paper Trading (Multi-Pair)                               |
 
 ---
 
 ## 🧠 Strategy Logic
 
-The bot enhances a standard grid with 4 TA layers. Every time a 1h candle closes, all indicators are recalculated and the grid is adjusted or paused accordingly.
+The bot runs a **dual-engine architecture** — a grid engine for ranging markets and a trend engine for directional moves. Each of the 5 trading pairs is evaluated independently every time a 1h candle closes. A per-pair ML regime classifier determines which engine to activate, while a cross-asset correlation gate protects altcoin positions when BTC signals danger.
 
-### How the 4 Indicators Work Together
+### Multi-Pair Dual-Engine Flow
 
 ```
-Every 1h candle closes:
+Every 1h candle closes (per pair):
 │
 ├─ Calculate: Bollinger Bands (20,2) · RSI (14) · EMA 200 · ATR (14)
 │
-├─ IF price > EMA200 AND RSI < 65          ← Uptrend, not overbought
-│    └─ Grid ACTIVE (long-biased)
-│       ├─ Range:   Lower BB  →  Upper BB
-│       ├─ Range:   Lower BB  →  Upper BB
-│       └─ Spacing: ATR × 1.5
-│       ├─ Skip BUY levels when RSI > 60
-│       └─ Skip SELL levels when RSI < 40
+├─ ML Regime Classification (Random Forest)
+│    └─ RANGING  → Grid Engine active
+│    └─ TRENDING → Trend Engine active
+│    └─ DANGER   → Both engines pause, cancel all orders
 │
-├─ IF RSI > 70 OR price < EMA200           ← Overbought or downtrend
-│    └─ Grid PAUSED — cancel all orders, hold USDT
+├─ Cross-Asset Correlation Gate
+│    └─ IF BTC regime == DANGER → halt all altcoin BUY orders
+│    └─ IF BTC regime == RANGING/TRENDING → altcoins resume normally
 │
-└─ IF RSI < 35 AND price near Lower BB     ← Oversold at support
-     └─ Grid REACTIVATES at new range
-        └─ Place fresh grid orders
+├─ Grid Engine (RANGING regime)
+│    ├─ IF price > EMA200 AND RSI < 65          ← Uptrend, not overbought
+│    │    └─ Grid ACTIVE (long-biased)
+│    │       ├─ Range:   Lower BB  →  Upper BB
+│    │       └─ Spacing: ATR × 1.5
+│    │       ├─ Skip BUY levels when RSI > 60
+│    │       └─ Skip SELL levels when RSI < 40
+│    │       └─ Position sizing: confidence-weighted (ML regime probability)
+│    │
+│    ├─ IF RSI > 70 OR price < EMA200           ← Overbought or downtrend
+│    │    └─ Grid PAUSED — cancel all orders, hold USDT
+│    │
+│    └─ IF RSI < 35 AND price near Lower BB     ← Oversold at support
+│         └─ Grid REACTIVATES at new range
+│
+└─ Trend Engine (TRENDING regime)
+     ├─ EMA 20/50 crossover for entry signals
+     ├─ RSI confirmation (40–70 band)
+     ├─ Signal score (min 3/5 confirmations required)
+     ├─ Trailing stop: 1.5% activation, 1.5% trail
+     └─ Risk: 2% per trade, max 2 concurrent positions
 ```
 
 ### Indicator Roles
@@ -57,6 +73,8 @@ Every 1h candle closes:
 | **RSI** | Activates grid when oversold, pauses when overbought; filters individual levels | Period 14 |
 | **EMA 200** | Trend filter — only run grid in uptrend | Period 200 |
 | **ATR** | Sets dynamic grid spacing based on volatility | Period 14, multiplier 1.5 |
+| **ML Regime Classifier** | Per-pair Random Forest — classifies market as RANGING, TRENDING, or DANGER | Per-pair `.pkl` model |
+| **Correlation Gate** | Cross-asset safety — halts altcoin buys when BTC enters DANGER | BTC regime monitor |
 
 ---
 
@@ -65,13 +83,15 @@ Every 1h candle closes:
 ```
 ta-grid-bot/
 │
-├── .env                          # 🔒 Secrets — NEVER COMMIT
-├── .env.example                  # ✅ Template — commit this
+├── .env                          # Secrets — NEVER COMMIT
+├── .env.example                  # Template — commit this
 ├── .gitignore
 │
 ├── hummingbot_files/
 │   └── scripts/
-│       └── ta_grid_btcusdt.py    # Main Hummingbot v2 script (strategy)
+│       ├── ta_grid_trend.py      # Main Hummingbot v2 script (dual-engine strategy)
+│       ├── capital_manager.py    # Multi-pair capital allocation and auto-compound
+│       └── pair_engine.py        # Per-pair engine orchestration (grid + trend)
 │
 ├── src/
 │   ├── indicators/
@@ -85,12 +105,26 @@ ta-grid-bot/
 │   │   ├── grid_state.py         # Grid state: ACTIVE / PAUSED / REACTIVATING
 │   │   └── order_tracker.py      # Track open/filled/cancelled grid orders
 │   │
+│   ├── trend/
+│   │   ├── trend_manager.py      # Trend engine — EMA crossovers, signal scoring
+│   │   ├── position_manager.py   # Trend position lifecycle (entry, trailing stop, exit)
+│   │   ├── support_resistance.py # Support/resistance level detection
+│   │   ├── candlestick_patterns.py # Candlestick pattern recognition
+│   │   └── trend_journal.py      # SQLite logger for trend trades
+│   │
+│   ├── ml/
+│   │   ├── regime_classifier.py  # Per-pair Random Forest regime classifier (RANGING/TRENDING/DANGER)
+│   │   └── train_pipeline.py     # ML training pipeline with feature engineering + labeling
+│   │
 │   ├── risk/
 │   │   ├── circuit_breaker.py    # Halt if drawdown > threshold
-│   │   └── position_guard.py     # Max exposure, min USDT reserve
+│   │   ├── position_guard.py     # Max exposure, min USDT reserve
+│   │   └── bnb_rebalancer.py     # Auto-maintain BNB balance for 25% fee discount
 │   │
 │   ├── data/
 │   │   ├── candle_feed.py        # Fetch 1h OHLCV from Binance REST
+│   │   ├── feature_engineering.py # ML feature computation from OHLCV data
+│   │   ├── label_generation.py   # Regime label generation for training
 │   │   └── ws_feed.py            # Real-time price via WebSocket
 │   │
 │   ├── journal/
@@ -101,17 +135,39 @@ ta-grid-bot/
 │       ├── telegram_commands.py  # Interactive Telegram commands (/status, /pnl, etc.)
 │       └── pnl_reporter.py       # Hourly/daily/monthly P&L summaries
 │
+├── models/
+│   ├── regime_ETH-USDT.pkl       # Per-pair trained Random Forest models
+│   ├── regime_DOGE-USDT.pkl
+│   ├── regime_BNB-USDT.pkl
+│   └── regime_XRP-USDT.pkl
+│
 ├── config/
 │   └── strategy.yaml             # All strategy parameters (non-secret)
 │
 ├── backtest/
-│   ├── vectorbt_sweep.py         # Phase 1: parameter optimization
-│   └── walk_forward.py           # Phase 2: out-of-sample validation
+│   ├── vectorbt_sweep.py         # Parameter optimization sweep
+│   ├── walk_forward.py           # Out-of-sample validation
+│   ├── ml_walk_forward.py        # ML model walk-forward validation
+│   └── reporting.py              # Backtest report generation
+│
+├── .github/workflows/
+│   ├── deploy.yml                # CI/CD — build and deploy to EC2
+│   ├── sweep.yml                 # Weekly VectorBT parameter sweep
+│   └── retrain.yml               # Monthly ML model retraining
 │
 ├── tests/
 │   ├── test_indicators.py
 │   ├── test_grid_manager.py
-│   └── test_circuit_breaker.py
+│   ├── test_circuit_breaker.py
+│   ├── test_trend_manager.py
+│   ├── test_position_manager.py
+│   ├── test_pair_engine.py
+│   ├── test_capital_manager.py
+│   ├── test_correlation_gate.py
+│   ├── test_ml_multi_pair.py
+│   ├── test_ml_hot_reload.py
+│   ├── test_bnb_rebalancer.py
+│   └── ... (20+ test files)
 │
 ├── logs/                         # Auto-generated (gitignored)
 ├── reports/                      # Performance reports (gitignored)
@@ -159,15 +215,31 @@ cp .env.example .env
 ## ⚙️ Strategy Configuration (`config/strategy.yaml`)
 
 ```yaml
-# ── Pair & Exchange ───────────────────────────────────────────────
-pair: "BTC-USDT"
+# ── Pairs & Exchange ─────────────────────────────────────────────
+pairs:
+  - symbol: "DOGE-USDT"
+    step_size: 1
+    enabled: true
+  - symbol: "ETH-USDT"
+    step_size: 0.001
+    enabled: true
+  - symbol: "BTC-USDT"
+    step_size: 0.00001
+    enabled: false               # BTC disabled — ML regime classifier active on altcoins
+  - symbol: "BNB-USDT"
+    step_size: 0.01
+    enabled: true
+  - symbol: "XRP-USDT"
+    step_size: 0.1
+    enabled: true
+
 exchange: "binance"
 timeframe: "1h"
 
 # ── Grid Parameters ───────────────────────────────────────────────
 grid:
-  levels: 6                   # Orders on each side of mid price
-  capital_usdt: 1000          # Total USDT allocated
+  levels: 5                   # Orders on each side of mid price
+  capital_usdt: 5000          # Total USDT allocated across pairs
   min_usdt_reserve: 100       # Always keep this in reserve
   order_refresh_time: 60      # Seconds between order refresh
 
@@ -201,11 +273,36 @@ rules:
     - "rsi < 35"
     - "price near lower_bb"
 
+# ── Trend Engine ──────────────────────────────────────────────
+trend:
+  enabled: true
+  capital: 5000                 # Trend engine capital pool
+  ema_fast: 20
+  ema_slow: 50
+  ema_trend: 200
+  rsi_period: 14
+  rsi_min: 40
+  rsi_max: 70
+  min_signal_score: 3
+  risk_per_trade_pct: 2.0
+  max_position_pct: 25.0
+  max_positions: 2
+  trailing_stop_pct: 1.5
+  trailing_activation_pct: 1.5
+  rr_ratio: 2.0
+
+# ── Fee Optimization ───────────────────────────────────────────
+fee_optimization:
+  bnb_target_usdt: 20         # Target BNB balance in USDT
+  bnb_min_usdt: 10            # Buy BNB when balance drops below this
+  bnb_max_usdt: 50            # Sell excess BNB when above this
+  use_limit_maker: true       # Use LIMIT_MAKER (post-only) for all orders
+
 # ── Risk Management ───────────────────────────────────────────────
 risk:
   max_drawdown_pct: 10
   daily_loss_limit_pct: 5
-  max_btc_exposure_pct: 80
+  max_base_exposure_pct: 80
 ```
 
 ---
@@ -240,7 +337,7 @@ Order sizes recalculate on the next grid refresh (within 1 hour).
 
 | Capital | Order size | Daily (normal) | Monthly | Yearly (compounded) |
 |---------|-----------|----------------|---------|---------------------|
-| $1K | $75 | $2-3 | $60-90 | ~$1,100 |
+| $5K | $375 | $10-15 | $300-450 | ~$5,500 |
 | $10K | $750 | $20-30 | $600-900 | ~$11,000 |
 | $25K | $1,875 | $50-75 | $1,500-2,250 | ~$27,000 |
 
@@ -274,8 +371,8 @@ pip install -r requirements.txt
 ### 4. Copy Strategy to Hummingbot
 
 ```bash
-cp hummingbot_files/scripts/ta_grid_btcusdt.py \
-   ~/hummingbot/scripts/ta_grid_btcusdt.py
+cp hummingbot_files/scripts/ta_grid_trend.py \
+   ~/hummingbot/scripts/ta_grid_trend.py
 ```
 
 ### 5. Connect Binance in Hummingbot
@@ -293,10 +390,10 @@ connect binance
 
 ```bash
 # Paper trading (30 days minimum before going live)
-start --script ta_grid_btcusdt.py --conf conf_ta_grid_paper.yml
+start --script ta_grid_trend.py --conf conf_ta_grid_trend_conf.yml
 
 # Live trading (only after passing all 5 testing stages)
-start --script ta_grid_btcusdt.py --conf conf_ta_grid_live.yml
+start --script ta_grid_trend.py --conf conf_ta_grid_live.yml
 ```
 
 ---
@@ -304,27 +401,28 @@ start --script ta_grid_btcusdt.py --conf conf_ta_grid_live.yml
 ## 📊 Grid Visualization
 
 ```
+Per-Pair Grid (e.g. ETH-USDT in RANGING regime):
 Price
   │
-Upper BB ──── 🔴 SELL order 6   ($103,500)
-              🔴 SELL order 5   ($103,000)
-              🔴 SELL order 4   ($102,500)
-              🔴 SELL order 3   ($102,000)
-              🔴 SELL order 2   ($101,500)
-              🔴 SELL order 1   ($101,000)
-Mid Price ─── ◆  Current BTC   ($100,000)
-              🟢 BUY  order 1   ($99,000)
-              🟢 BUY  order 2   ($98,000)
-              🟢 BUY  order 3   ($97,000)
-              🟢 BUY  order 4   ($96,000)
-              🟢 BUY  order 5   ($95,000)
-Lower BB ──── 🟢 BUY  order 6   ($94,000)
+Upper BB ──── 🔴 SELL order 5   ($2,800)
+              🔴 SELL order 4   ($2,770)
+              🔴 SELL order 3   ($2,740)
+              🔴 SELL order 2   ($2,710)
+              🔴 SELL order 1   ($2,680)
+Mid Price ─── ◆  Current ETH   ($2,650)
+              🟢 BUY  order 1   ($2,620)
+              🟢 BUY  order 2   ($2,590)
+              🟢 BUY  order 3   ($2,560)
+              🟢 BUY  order 4   ($2,530)
+Lower BB ──── 🟢 BUY  order 5   ($2,500)
   │
   └─ Spacing = ATR × 1.5  (recalculated every 1h)
      Range   = Lower BB → Upper BB  (recalculated every 1h)
 
-  ⏸️  RSI > 70 or price < EMA200 → ALL ORDERS CANCELLED → HOLD USDT
+  ⏸️  ML DANGER or RSI > 70 or price < EMA200 → ALL ORDERS CANCELLED
+  🔍  BTC DANGER → all altcoin BUY orders halted (correlation gate)
   🔍  RSI > 60 → skip BUY levels  |  RSI < 40 → skip SELL levels
+  📐  Position sizes scaled by ML regime confidence (0.5x–1.5x)
 ```
 
 ---
@@ -335,8 +433,10 @@ Lower BB ──── 🟢 BUY  order 6   ($94,000)
 |-----------|-------|-------------|
 | `max_drawdown_pct` | 10% | Bot halts if portfolio drops 10% from peak |
 | `daily_loss_limit_pct` | 5% | Circuit breaker triggers if -5% in 24h |
-| `max_btc_exposure_pct` | 80% | Never deploy more than 80% capital in BTC |
+| `max_base_exposure_pct` | 80% | Never deploy more than 80% capital in any single asset |
 | `min_usdt_reserve` | $100 | Always keep $100 USDT untouched |
+| Correlation Gate | BTC DANGER | Halts all altcoin buys when BTC regime is DANGER |
+| ML Confidence Floor | 0.5x | Positions scaled down when regime confidence is low |
 
 ---
 
@@ -362,7 +462,7 @@ Lower BB ──── 🟢 BUY  order 6   ($94,000)
 | `/pnl` | P&L summary — today, week, month, all-time with win rates |
 | `/balance` | USDT, BTC, equity, and grid capital with growth % |
 | `/capital <amount>` | Update grid capital on the fly (no redeploy needed) |
-| `/price` | Live BTC/USDT price from Binance + RSI, EMA, Bollinger Bands |
+| `/price` | Live prices from Binance + RSI, EMA, Bollinger Bands, ML regime per pair |
 | `/trades` | Last 5 closed trades |
 | `/pending` | Open orders with prices and amounts |
 | `/system` | CPU, memory, disk usage |
@@ -389,19 +489,19 @@ Every trade fires an instant alert to your phone. A daily P&L summary is auto-se
 
 **Per-trade alert (every close):**
 ```
-💚 Trade Closed — BTC/USDT
+💚 Trade Closed — ETH/USDT
 ━━━━━━━━━━━━━━━━━━━━━━
 📈 BUY  |  Grid Level 3
 ⏱ Duration:    45 min
-🔵 Entry:      $98,200.00
-🔵 Exit:       $99,100.00
-📦 Qty:        0.001 BTC
+🔵 Entry:      $2,560.00
+🔵 Exit:       $2,620.00
+📦 Qty:        0.05 ETH
 ━━━━━━━━━━━━━━━━━━━━━━
-💰 Gross PnL:  +$0.90
-💸 Fee:        -$0.19
-📊 Net PnL:    +$0.71
+💰 Gross PnL:  +$3.00
+💸 Fee:        -$0.13
+📊 Net PnL:    +$2.87
 ━━━━━━━━━━━━━━━━━━━━━━
-RSI: 42.3  |  Grid: ACTIVE
+RSI: 42.3  |  Grid: ACTIVE  |  ML Regime: RANGING (0.87)
 ```
 
 **Daily summary (sent at midnight UTC):**
@@ -433,23 +533,26 @@ Every trade is logged with full context:
 
 ```python
 {
-  "timestamp":    "2026-04-04 14:00:00",
-  "pair":         "BTC/USDT",
+  "timestamp":    "2026-05-23 14:00:00",
+  "pair":         "ETH-USDT",
   "side":         "BUY",
-  "entry_price":  98200.00,
-  "exit_price":   99100.00,
-  "quantity":     0.001,
-  "gross_pnl":    +0.90,
-  "fee":          -0.19,
-  "net_pnl":      +0.71,
+  "entry_price":  2560.00,
+  "exit_price":   2620.00,
+  "quantity":     0.05,
+  "gross_pnl":    +3.00,
+  "fee":          -0.13,
+  "net_pnl":      +2.87,
   "grid_level":   3,
   "duration_min": 45,
   "rsi":          42.3,
-  "bb_upper":     101500,
-  "bb_lower":     96800,
-  "ema_200":      97200,
-  "atr":          850,
-  "grid_state":   "ACTIVE"
+  "bb_upper":     2800,
+  "bb_lower":     2500,
+  "ema_200":      2520,
+  "atr":          30,
+  "grid_state":   "ACTIVE",
+  "ml_regime":    "RANGING",
+  "ml_confidence": 0.87,
+  "btc_regime":   "RANGING"
 }
 ```
 
@@ -509,7 +612,7 @@ GitHub (push to main)
   └─► GitHub Actions workflow
        └─► SSH into EC2 via AWS SSM
             └─► docker compose build + up
-                 └─► Hummingbot container (strategy script + indicators)
+                 └─► Hummingbot container (dual-engine strategy + ML models + indicators)
 ```
 
 ---
@@ -562,6 +665,53 @@ No code changes needed — same strategy, real money.
 
 ---
 
+## 🧬 ML & Automation
+
+### Per-Pair Regime Classifier
+
+Each enabled pair runs its own trained Random Forest model that classifies the current market into one of three regimes:
+
+| Regime | Action |
+|--------|--------|
+| **RANGING** | Grid engine activates — Bollinger Bands range, ATR spacing |
+| **TRENDING** | Trend engine activates — EMA crossovers, trailing stops |
+| **DANGER** | Both engines pause — all orders cancelled, hold USDT |
+
+Models are trained using the pipeline in `src/ml/train_pipeline.py` with features engineered from OHLCV data (returns, volatility, RSI, Bollinger %b, ATR ratio). Labels are generated by `src/data/label_generation.py` using a rule-based approach over historical data.
+
+### Cross-Asset Correlation Gate
+
+BTC drives the broader crypto market. When the BTC regime classifier outputs DANGER, the correlation gate automatically halts all altcoin (ETH, BNB, DOGE, XRP) buy orders regardless of their own regime. Altcoin sells are allowed to exit positions safely. When BTC returns to RANGING or TRENDING, altcoin operations resume normally.
+
+### Confidence-Weighted Position Sizing
+
+Position sizes are scaled by the ML regime confidence score rather than using fixed amounts:
+
+```
+actual_size = base_size × confidence_multiplier
+```
+
+High-confidence RANGING classifications (0.85+) get 1.5x position sizing. Lower confidence scores scale down to 0.5x minimum. This reduces exposure during uncertain market conditions without fully pausing.
+
+### Auto-Retraining Pipeline
+
+Two GitHub Actions workflows keep the models current:
+
+| Workflow | Schedule | Purpose |
+|----------|----------|---------|
+| `sweep.yml` | Weekly | Runs VectorBT parameter sweep to validate current settings against latest market data |
+| `retrain.yml` | Monthly | Retrains all per-pair Random Forest models on fresh data and deploys new `.pkl` files |
+
+### Hot-Reload for Zero-Downtime Updates
+
+The regime classifier supports hot-reloading of model files. When a new `.pkl` model is deployed (via retrain workflow or manual upload), the classifier picks it up on the next inference cycle without restarting the bot. This ensures continuous trading during model updates.
+
+### BNB Rebalancer
+
+Binance offers a 25% fee discount when paying trading fees in BNB. The `bnb_rebalancer.py` module automatically maintains a target BNB balance (default: $20 USDT equivalent). When BNB drops below the minimum threshold, it buys a small top-up. When it exceeds the maximum, excess is sold back to USDT. Combined with `LIMIT_MAKER` (post-only) orders, this minimizes total fee drag.
+
+---
+
 ## 🗺️ Roadmap
 
 **Phase 1 — Foundation** ✅
@@ -587,16 +737,23 @@ No code changes needed — same strategy, real money.
 - [x] Telegram startup/shutdown alerts
 
 **Phase 5 — Optimization** (current)
-- [ ] Monitor paper trading results (30+ days)
-- [ ] VectorBT parameter sweep
-- [ ] Walk-forward backtesting
+- [x] Monitor paper trading results (30+ days)
+- [x] VectorBT parameter sweep
+- [x] Walk-forward backtesting
+- [x] Multi-pair deployment (ETH, BNB, DOGE, XRP)
+- [x] ML regime classifier (Random Forest per pair)
 - [ ] Live micro-stake ($100–200)
 
 **Phase 6 — Expansion**
-- [ ] ETH/USDT second grid
+- [x] Multi-pair support (5 pairs, BTC currently disabled)
+- [x] ML signal layer (per-pair regime classifier)
+- [x] Confidence-weighted position sizing
+- [x] Cross-asset correlation gate (BTC DANGER halts altcoins)
+- [x] BNB rebalancer for 25% fee discount
+- [x] Auto-retraining pipeline (weekly sweep + monthly retrain)
 - [ ] 4h + 1h multi-timeframe confluence
-- [ ] ML signal layer (FreqAI)
 - [ ] OKX failover routing
+- [ ] Live capital deployment (gradual scale-up)
 
 ---
 
@@ -609,4 +766,4 @@ No code changes needed — same strategy, real money.
 
 > ⚠️ **Disclaimer:** Personal use only on your own VARA-licensed Binance account. Not financial advice. Not licensed for managing third-party funds. Grid bots lose money when price drops sharply below the grid range — always use a circuit breaker and never deploy capital you cannot afford to lose.
 
-*Built with Claude Code CLI · Hummingbot v2 · Binance FZE VARA API · pandas_ta · Python 3.11 · Deployed on AWS EC2 (Tokyo)*
+*Built with Claude Code CLI · Hummingbot v2 · Binance FZE VARA API · pandas_ta · scikit-learn · Python 3.11 · Deployed on AWS EC2 (Tokyo)*

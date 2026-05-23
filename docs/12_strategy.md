@@ -1,10 +1,10 @@
-# Trading Strategy — TA-Enhanced BTC/USDT Grid Bot
+# Trading Strategy — TA-Enhanced Multi-Pair Grid + Trend Bot
 
 ## Overview
 
-The bot runs a **dynamic grid trading** strategy on BTC/USDT. Unlike static grids that use fixed price levels, this strategy recalculates grid boundaries every hour using four technical indicators. The grid shifts to follow the market, pauses when conditions are unfavorable, and re-enters on oversold bounces.
+The bot runs a **dual-engine strategy** — a dynamic grid engine and a trend engine — across multiple trading pairs. Each pair has its own ML regime classifier that determines which engine is active and how capital is allocated.
 
-**Pair:** BTC/USDT
+**Pairs:** BTC-USDT, ETH-USDT, BNB-USDT, DOGE-USDT, XRP-USDT
 **Timeframe:** 1-hour candles (fetches every 55 minutes)
 **Exchange:** Binance (paper trading or live)
 
@@ -15,29 +15,27 @@ The bot runs a **dynamic grid trading** strategy on BTC/USDT. Unlike static grid
 Grid trading profits from price oscillation within a range. The bot places limit buy orders below the current price and limit sell orders above it. Each time price bounces between levels, a round-trip completes:
 
 ```
-Sell 6 @ $103,500  ─┐
-Sell 5 @ $103,000   │  Sell zone (above mid)
-Sell 4 @ $102,500   │
-Sell 3 @ $102,000   │
-Sell 2 @ $101,500   │
-Sell 1 @ $101,000   │
+Sell 5 @ $103,500  ─┐
+Sell 4 @ $103,000   │  Sell zone (uniform spacing)
+Sell 3 @ $102,500   │
+Sell 2 @ $102,000   │
+Sell 1 @ $101,500   │
                     │
 ═══════ $100,000 ═══╪════  Mid price (Bollinger SMA)
                     │
 Buy  1 @ $99,000    │
-Buy  2 @ $98,000    │
-Buy  3 @ $97,000    │  Buy zone (below mid)
-Buy  4 @ $96,000    │
-Buy  5 @ $95,000    │
-Buy  6 @ $94,000   ─┘
+Buy  2 @ $97,800    │
+Buy  3 @ $96,380    │  Buy zone (geometric spacing — wider)
+Buy  4 @ $94,718    │
+Buy  5 @ $92,890   ─┘
 
 RSI > 60 → skip buy levels  |  RSI < 40 → skip sell levels
-When price drops to $98,000 → BUY fills
+When price drops to $97,800 → BUY fills
 When price bounces to $102,000 → SELL fills
-Profit = ($102,000 - $98,000) × quantity - fees
+Profit = ($102,000 - $97,800) × quantity - fees
 ```
 
-Each grid level is spaced by **ATR × 1.5**, which adapts to current volatility. In calm markets, levels are closer together (more fills, smaller profit per trade). In volatile markets, levels spread apart (fewer fills, larger profit per trade). The 1.5 multiplier ensures each round-trip captures enough spread to comfortably beat exchange fees.
+Each grid level is spaced by **ATR × 1.5**, which adapts to current volatility. **Buy-side levels use geometric spacing** (`spacing × (1.1)^level`), spreading wider during dips to pull the breakeven price down faster. Sell-side levels use uniform spacing. The 1.5 multiplier ensures each round-trip captures enough spread to comfortably beat exchange fees.
 
 ---
 
@@ -110,7 +108,7 @@ ATR measures how much BTC moves in a typical hour. With a 1.5 multiplier, the gr
 
 ## Grid State Machine
 
-The bot operates in three states with deterministic transitions:
+The bot operates in four states with deterministic transitions:
 
 ```
                      RSI > 70 OR Price < EMA200
@@ -120,7 +118,26 @@ The bot operates in three states with deterministic transitions:
           │   REACTIVATING ◄──────────────────────────────┘
           │       │
           └───────┘  RSI normalizes AND Price > EMA200
+
+       ACTIVE  ──────────────────────────────────────►  DANGER
+                                                         │
+                       ML regime no longer DANGER  ◄─────┘
 ```
+
+### ML Regime Classifier
+Each pair has its own Random Forest model that classifies the market regime:
+- **RANGING**: Grid engine active at full capital, trend engine idle
+- **TRENDING**: Grid capital reduced, trend engine takes directional trades
+- **DANGER**: All trading paused — grid enters DANGER state
+
+### Cross-Asset Correlation Gate
+BTC-USDT serves as a systemic risk indicator for all altcoin pairs. When BTC enters DANGER regime:
+- All altcoin (non-BTC) buy-side grid orders are immediately skipped
+- All altcoin trend engine entries are blocked
+- Sell orders continue unaffected -- the bot can still exit positions during a selloff
+- Gate transitions trigger Telegram alerts
+
+BTC-USDT candle data is always fetched (even when BTC trading is disabled) via a dedicated CandleFeed. If the BTC model fails to load or predict, the gate defaults to safe mode (halt altcoin buys) to prevent unprotected trading.
 
 ### ACTIVE
 - Full grid deployed — buy and sell orders placed
@@ -144,14 +161,20 @@ The bot operates in three states with deterministic transitions:
 
 ### Grid Calculation
 ```
-For each level i (1 to 6):
-  Buy price  = BB Mid - (ATR × 1.5 × i)   [clamped to BB Lower]
-  Sell price = BB Mid + (ATR × 1.5 × i)   [clamped to BB Upper]
+For each level i (1 to 5):
+  Buy price  = BB Mid - (ATR × 1.5 × (1 + 0.10)^(i-1))   [clamped to BB Lower]
+  Sell price = BB Mid + (ATR × 1.5 × i)                    [clamped to BB Upper]
 
   Buy level skipped if RSI > 60 (overbought)
   Sell level skipped if RSI < 40 (oversold)
 
-Order size = (Capital - Reserve) / (2 × Levels) / Price
+Buy size  = Base Size × (1 + 0.08)^(i-1)   (geometric scaling)
+Sell size = Base Size                        (uniform)
+
+Grid capital scaled by ML regime:
+  RANGING  → 100% capital allocation
+  TRENDING → 60% grid capital, 40% trend capital
+  DANGER   → 0% (all paused)
 ```
 
 ### Order Lifecycle
@@ -186,10 +209,53 @@ Blocks individual orders that would create dangerous exposure.
 
 | Rule | Default | Purpose |
 |------|---------|---------|
-| Max BTC exposure | 80% of equity | Don't go all-in on BTC |
+| Max base asset exposure | 80% of equity | Don't go all-in on any asset |
 | Min USDT reserve | $50 (configurable) | Always keep dry powder |
 
 Each order is checked before placement. If it would violate either limit, the order is blocked and logged.
+
+### Confidence-Weighted Position Sizing (Trend Engine)
+
+Trend positions use ML confidence to scale risk:
+```
+risk_pct = 0.5% + (confidence × 2.0%), clamped to [0.5%, 3.0%]
+position_size = (equity × risk_pct) / entry_price
+```
+Higher ML confidence → larger position size. Low confidence trades are small and conservative.
+
+---
+
+## Fee Optimization
+
+### BNB Rebalancer
+The bot maintains a BNB balance for the 25% trading fee discount on Binance:
+- Target: ~$20 worth of BNB (covers ~2 weeks of grid trading fees)
+- Buy $20 BNB when balance drops below $10
+- Sell excess BNB when balance exceeds $50
+- Runs every indicator refresh cycle (55 min), only when grid is ACTIVE
+- Configurable via `fee_optimization` in strategy.yaml
+
+### LIMIT_MAKER Orders
+All orders use `OrderType.LIMIT_MAKER` (post-only):
+- Exchange rejects the order if it would cross the spread (take liquidity)
+- Guarantees maker fee rate: 0.075% with BNB discount
+- Rejected orders automatically retry on the next tick
+
+---
+
+## Trend Engine
+
+The trend engine runs alongside the grid engine and takes directional trades when ML confirms a trending regime.
+
+### Entry Conditions
+- ML regime classifier returns `TRENDING` with confidence > threshold
+- RSI not overbought (< 70)
+- Price above EMA200 (uptrend confirmed)
+
+### Exit Mechanism
+- **Trailing stop**: Locks in gains as price moves favorably
+- **Regime change**: Exits if ML switches from TRENDING to RANGING or DANGER
+- **Time limit**: Exits if position is open too long without meaningful movement
 
 ---
 
@@ -199,10 +265,31 @@ All parameters are in `config/strategy.yaml`:
 
 ```yaml
 grid:
-  levels: 6               # Orders per side (buy + sell)
+  levels: 5               # Orders per side (buy + sell)
   capital_usdt: 1000      # USDT allocated
   min_usdt_reserve: 100   # Minimum USDT to keep
   order_refresh_time: 60  # Seconds between order refresh
+
+pairs:
+  BTC-USDT:
+    enabled: false
+    step_size: 0.00001
+  ETH-USDT:
+    enabled: true
+    step_size: 0.001
+  BNB-USDT:
+    enabled: true
+    step_size: 0.01
+  DOGE-USDT:
+    enabled: true
+    step_size: 1
+  XRP-USDT:
+    enabled: true
+    step_size: 0.1
+
+ml:
+  enabled: true
+  regime_threshold: 0.5    # Confidence threshold for regime-based decisions
 
 indicators:
   bollinger:
@@ -221,7 +308,13 @@ indicators:
 risk:
   max_drawdown_pct: 10     # Circuit breaker: peak drawdown
   daily_loss_limit_pct: 5  # Circuit breaker: daily loss
-  max_btc_exposure_pct: 80 # Position guard: max BTC allocation
+  max_btc_exposure_pct: 80 # Position guard: max base asset allocation
+
+fee_optimization:
+  bnb_target_usdt: 20    # Target BNB balance in USDT
+  bnb_min_usdt: 10       # Buy BNB when below this
+  bnb_max_usdt: 50       # Sell excess BNB above this
+  use_limit_maker: true  # Use post-only orders
 ```
 
 Environment variables override config values:
@@ -299,10 +392,30 @@ All logs persist in `./logs/` (Docker volume mount):
 
 ---
 
+## Auto-Retraining Pipeline
+
+### Weekly Parameter Sweep
+Every Sunday at 00:00 UTC, a GitHub Actions workflow runs VectorBT parameter sweeps for each active pair. If a configuration beats the current baseline Sharpe by >5%, it commits the updated parameters and triggers a deployment.
+
+### Monthly ML Retraining
+On the 1st of each month, a GitHub Actions workflow retrains all per-pair ML models using the latest Binance data. New models are compared against deployed models -- only promoted if accuracy improves by >1%.
+
+### Hot-Reload
+ML models are monitored for file changes during the indicator refresh cycle. When a model file is updated (e.g., from auto-retraining), the bot:
+1. Detects the file modification time change
+2. Loads the new model in memory
+3. Validates it against last known features
+4. Begins using new predictions immediately
+5. Sends Telegram notification of the reload
+
+Zero downtime -- the old model continues serving predictions until the new one is fully loaded.
+
+---
+
 ## Expected Behavior
 
 **Normal market (ranging):**
-- Grid places 6 buy + 6 sell levels within Bollinger Bands
+- Grid places 5 buy + 5 sell levels within Bollinger Bands per pair
 - Price oscillates → fills occur → round-trip P&L captured
 - Grid recalculates hourly, shifting with the market
 
