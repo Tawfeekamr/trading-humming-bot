@@ -1,0 +1,81 @@
+name: Monthly ML Retraining
+
+on:
+  schedule:
+    - cron: '0 0 1 * *'  # 1st of each month at 00:00 UTC
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  retrain:
+    name: Retrain ${{ matrix.pair }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        pair: [ETHUSDT, BNBUSDT, DOGEUSDT, XRPUSDT]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Train new model for ${{ matrix.pair }}
+        run: |
+          python -m src.ml.train_pipeline \
+            --pair ${{ matrix.pair }} \
+            --output models/regime_${{ matrix.pair }}.pkl.new
+
+      - name: Compare and deploy if improved
+        run: |
+          python -c "
+          import pickle, os, sys
+          pair = '${{ matrix.pair }}'
+          new_path = f'models/regime_{pair}.pkl.new'
+          cur_path = f'models/regime_{pair}.pkl'
+
+          if not os.path.exists(new_path):
+              print(f'No new model for {pair}')
+              sys.exit(0)
+
+          with open(new_path, 'rb') as f:
+              new_data = pickle.load(f)
+
+          new_acc = new_data.get('validation_accuracy', 0.0)
+
+          cur_acc = 0.0
+          if os.path.exists(cur_path):
+              with open(cur_path, 'rb') as f:
+                  cur_data = pickle.load(f)
+              cur_acc = cur_data.get('validation_accuracy', 0.0)
+
+          improvement = new_acc - cur_acc
+          print(f'{pair}: current={cur_acc:.4f} new={new_acc:.4f} delta={improvement:+.4f}')
+
+          if improvement > 0.01:
+              os.replace(new_path, cur_path)
+              print(f'DEPLOYED: {pair} model updated (accuracy +{improvement:.4f})')
+          else:
+              os.remove(new_path)
+              print(f'SKIPPED: {pair} not improved enough')
+              sys.exit(0)
+          "
+
+      - name: Commit improved models [skip ci]
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add models/*.pkl
+          if git diff --cached --quiet; then
+            echo "No model changes to commit"
+          else
+            git commit -m "retrain: update models [skip ci]"
+            git push
+          fi
