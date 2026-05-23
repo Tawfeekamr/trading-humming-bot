@@ -86,6 +86,9 @@ def main():
     parser.add_argument('--pair', type=str, default="SOL-USDT",
                         help='Trading pair for per-pair model training (e.g., BNB-USDT). '
                              'Default: SOL-USDT (legacy behavior)')
+    parser.add_argument('--output', type=str, default=None,
+                        help="Output path for new model (e.g. models/regime_ETH-USDT.pkl.new). "
+                             "Defaults to standard path with .new suffix.")
     args = parser.parse_args()
 
     symbol = args.pair.replace("-", "")  # BNB-USDT -> BNBUSDT
@@ -154,7 +157,8 @@ def main():
         print(f"  Test:      {sum(y_test == c)} {name}")
 
     model_path = f'models/regime_{args.pair}.pkl'
-    classifier = RegimeClassifier(model_path=model_path, model_type='random_forest')
+    output_path = args.output if args.output else model_path.replace(".pkl", ".pkl.new")
+    classifier = RegimeClassifier(model_path=output_path, model_type='random_forest')
     best_params = classifier.tune_hyperparameters(X_trainval, y_trainval, n_iter=20, cv=3)
 
     print("\n--- Evaluation on Test Set ---")
