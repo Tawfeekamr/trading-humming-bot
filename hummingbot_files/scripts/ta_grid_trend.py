@@ -398,6 +398,15 @@ class TAGridTrendStrategy(StrategyV2Base):
                 testnet=self.is_testnet,
             )
 
+        # BTC candle feed for correlation gate (always needed, even when BTC trading is disabled)
+        btc_symbol = "BTC-USDT"
+        if btc_symbol not in self.candle_feeds:
+            self.candle_feeds[btc_symbol] = CandleFeed(
+                symbol="BTCUSDT",
+                interval=trend_cfg.get("timeframe", "1h"),
+                testnet=self.is_testnet,
+            )
+
         # Backward compat: set single-pair candle feed
         if first_engine:
             self.candle_feed = self.candle_feeds[first_engine.symbol]
@@ -788,6 +797,20 @@ class TAGridTrendStrategy(StrategyV2Base):
             _, _, last_ts = self._ml_predictions.get(engine.symbol, (None, 0.0, 0.0))
             if now_ts - last_ts >= 60:
                 self._run_ml_prediction(engine.symbol)
+
+            # BTC correlation gate: fetch candles + run ML prediction for BTC-USDT
+            # (BTC may be disabled as a trading pair but is always needed as systemic signal)
+            if engine.symbol == list(self.pairs.keys())[0] and "BTC-USDT" not in self.pairs:
+                btc_ts_key = "BTC-USDT"
+                _, _, btc_last_ts = self._ml_predictions.get(btc_ts_key, (None, 0.0, 0.0))
+                if now_ts - btc_last_ts >= 60:
+                    try:
+                        btc_df = self.candle_feeds[btc_ts_key].fetch_candles(limit=250)
+                        if btc_df is not None and len(btc_df) >= 50:
+                            self._cached_candles[btc_ts_key] = btc_df
+                            self._run_ml_prediction(btc_ts_key)
+                    except Exception as e:
+                        logger.warning(f"BTC correlation candle fetch failed: {e}")
 
             # BNB rebalancer check (every indicator refresh cycle)
             if engine.symbol == list(self.pairs.keys())[0]:
