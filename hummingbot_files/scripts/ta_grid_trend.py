@@ -457,6 +457,14 @@ class TAGridTrendStrategy(StrategyV2Base):
             for symbol in self.pairs:
                 self._ml_predictions[symbol] = (None, 0.0, 0.0)
                 self._ml_prediction_history[symbol] = []
+
+            # Ensure BTC-USDT always has ML predictions (systemic signal for correlation gate)
+            btc_symbol = "BTC-USDT"
+            if btc_symbol not in self._ml_predictions:
+                self._ml_predictions[btc_symbol] = (None, 0.0, 0.0)
+                self._ml_prediction_history[btc_symbol] = []
+
+            for symbol in list(self._ml_predictions.keys()):
                 model_path = Path(f"models/regime_{symbol}.pkl")
                 if model_path.exists():
                     try:
@@ -470,17 +478,17 @@ class TAGridTrendStrategy(StrategyV2Base):
                     logger.warning(f"No ML model for {symbol} (rule-based fallback)")
 
             # Startup summary
-            loaded = [s for s in self.pairs if s in self._ml_models]
-            missing = [s for s in self.pairs if s not in self._ml_models]
+            loaded = [s for s in self._ml_predictions if s in self._ml_models]
+            missing = [s for s in self._ml_predictions if s not in self._ml_models]
             logger.info(
-                f"ML Regime Classifier: {len(loaded)}/{len(self.pairs)} pairs loaded"
+                f"ML Regime Classifier: {len(loaded)}/{len(self._ml_predictions)} pairs loaded"
                 + (f" — missing: {missing}" if missing else "")
             )
 
             # Telegram ML status notification (deferred — self.telegram not yet initialized)
             self._ml_startup_msg = None
             if self._ml_models:
-                self._ml_startup_msg = f"🧠 <b>ML Models Loaded: {len(loaded)}/{len(self.pairs)}</b>\n"
+                self._ml_startup_msg = f"🧠 <b>ML Models Loaded: {len(loaded)}/{len(self._ml_predictions)}</b>\n"
                 for s in loaded:
                     self._ml_startup_msg += f"  ✅ {s}\n"
                 for s in missing:
@@ -500,6 +508,7 @@ class TAGridTrendStrategy(StrategyV2Base):
         self._tick_count = 0
         self._trend_tick_count: int = 0
         self._state_lock = threading.Lock()
+        self._correlation_gate_active: Dict[str, bool] = {}
 
         # ── Capital Manager ──
         total_cap = float(grid_cfg.get("capital_usdt", config.capital_usdt)) + float(trend_cfg.get("capital", 5000))
@@ -1380,6 +1389,10 @@ class TAGridTrendStrategy(StrategyV2Base):
                 if ml_regime == 0 and ml_confidence >= 0.65:  # Confident ranging — grid only
                     return
 
+        # Cross-asset correlation gate: block trend entries on altcoins when BTC is DANGER
+        if engine.symbol != "BTC-USDT" and self._btc_danger_active():
+            return
+
         candles = self._cached_candles.get(engine.symbol)
         if candles is None or len(candles) < 200:
             return
@@ -1467,6 +1480,38 @@ class TAGridTrendStrategy(StrategyV2Base):
         position_guard = self.position_guards[engine.symbol]
         exposure_pct = position_guard.base_exposure_pct(base_bal, current_price, equity)
 
+        # Cross-asset correlation gate: halt altcoin buys when BTC is in DANGER
+        is_altcoin = engine.symbol != "BTC-USDT"
+        gate_active = is_altcoin and self._btc_danger_active()
+        if gate_active:
+            if not self._correlation_gate_active.get(engine.symbol, False):
+                self._correlation_gate_active[engine.symbol] = True
+                logger.warning(f"Correlation gate ACTIVATED for {engine.symbol}: BTC DANGER — halting buy-side")
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        loop.create_task(self.telegram.send(
+                            f"🛑 <b>Correlation Gate</b>\n"
+                            f"BTC regime: DANGER\n"
+                            f"Action: {engine.symbol} buy-side HALTED"
+                        ))
+                except RuntimeError:
+                    pass
+        else:
+            if self._correlation_gate_active.get(engine.symbol, False):
+                self._correlation_gate_active[engine.symbol] = False
+                logger.info(f"Correlation gate DEACTIVATED for {engine.symbol}: BTC no longer in DANGER")
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        loop.create_task(self.telegram.send(
+                            f"✅ <b>Correlation Gate Lifted</b>\n"
+                            f"BTC regime: no longer DANGER\n"
+                            f"Action: {engine.symbol} buy-side RESUMED"
+                        ))
+                except RuntimeError:
+                    pass
+
         buys_placed = 0
         sells_placed = 0
         indicators = self._cached_indicators.get(engine.symbol)
@@ -1476,6 +1521,8 @@ class TAGridTrendStrategy(StrategyV2Base):
         min_spacing = grid.buy_spacing * 0.5 if grid.buy_spacing > 0 else 0.5
 
         for level in grid.buy_levels:
+            if gate_active:
+                continue
             if current_rsi and current_rsi > 60:
                 continue
             if level["price"] >= current_price:
@@ -1559,6 +1606,19 @@ class TAGridTrendStrategy(StrategyV2Base):
         if regime is None:
             regime = 0
         return {0: 'RANGING', 1: 'TRENDING', 2: 'DANGER'}.get(regime, 'UNKNOWN')
+
+    def _btc_danger_active(self) -> bool:
+        """Check if BTC regime is DANGER — cross-asset correlation gate.
+        When BTC signals DANGER, altcoin buy-side operations halt.
+        Defaults to safe (True) if BTC model missing or no prediction.
+        """
+        btc_pred = self._ml_predictions.get("BTC-USDT")
+        if btc_pred is None or "BTC-USDT" not in self._ml_models:
+            return True
+        btc_regime = btc_pred[0]
+        if btc_regime is None:
+            return True
+        return btc_regime == 2
 
     def _ml_summary(self) -> str:
         """One-line ML status for all pairs with models (used in daily report)."""
