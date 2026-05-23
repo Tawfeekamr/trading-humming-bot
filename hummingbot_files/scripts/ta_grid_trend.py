@@ -806,9 +806,16 @@ class TAGridTrendStrategy(StrategyV2Base):
                 if now_ts - btc_last_ts >= 60:
                     try:
                         btc_df = self.candle_feeds[btc_ts_key].fetch_candles(limit=250)
-                        if btc_df is not None and len(btc_df) >= 50:
+                        if btc_df is None or btc_df.empty:
+                            logger.warning("BTC correlation: candle fetch returned empty")
+                        elif len(btc_df) < 50:
+                            logger.warning(f"BTC correlation: only {len(btc_df)} candles (need 50)")
+                        else:
                             self._cached_candles[btc_ts_key] = btc_df
                             self._run_ml_prediction(btc_ts_key)
+                            btc_regime, btc_conf, _ = self._ml_predictions.get(btc_ts_key, (None, 0.0, 0.0))
+                            regime_names = {0: "RANGING", 1: "TRENDING", 2: "DANGER"}
+                            logger.info(f"BTC correlation gate: regime={regime_names.get(btc_regime, '?')} confidence={btc_conf:.2f}")
                     except Exception as e:
                         logger.warning(f"BTC correlation candle fetch failed: {e}")
 
