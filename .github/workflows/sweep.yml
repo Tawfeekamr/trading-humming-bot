@@ -1,0 +1,38 @@
+name: Weekly Parameter Sweep
+
+on:
+  schedule:
+    - cron: '0 0 * * 0'  # Every Sunday at 00:00 UTC
+  workflow_dispatch:  # Allow manual trigger
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  sweep:
+    name: Parameter Sweep
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        pair: [ETHUSDT, BNBUSDT, DOGEUSDT, XRPUSDT]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run sweep for ${{ matrix.pair }}
+        run: python backtest/vectorbt_sweep.py --pair ${{ matrix.pair }} --output backtest/results/${{ matrix.pair }}_sweep.json
+
+      - name: Upload sweep results
+        uses: actions/upload-artifact@v4
+        with:
+          name: sweep-${{ matrix.pair }}
+          path: backtest/results/${{ matrix.pair }}_sweep.json
+          retention-days: 30
