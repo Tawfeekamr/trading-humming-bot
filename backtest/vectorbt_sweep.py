@@ -143,10 +143,36 @@ def run_sweep(df: pd.DataFrame):
 
 
 if __name__ == "__main__":
-    print("Fetching SOL/USDT 1h data...")
-    df = fetch_data()
-    print(f"Data shape: {df.shape}")
+    import argparse
+    import json
+
+    parser = argparse.ArgumentParser(description="VectorBT Parameter Sweep")
+    parser.add_argument("--pair", type=str, default="ETHUSDT", help="Trading pair symbol (e.g. ETHUSDT)")
+    parser.add_argument("--output", type=str, default=None, help="Output JSON path")
+    args = parser.parse_args()
+
+    df = fetch_data(symbol=args.pair)
+    if df.empty:
+        print(f"No data for {args.pair}")
+        exit(1)
+
     results = run_sweep(df)
-    os.makedirs("reports", exist_ok=True)
-    results.to_csv("reports/parameter_sweep_results.csv", index=False)
-    print("\nResults saved to reports/parameter_sweep_results.csv")
+
+    # Find best result by Sharpe ratio
+    best = None
+    if results is not None and not results.empty:
+        best = results.loc[results['sharpe_ratio'].idxmax()]
+
+    output = {
+        "pair": args.pair,
+        "best_sharpe": float(best['sharpe_ratio']) if best is not None else None,
+        "total_combinations": len(results) if results is not None else 0,
+    }
+
+    output_path = args.output or f"backtest/results/{args.pair}_sweep.json"
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "w") as f:
+        json.dump(output, f, indent=2)
+
+    print(f"Best result for {args.pair}: Sharpe={output['best_sharpe']}")
+    print(f"Results saved to {output_path}")
