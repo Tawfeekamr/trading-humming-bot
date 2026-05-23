@@ -802,22 +802,29 @@ class TAGridTrendStrategy(StrategyV2Base):
             # (BTC may be disabled as a trading pair but is always needed as systemic signal)
             if engine.symbol == list(self.pairs.keys())[0] and "BTC-USDT" not in self.pairs:
                 btc_ts_key = "BTC-USDT"
+                has_feed = btc_ts_key in self.candle_feeds
                 _, _, btc_last_ts = self._ml_predictions.get(btc_ts_key, (None, 0.0, 0.0))
-                if now_ts - btc_last_ts >= 60:
+                if now_ts - btc_last_ts >= 60 and has_feed:
                     try:
                         btc_df = self.candle_feeds[btc_ts_key].fetch_candles(limit=250)
                         if btc_df is None or btc_df.empty:
-                            logger.warning("BTC correlation: candle fetch returned empty")
+                            self.event_log.log("btc_correlation_fetch", status="empty", pair="BTC-USDT")
                         elif len(btc_df) < 50:
-                            logger.warning(f"BTC correlation: only {len(btc_df)} candles (need 50)")
+                            self.event_log.log("btc_correlation_fetch", status="insufficient", rows=len(btc_df), pair="BTC-USDT")
                         else:
                             self._cached_candles[btc_ts_key] = btc_df
                             self._run_ml_prediction(btc_ts_key)
                             btc_regime, btc_conf, _ = self._ml_predictions.get(btc_ts_key, (None, 0.0, 0.0))
                             regime_names = {0: "RANGING", 1: "TRENDING", 2: "DANGER"}
-                            logger.info(f"BTC correlation gate: regime={regime_names.get(btc_regime, '?')} confidence={btc_conf:.2f}")
+                            self.event_log.log("btc_correlation_gate",
+                                regime=regime_names.get(btc_regime, "UNKNOWN"),
+                                confidence=round(btc_conf, 3),
+                                raw_regime=btc_regime,
+                                pair="BTC-USDT")
                     except Exception as e:
-                        logger.warning(f"BTC correlation candle fetch failed: {e}")
+                        self.event_log.log("btc_correlation_fetch", status="error", error=str(e), pair="BTC-USDT")
+                elif not has_feed:
+                    self.event_log.log("btc_correlation_fetch", status="no_feed", pair="BTC-USDT")
 
             # BNB rebalancer check (every indicator refresh cycle)
             if engine.symbol == list(self.pairs.keys())[0]:
