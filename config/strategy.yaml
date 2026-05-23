@@ -93,3 +93,10 @@ trend:
   max_drawdown_pct: 10.0
   daily_loss_limit_pct: 5.0
   timeframe: "1h"
+
+# ── Fee Optimization ───────────────────────────────────────────
+fee_optimization:
+  bnb_target_usdt: 20         # Target BNB balance in USDT
+  bnb_min_usdt: 10            # Buy BNB when balance drops below this
+  bnb_max_usdt: 50            # Sell excess BNB when above this
+  use_limit_maker: true       # Use LIMIT_MAKER (post-only) for all orders

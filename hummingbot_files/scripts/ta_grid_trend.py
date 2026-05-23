@@ -74,6 +74,7 @@ from src.grid.grid_state import GridStateMachine, GridState
 from src.grid.order_tracker import OrderTracker, GridOrder, OrderSide
 from src.risk.circuit_breaker import CircuitBreaker
 from src.risk.position_guard import PositionGuard
+from src.risk.bnb_rebalancer import BNBRebalancer
 from src.data.candle_feed import CandleFeed
 from src.trend.trend_manager import TrendManager
 from src.trend.position_manager import PositionManager
@@ -114,7 +115,7 @@ except ImportError:
     StrategyV2Base = object
     StrategyV2ConfigBase = object
     ConnectorBase = object
-    OrderType = type("OrderType", (), {"LIMIT": "LIMIT"})
+    OrderType = type("OrderType", (), {"LIMIT": "LIMIT", "LIMIT_MAKER": "LIMIT_MAKER"})
     TradeType = type("TradeType", (), {"BUY": "BUY", "SELL": "SELL"})
     MarketDict = dict
     Field = lambda **kwargs: kwargs
@@ -237,6 +238,13 @@ class TAGridTrendStrategy(StrategyV2Base):
         ind_cfg = cfg.get("indicators", {})
         risk_cfg = cfg.get("risk", {})
         trend_cfg = cfg.get("trend", {})
+        fee_cfg = cfg.get("fee_optimization", {})
+        self._use_limit_maker = fee_cfg.get("use_limit_maker", True)
+        self._bnb_rebalancer = BNBRebalancer(
+            bnb_min_usdt=fee_cfg.get("bnb_min_usdt", 10.0),
+            bnb_target_usdt=fee_cfg.get("bnb_target_usdt", 20.0),
+            bnb_max_usdt=fee_cfg.get("bnb_max_usdt", 50.0),
+        )
 
         # Multi-pair support: parse pairs from config or fall back to legacy single pair
         pairs_cfg = cfg.get("pairs", [])
@@ -780,6 +788,30 @@ class TAGridTrendStrategy(StrategyV2Base):
             _, _, last_ts = self._ml_predictions.get(engine.symbol, (None, 0.0, 0.0))
             if now_ts - last_ts >= 60:
                 self._run_ml_prediction(engine.symbol)
+
+            # BNB rebalancer check (every indicator refresh cycle)
+            if engine.symbol == list(self.pairs.keys())[0]:
+                try:
+                    bnb_bal = 0.0
+                    connector = self.connectors.get(self.exchange)
+                    if connector and hasattr(connector, 'ready') and connector.ready:
+                        try:
+                            balances = connector.balance
+                            if "BNB" in balances:
+                                bnb_qty = float(balances["BNB"].total)
+                                bnb_price = float(self._last_price.get("BNB-USDT", 600))
+                                bnb_bal = bnb_qty * bnb_price
+                        except Exception:
+                            pass
+                    result = self._bnb_rebalancer.evaluate(bnb_bal, available_usdt=self._get_usdt_balance(engine))
+                    if result.action == "buy":
+                        logger.info(f"BNB rebalancer: {result.reason} — buying ${result.amount_usdt:.2f}")
+                        self.event_log.log("bnb_rebalance", action="buy", amount=result.amount_usdt, reason=result.reason)
+                    elif result.action == "sell":
+                        logger.info(f"BNB rebalancer: {result.reason} — selling ${result.amount_usdt:.2f}")
+                        self.event_log.log("bnb_rebalance", action="sell", amount=result.amount_usdt, reason=result.reason)
+                except Exception as e:
+                    logger.debug(f"BNB rebalancer check skipped: {e}")
 
             ml_regime, ml_confidence, _ = self._ml_predictions.get(engine.symbol, (None, 0.0, 0.0))
             self.event_log.log("indicators_updated",
@@ -1569,7 +1601,7 @@ class TAGridTrendStrategy(StrategyV2Base):
             buys_placed += 1
             client_order_id = self.buy(
                 connector_name=self.exchange, trading_pair=engine.symbol,
-                amount=Decimal(str(level["quantity"])), order_type=OrderType.LIMIT,
+                amount=Decimal(str(level["quantity"])), order_type=OrderType.LIMIT_MAKER,
                 price=Decimal(str(level["price"])),
             )
             if client_order_id:
@@ -1599,7 +1631,7 @@ class TAGridTrendStrategy(StrategyV2Base):
             sells_placed += 1
             client_order_id = self.sell(
                 connector_name=self.exchange, trading_pair=engine.symbol,
-                amount=Decimal(str(buy.quantity)), order_type=OrderType.LIMIT,
+                amount=Decimal(str(buy.quantity)), order_type=OrderType.LIMIT_MAKER,
                 price=Decimal(str(sell_price)),
             )
             if client_order_id:
