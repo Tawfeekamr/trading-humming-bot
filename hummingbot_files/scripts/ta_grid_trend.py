@@ -254,6 +254,9 @@ class TAGridTrendStrategy(StrategyV2Base):
             step = grid_cfg.get("step_size", config.step_size)
             pairs_cfg = [{"symbol": pair, "step_size": step, "enabled": True}]
 
+        self._open_buys: Dict[str, dict[str, FillRecord]] = {}
+        self._unmatched_sells: Dict[str, dict[str, FillRecord]] = {}
+
         self.pairs: Dict[str, PairEngine] = {}
         for p in pairs_cfg:
             pc = PairConfig(symbol=p["symbol"], step_size=p["step_size"], tick_size=p.get("tick_size", 0.01), enabled=p.get("enabled", True))
@@ -378,8 +381,6 @@ class TAGridTrendStrategy(StrategyV2Base):
         self._base_capital = self.capital_usdt
         self._initial_equity: Dict[str, float] = {}
         self._peak_equity = self.capital_usdt
-        self._open_buys: Dict[str, dict[str, FillRecord]] = {}
-        self._unmatched_sells: Dict[str, dict[str, FillRecord]] = {}
         self._grid_dirty = True
         self._last_state_alert_time: dict[str, float] = {}
         self._state_alert_cooldown = 900
