@@ -6,7 +6,7 @@ Writes one JSON object per line to daily-rotated files in logs/.
 import json
 import logging
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 class EventLogger:
     _MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB per event file
+    _MAX_LOG_AGE_DAYS = 14
 
     def __init__(self, log_dir: str = "logs"):
         self._log_dir = Path(log_dir)
@@ -22,6 +23,22 @@ class EventLogger:
         self._current_date: str = ""
         self._file = None
         self._lock = threading.Lock()
+        self._cleanup_old_logs()
+
+    def _cleanup_old_logs(self) -> None:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=self._MAX_LOG_AGE_DAYS)
+        removed = 0
+        for path in self._log_dir.glob("events_*.jsonl"):
+            try:
+                date_str = path.stem.replace("events_", "")
+                file_date = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                if file_date < cutoff:
+                    path.unlink()
+                    removed += 1
+            except (ValueError, OSError):
+                continue
+        if removed:
+            logger.info(f"Cleaned up {removed} old event log files (>{self._MAX_LOG_AGE_DAYS}d)")
 
     def _get_file(self) -> Any:
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -31,6 +48,7 @@ class EventLogger:
             path = self._log_dir / f"events_{today}.jsonl"
             self._file = open(path, "a", encoding="utf-8")
             self._current_date = today
+            self._cleanup_old_logs()
         # Rotate if file exceeds size limit
         if self._file and self._file.tell() > self._MAX_FILE_SIZE:
             self._file.close()

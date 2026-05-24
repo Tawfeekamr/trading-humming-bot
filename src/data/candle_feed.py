@@ -1,4 +1,5 @@
 import os
+import time
 import logging
 import pandas as pd
 from binance.client import Client
@@ -15,15 +16,24 @@ class CandleFeed:
         self.client = Client("", "")
 
     def fetch_candles(self, limit: int = 200) -> pd.DataFrame:
-        try:
-            klines = self.client.get_klines(
-                symbol=self.symbol,
-                interval=self.interval,
-                limit=limit,
-            )
-        except Exception as e:
-            logger.error(f"Failed to fetch candles for {self.symbol}: {e}")
-            # Return empty DataFrame on failure
+        klines = None
+        for attempt in range(2):
+            try:
+                klines = self.client.get_klines(
+                    symbol=self.symbol,
+                    interval=self.interval,
+                    limit=limit,
+                )
+                break
+            except Exception as e:
+                if attempt == 0:
+                    logger.warning(f"Candle fetch retry for {self.symbol}: {e}")
+                    time.sleep(2)
+                else:
+                    logger.error(f"Failed to fetch candles for {self.symbol} after retry: {e}")
+                    return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+
+        if not klines:
             return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
 
         df = pd.DataFrame(klines, columns=[
@@ -35,11 +45,10 @@ class CandleFeed:
         for col in ["open", "high", "low", "close", "volume"]:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
-        # Log warning if NaN values detected after coercion
-        numeric_cols = ["open", "high", "low", "close", "volume"]
-        for col in numeric_cols:
-            nan_count = df[col].isna().sum()
-            if nan_count > 0:
-                logger.warning(f"{nan_count} NaN values detected in column '{col}' after coercion")
+        # Validate: reject if last close is 0 or NaN
+        last_close = df["close"].iloc[-1]
+        if pd.isna(last_close) or last_close <= 0:
+            logger.warning(f"Invalid candle data for {self.symbol}: last_close={last_close}")
+            return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
 
         return df[["open", "high", "low", "close", "volume"]]
