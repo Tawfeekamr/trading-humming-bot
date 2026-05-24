@@ -15,7 +15,6 @@ class GridLayout:
 class GridManager:
     # Binance exchange filters (defaults suit most USDT pairs)
     MIN_NOTIONAL = 5.0       # $5 minimum order value
-    TICK_SIZE = 0.01          # $0.01 price step
     FEE_RATE = 0.001          # 0.1% per side (Binance default)
 
     # Asymmetric grid: geometric scaling factors (buy-side only)
@@ -24,7 +23,7 @@ class GridManager:
 
     def __init__(self, levels: int = 8, capital_usdt: float = 200,
                  min_reserve: float = 50, spacing_multiplier: float = 0.8,
-                 step_size: float = 0.01):
+                 step_size: float = 0.01, tick_size: float = 0.01):
         if levels <= 0:
             raise ValueError(f"levels must be positive, got {levels}")
         if capital_usdt <= 0:
@@ -36,15 +35,18 @@ class GridManager:
         self.min_reserve = min_reserve
         self.spacing_multiplier = spacing_multiplier
         self.step_size = step_size
+        self.tick_size = tick_size
 
     def _validate_order(self, price: float, quantity: float) -> tuple:
         if not (math.isfinite(price) and math.isfinite(quantity) and price > 0 and quantity > 0):
             return None, None
-        price = round(price / self.TICK_SIZE) * self.TICK_SIZE
+        price_decimals = max(0, int(round(-math.log10(self.tick_size)))) if self.tick_size > 0 else 2
+        qty_decimals = max(0, int(round(-math.log10(self.step_size)))) if self.step_size > 0 else 8
+        price = round(price / self.tick_size) * self.tick_size
         quantity = round(quantity / self.step_size) * self.step_size
         if not (math.isfinite(price) and math.isfinite(quantity)) or price * quantity < self.MIN_NOTIONAL:
             return None, None
-        return round(price, 2), round(quantity, 8)
+        return round(price, price_decimals), round(quantity, qty_decimals)
 
     def calculate_grid(self, bb: BBResult, atr_value: float) -> GridLayout:
         if atr_value <= 0:

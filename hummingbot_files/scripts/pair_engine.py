@@ -14,6 +14,7 @@ class PairConfig:
     """Configuration for a single trading pair."""
     symbol: str
     step_size: float
+    tick_size: float = 0.01
     enabled: bool = True
 
     @property
@@ -46,6 +47,7 @@ class PairEngine:
         self.binance_symbol = config.binance_symbol
         self.display_pair = config.display_pair
         self.step_size = config.step_size
+        self.tick_size = config.tick_size
         self._state_dir = state_dir
 
         # Indicators — fresh instance per pair

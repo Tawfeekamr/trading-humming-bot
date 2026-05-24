@@ -5,7 +5,9 @@ from sklearn.metrics import classification_report, accuracy_score
 import argparse
 import os
 import sys
+import time
 import urllib.request
+import urllib.error
 import json
 
 # Support running as `python -m src.ml.train_pipeline` or as a script
@@ -43,8 +45,23 @@ def load_real_data(symbol: str = "SOLUSDT", intervals: list[str] = None, candles
                     url += f"&endTime={end_time}"
 
                 req = urllib.request.Request(url, headers={"User-Agent": "train-pipeline"})
-                with urllib.request.urlopen(req, timeout=30) as resp:
-                    klines = json.loads(resp.read().decode())
+                try:
+                    time.sleep(0.5)
+                    with urllib.request.urlopen(req, timeout=30) as resp:
+                        klines = json.loads(resp.read().decode())
+                except urllib.error.HTTPError as he:
+                    if he.code == 429:
+                        retry_after = int(he.headers.get("Retry-After", 10))
+                        print(f"  Rate limited (HTTP 429). Sleeping {retry_after}s...")
+                        time.sleep(retry_after)
+                        continue
+                    else:
+                        print(f"  HTTP error {he.code}: {he.reason}. Aborting interval.")
+                        break
+                except Exception as e:
+                    print(f"  Network error: {e}. Retrying in 5s...")
+                    time.sleep(5)
+                    continue
 
                 if not klines:
                     break

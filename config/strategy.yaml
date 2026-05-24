@@ -7,18 +7,23 @@
 pairs:
   - symbol: "DOGE-USDT"
     step_size: 1
+    tick_size: 0.00001
     enabled: true
   - symbol: "ETH-USDT"
     step_size: 0.0001
+    tick_size: 0.01
     enabled: true
   - symbol: "BTC-USDT"
     step_size: 0.00001
+    tick_size: 0.01
     enabled: false
   - symbol: "BNB-USDT"
     step_size: 0.001
+    tick_size: 0.01
     enabled: true
   - symbol: "XRP-USDT"
     step_size: 0.1
+    tick_size: 0.0001
     enabled: true
 
 exchange: "binance"

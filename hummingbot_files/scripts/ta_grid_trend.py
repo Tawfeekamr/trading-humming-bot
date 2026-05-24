@@ -256,7 +256,7 @@ class TAGridTrendStrategy(StrategyV2Base):
 
         self.pairs: Dict[str, PairEngine] = {}
         for p in pairs_cfg:
-            pc = PairConfig(symbol=p["symbol"], step_size=p["step_size"], enabled=p.get("enabled", True))
+            pc = PairConfig(symbol=p["symbol"], step_size=p["step_size"], tick_size=p.get("tick_size", 0.01), enabled=p.get("enabled", True))
             if pc.enabled:
                 self.pairs[pc.symbol] = PairEngine(pc, state_dir=Path("data"))
                 self._open_buys[pc.symbol] = {}
@@ -329,6 +329,7 @@ class TAGridTrendStrategy(StrategyV2Base):
                 capital_usdt=self.capital_usdt,  # Will be managed by CapitalManager
                 min_reserve=self.min_reserve,
                 step_size=engine.step_size,
+                tick_size=engine.tick_size,
                 spacing_multiplier=self.atr_multiplier,
             )
             self.state_machines[symbol] = GridStateMachine()
@@ -628,6 +629,9 @@ class TAGridTrendStrategy(StrategyV2Base):
 
         logger.info(f"Dual-engine strategy started on {self.exchange} with {len(self.pairs)} pair(s)")
 
+        # Time drift check — warn if system clock is out of sync with Binance
+        self._check_time_drift()
+
         # Force-ready watchdog
         threading.Thread(target=self._force_connector_ready, daemon=True).start()
 
@@ -643,6 +647,24 @@ class TAGridTrendStrategy(StrategyV2Base):
     @property
     def max_base_exposure_pct(self):
         return float(os.environ.get("MAX_BASE_EXPOSURE_PCT", self.position_guard.max_base_exposure_pct))
+
+    # ── Time Drift Check ──
+
+    def _check_time_drift(self):
+        try:
+            import urllib.request as urllib_req
+            start = time_mod.time() * 1000
+            with urllib_req.urlopen("https://api.binance.com/api/v3/time", timeout=5) as resp:
+                server_time = json.loads(resp.read().decode())["serverTime"]
+            end = time_mod.time() * 1000
+            latency = (end - start) / 2
+            drift = abs((start + latency) - server_time)
+            if drift > 1500:
+                logger.warning(f"Time drift detected: {drift:.0f}ms from Binance. Signed trades may fail (-1021). Sync NTP.")
+            else:
+                logger.info(f"Time sync OK: {drift:.0f}ms drift, {latency:.0f}ms latency")
+        except Exception as e:
+            logger.info(f"Time drift check skipped: {e}")
 
     # ── Force-Ready Watchdog ──
 
