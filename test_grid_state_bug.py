@@ -69,7 +69,7 @@ def test_all_three_checks():
 
     # Test 2: REACTIVATING when oversold near lower BB
     sm.state = GridState.PAUSED
-    result = sm.evaluate(price=96_000, rsi=30, ema_200=100_000,
+    result = sm.evaluate(price=96_000, rsi=30, ema_200=90_000,
                         bb_lower=95_000, bb_upper=105_000)
     assert result == GridState.REACTIVATING, f"Expected REACTIVATING, got {result.value}"
     print("✓ Test 2: REACTIVATING when oversold near lower BB")

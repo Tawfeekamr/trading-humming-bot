@@ -157,3 +157,52 @@ class TestGridManager:
         deployable_buy = (1000 - 100) / 2  # 450
         total_buy = sum(l["quantity"] * l["price"] for l in grid.buy_levels)
         assert abs(total_buy - deployable_buy) < 5.0, f"Total buy {total_buy} should be ~{deployable_buy}"
+
+
+class TestGridManagerTickSize:
+    """Tests for dynamic tick_size precision rounding."""
+
+    def test_default_tick_size_is_0_01(self):
+        gm = GridManager(levels=4, capital_usdt=200)
+        assert gm.tick_size == 0.01
+
+    def test_doge_tick_size_precision(self):
+        """DOGE has tick_size=0.00001 — prices should be rounded to 5 decimals."""
+        gm = GridManager(levels=4, capital_usdt=200, tick_size=0.00001, step_size=1)
+        grid = gm.calculate_grid(
+            bb=BBResult(upper=0.26, mid=0.25, lower=0.24),
+            atr_value=0.002,
+        )
+        for level in grid.buy_levels + grid.sell_levels:
+            # Price should be a multiple of 0.00001
+            assert round(level["price"] / 0.00001) * 0.00001 == pytest.approx(level["price"], abs=1e-8)
+
+    def test_xrp_tick_size_precision(self):
+        """XRP has tick_size=0.0001 — prices should be rounded to 4 decimals."""
+        gm = GridManager(levels=4, capital_usdt=200, tick_size=0.0001, step_size=0.1)
+        grid = gm.calculate_grid(
+            bb=BBResult(upper=2.60, mid=2.50, lower=2.40),
+            atr_value=0.02,
+        )
+        for level in grid.buy_levels + grid.sell_levels:
+            assert round(level["price"] / 0.0001) * 0.0001 == pytest.approx(level["price"], abs=1e-7)
+
+    def test_eth_tick_size_precision(self):
+        """ETH has tick_size=0.01 — prices should be rounded to 2 decimals."""
+        gm = GridManager(levels=4, capital_usdt=5000, tick_size=0.01, step_size=0.0001)
+        grid = gm.calculate_grid(
+            bb=BBResult(upper=2700, mid=2600, lower=2500),
+            atr_value=20.0,
+        )
+        for level in grid.buy_levels + grid.sell_levels:
+            assert round(level["price"], 2) == pytest.approx(level["price"], abs=1e-9)
+
+    def test_tick_size_does_not_affect_spacing_logic(self):
+        """Different tick_size shouldn't change the number of valid levels."""
+        gm1 = GridManager(levels=5, capital_usdt=200, tick_size=0.01)
+        gm2 = GridManager(levels=5, capital_usdt=200, tick_size=0.00001)
+        grid1 = gm1.calculate_grid(BBResult(upper=180, mid=170, lower=160), atr_value=1.5)
+        grid2 = gm2.calculate_grid(BBResult(upper=180, mid=170, lower=160), atr_value=1.5)
+        # Same number of levels should be generated
+        assert len(grid1.buy_levels) == len(grid2.buy_levels)
+        assert len(grid1.sell_levels) == len(grid2.sell_levels)

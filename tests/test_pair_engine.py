@@ -28,3 +28,23 @@ class TestPairEngine:
         engine = PairEngine(cfg, state_dir=tmp_path)
         assert engine.grid_state_path == tmp_path / "grid_state_DOGE.json"
         assert engine.trend_state_path == tmp_path / "trend_state_DOGE.json"
+
+
+class TestPairConfigTickSize:
+    def test_default_tick_size(self):
+        cfg = PairConfig(symbol="ETH-USDT", step_size=0.0001)
+        assert cfg.tick_size == 0.01
+
+    def test_custom_tick_size(self):
+        cfg = PairConfig(symbol="DOGE-USDT", step_size=1, tick_size=0.00001)
+        assert cfg.tick_size == 0.00001
+
+    def test_engine_inherits_tick_size(self):
+        cfg = PairConfig(symbol="XRP-USDT", step_size=0.1, tick_size=0.0001)
+        engine = PairEngine(cfg)
+        assert engine.tick_size == 0.0001
+
+    def test_engine_inherits_default_tick_size(self):
+        cfg = PairConfig(symbol="ETH-USDT", step_size=0.0001)
+        engine = PairEngine(cfg)
+        assert engine.tick_size == 0.01
