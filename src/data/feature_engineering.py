@@ -16,7 +16,7 @@ def calculate_technical_features(df: pd.DataFrame) -> pd.DataFrame:
     # 2. Volatility Features
     df['volatility_14'] = df['returns'].rolling(window=14).std()
     df['volatility_30'] = df['returns'].rolling(window=30).std()
-    df['volatility_ratio'] = df['volatility_14'] / df['volatility_30']
+    df['volatility_ratio'] = df['volatility_14'] / (df['volatility_30'] + 1e-8)
     df['true_range'] = np.maximum(
         df['high'] - df['low'],
         np.maximum(
@@ -25,13 +25,13 @@ def calculate_technical_features(df: pd.DataFrame) -> pd.DataFrame:
         )
     )
     df['atr_14'] = df['true_range'].rolling(window=14).mean()
-    df['normalized_atr'] = df['atr_14'] / df['close']
+    df['normalized_atr'] = df['atr_14'] / (df['close'] + 1e-8)
     
     # 3. Momentum & Trend Features
     # Simple Moving Averages
     df['sma_20'] = df['close'].rolling(window=20).mean()
     df['sma_50'] = df['close'].rolling(window=50).mean()
-    df['trend_strength'] = (df['sma_20'] - df['sma_50']) / df['sma_50']
+    df['trend_strength'] = (df['sma_20'] - df['sma_50']) / (df['sma_50'] + 1e-8)
     
     # RSI (Relative Strength Index) — Wilder's smoothing to match src/indicators/rsi.py
     delta = df['close'].diff()
@@ -39,7 +39,7 @@ def calculate_technical_features(df: pd.DataFrame) -> pd.DataFrame:
     loss = -delta.where(delta < 0, 0.0)
     avg_gain = gain.ewm(alpha=1/14, min_periods=14, adjust=False).mean()
     avg_loss = loss.ewm(alpha=1/14, min_periods=14, adjust=False).mean()
-    rs = avg_gain / avg_loss
+    rs = avg_gain / (avg_loss + 1e-8)
     df['rsi_14'] = 100 - (100 / (1 + rs))
 
     # 3b. Directional Features — address volatility bias
@@ -51,18 +51,19 @@ def calculate_technical_features(df: pd.DataFrame) -> pd.DataFrame:
     macd_result = ta.macd(df['close'], fast=12, slow=26, signal=9)
     df['macd_histogram'] = macd_result['MACDh_12_26_9']
 
-    # Distance to VWAP — price relative to volume-weighted average
+    # Distance to VWAP — price relative to volume-weighted average (rolling for consistent inference)
     typical_price = (df['high'] + df['low'] + df['close']) / 3
-    df['vwap'] = (df['volume'] * typical_price).cumsum() / df['volume'].cumsum()
-    df['distance_to_vwap'] = (df['close'] - df['vwap']) / df['vwap']
+    tp_vol = df['volume'] * typical_price
+    df['vwap'] = tp_vol.rolling(window=50, min_periods=1).sum() / df['volume'].rolling(window=50, min_periods=1).sum()
+    df['distance_to_vwap'] = (df['close'] - df['vwap']) / (df['vwap'] + 1e-8)
 
     # On-Balance Volume — 14-period rate of change (normalized)
     df['obv'] = ta.obv(df['close'], df['volume'])
-    df['obv_roc_14'] = df['obv'].pct_change(14)
+    df['obv_roc_14'] = df['obv'].pct_change(14).replace([np.inf, -np.inf], np.nan)
     
     # Volume Features
     df['volume_sma_20'] = df['volume'].rolling(window=20).mean()
-    df['volume_ratio'] = df['volume'] / df['volume_sma_20']
+    df['volume_ratio'] = df['volume'] / (df['volume_sma_20'] + 1e-8)
     
     # 4. Microstructure proxies (if tick data is unavailable)
     df['close_location_value'] = ((df['close'] - df['low']) - (df['high'] - df['close'])) / (df['high'] - df['low'] + 1e-8)
@@ -85,7 +86,8 @@ def calculate_technical_features(df: pd.DataFrame) -> pd.DataFrame:
     aroon_result = ta.aroon(df['high'], df['low'], length=25)
     df['aroon_oscillator'] = aroon_result['AROONOSC_25']
 
-    # Drop rows with NaN values created by rolling windows
+    # Replace inf values (from division by zero) then drop rows with NaN
+    df.replace([np.inf, -np.inf], np.nan, inplace=True)
     df.dropna(inplace=True)
     
     return df

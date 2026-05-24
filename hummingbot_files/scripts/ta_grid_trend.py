@@ -259,6 +259,8 @@ class TAGridTrendStrategy(StrategyV2Base):
             pc = PairConfig(symbol=p["symbol"], step_size=p["step_size"], enabled=p.get("enabled", True))
             if pc.enabled:
                 self.pairs[pc.symbol] = PairEngine(pc, state_dir=Path("data"))
+                self._open_buys[pc.symbol] = {}
+                self._unmatched_sells[pc.symbol] = {}
 
         # Backward compat: set trading_pair to first enabled pair
         self.trading_pair = list(self.pairs.keys())[0] if self.pairs else config.trading_pair
@@ -373,10 +375,10 @@ class TAGridTrendStrategy(StrategyV2Base):
             self.step_size = float(grid_cfg.get("step_size", config.step_size))
 
         self._base_capital = self.capital_usdt
-        self._initial_equity = None
+        self._initial_equity: Dict[str, float] = {}
         self._peak_equity = self.capital_usdt
-        self._open_buys: dict[str, FillRecord] = {}
-        self._unmatched_sells: dict[str, FillRecord] = {}
+        self._open_buys: Dict[str, dict[str, FillRecord]] = {}
+        self._unmatched_sells: Dict[str, dict[str, FillRecord]] = {}
         self._grid_dirty = True
         self._last_state_alert_time: dict[str, float] = {}
         self._state_alert_cooldown = 900
@@ -386,7 +388,7 @@ class TAGridTrendStrategy(StrategyV2Base):
         self._overtrading_alerted_today: str = ""
         self._active_buy_spacing = 0.0
         self._active_sell_spacing = 0.0
-        self._last_grid_place_time = 0
+        self._last_grid_place_time: Dict[str, float] = {}
         self._min_grid_refresh_sec = 300
 
         # ── Candle feeds per pair ──
@@ -685,6 +687,10 @@ class TAGridTrendStrategy(StrategyV2Base):
             for symbol, engine in self.pairs.items():
                 self._trend_tick(engine)
 
+            # ── Periodic orphan cleanup ──
+            if self._tick_count % 1000 == 0:
+                self._cleanup_orphans()
+
             # Update health (using first pair for backward compat)
             first_engine = list(self.pairs.values())[0] if self.pairs else None
             total_trend_positions = sum(pm.open_count for pm in self._position_managers.values()) if self._position_managers else self._position_manager.open_count
@@ -913,13 +919,14 @@ class TAGridTrendStrategy(StrategyV2Base):
 
         if self._grid_dirty:
             now_ts = time_mod.time()
-            elapsed = now_ts - self._last_grid_place_time
+            elapsed = now_ts - self._last_grid_place_time.get(engine.symbol, 0)
             if elapsed < self._min_grid_refresh_sec:
                 return
             live_equity = self._estimate_equity(current_price, engine)
-            if self._initial_equity is None:
-                self._initial_equity = live_equity
-            growth_ratio = live_equity / self._initial_equity if self._initial_equity > 0 else 1.0
+            if engine.symbol not in self._initial_equity:
+                self._initial_equity[engine.symbol] = live_equity
+            init_eq = self._initial_equity[engine.symbol]
+            growth_ratio = live_equity / init_eq if init_eq > 0 else 1.0
             compound_capital = self._base_capital * growth_ratio
             compound_capital = max(compound_capital, self._base_capital)
             # Scale grid capital by ML regime confidence
@@ -936,7 +943,7 @@ class TAGridTrendStrategy(StrategyV2Base):
             self._active_buy_spacing = grid.buy_spacing
             self._active_sell_spacing = grid.sell_spacing
             self._place_grid_orders(grid, current_price, engine)
-            self._last_grid_place_time = now_ts
+            self._last_grid_place_time[engine.symbol] = now_ts
             logger.info(f"Grid updated for {engine.symbol}: buy_spacing=${grid.buy_spacing:.2f}, sell_spacing=${grid.sell_spacing:.2f} | compound=${compound_capital:.2f}")
             deployed = sum(l["price"] * l["quantity"] for l in grid.buy_levels)
             self.event_log.log("grid_recalculated",
@@ -1262,9 +1269,9 @@ class TAGridTrendStrategy(StrategyV2Base):
             grid_level = int(round(abs(price - mid) / spacing)) if spacing > 0 else 0
 
         fee_est = quantity * price * self._fee_rate
-        usdt_bal = self._get_usdt_balance()
-        base_bal = self._get_base_balance()
-        equity = self._estimate_equity(price)
+        usdt_bal = self._get_usdt_balance(engine)
+        base_bal = self._get_base_balance(engine)
+        equity = self._estimate_equity(price, engine)
         position_guard = self.position_guards.get(fill_symbol, self.position_guard)
         exposure_pct = position_guard.base_exposure_pct(base_bal, price, equity)
 
@@ -1286,10 +1293,11 @@ class TAGridTrendStrategy(StrategyV2Base):
                 ema_200=ema_val, atr=atr_val, grid_state=grid_state_val, fee=fee_est,
             )
 
-            matching_sell = self._unmatched_sells.pop(order_id, None)
-            if not matching_sell and self._unmatched_sells:
-                oldest_sell_id = min(self._unmatched_sells, key=lambda k: self._unmatched_sells[k].timestamp)
-                matching_sell = self._unmatched_sells.pop(oldest_sell_id)
+            pair_sells = self._unmatched_sells.get(fill_symbol, {})
+            matching_sell = pair_sells.pop(order_id, None)
+            if not matching_sell and pair_sells:
+                oldest_sell_id = min(pair_sells, key=lambda k: pair_sells[k].timestamp)
+                matching_sell = pair_sells.pop(oldest_sell_id)
 
             if matching_sell:
                 entry_price = matching_sell.price
@@ -1333,7 +1341,7 @@ class TAGridTrendStrategy(StrategyV2Base):
                     pass
                 logger.info(f"REVERSE MATCH: SELL@${entry_price:,.2f} -> BUY@${price:,.2f} | PnL=${net_pnl:.2f}")
             else:
-                self._open_buys[order_id] = buy_fill
+                self._open_buys.setdefault(fill_symbol, {})[order_id] = buy_fill
                 trade = Trade(
                     timestamp=pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d %H:%M:%S"),
                     pair=display_pair, side="BUY", entry_price=price, exit_price=price,
@@ -1364,10 +1372,11 @@ class TAGridTrendStrategy(StrategyV2Base):
 
         elif side == "SELL":
             fee = fee_est
-            matching_buy = self._open_buys.pop(order_id, None)
-            if not matching_buy and self._open_buys:
-                oldest_id = min(self._open_buys, key=lambda k: self._open_buys[k].timestamp)
-                matching_buy = self._open_buys.pop(oldest_id)
+            pair_buys = self._open_buys.get(fill_symbol, {})
+            matching_buy = pair_buys.pop(order_id, None)
+            if not matching_buy and pair_buys:
+                oldest_id = min(pair_buys, key=lambda k: pair_buys[k].timestamp)
+                matching_buy = pair_buys.pop(oldest_id)
 
             self._save_grid_state(engine)
 
@@ -1406,7 +1415,7 @@ class TAGridTrendStrategy(StrategyV2Base):
                     f"⚙️ <b>Env:</b> {self.env.upper()}"
                 )
             else:
-                self._unmatched_sells[order_id] = FillRecord(
+                self._unmatched_sells.setdefault(fill_symbol, {})[order_id] = FillRecord(
                     order_id=order_id, side="SELL", price=price, quantity=quantity,
                     grid_level=grid_level, timestamp=time_mod.time(),
                     rsi=rsi_val, bb_upper=bb_upper, bb_lower=bb_lower,
@@ -1415,7 +1424,7 @@ class TAGridTrendStrategy(StrategyV2Base):
                 self._save_grid_state(engine)
                 self.event_log.log("sell_buffered",
                     side="SELL", price=price, quantity=quantity, grid_level=grid_level,
-                    fee_estimate=round(fee, 4), unmatched_sell_count=len(self._unmatched_sells),
+                    fee_estimate=round(fee, 4), unmatched_sell_count=len(self._unmatched_sells.get(fill_symbol, {})),
                 )
                 telegram_msg = (
                     f"🟡 <b>SELL Filled (buffered) — {display_pair}</b>\n"
@@ -1423,7 +1432,7 @@ class TAGridTrendStrategy(StrategyV2Base):
                     f"📉 SELL  |  Grid Level {grid_level}\n"
                     f"💵 <b>Price:</b> ${price:,.2f}\n"
                     f"📦 <b>Size:</b> {quantity} {base_asset}\n"
-                    f"🔄 Buffered sells: {len(self._unmatched_sells)}\n"
+                    f"🔄 Buffered sells: {len(self._unmatched_sells.get(fill_symbol, {}))}\n"
                     f"🏦 <b>Eq:</b> ${equity:,.2f}\n"
                     f"⚙️ <b>Env:</b> {self.env.upper()}"
                 )
@@ -1612,8 +1621,9 @@ class TAGridTrendStrategy(StrategyV2Base):
         sells_placed = 0
         indicators = self._cached_indicators.get(engine.symbol)
         current_rsi = indicators[1] if indicators else None
-        filled_buy_levels = set(fill.grid_level for fill in self._open_buys.values())
-        filled_buy_prices = [fill.price for fill in self._open_buys.values()]
+        pair_buys = self._open_buys.get(engine.symbol, {})
+        filled_buy_levels = set(fill.grid_level for fill in pair_buys.values())
+        filled_buy_prices = [fill.price for fill in pair_buys.values()]
         min_spacing = grid.buy_spacing * 0.5 if grid.buy_spacing > 0 else 0.5
 
         for level in grid.buy_levels:
@@ -1650,7 +1660,7 @@ class TAGridTrendStrategy(StrategyV2Base):
         # Place sells for each open buy at a price that guarantees profit.
         # Uses entry_price + sell_spacing, NOT bb.mid + sell_spacing.
         min_sell_spacing = grid.sell_spacing if grid.sell_spacing > 0 else grid.mid_price * 0.002
-        for buy in list(self._open_buys.values()):
+        for buy in list(self._open_buys.get(engine.symbol, {}).values()):
             if current_rsi and current_rsi < 40:
                 continue
             profit_price = buy.price + min_sell_spacing
@@ -1677,7 +1687,7 @@ class TAGridTrendStrategy(StrategyV2Base):
                     side=OrderSide.SELL, price=sell_price, quantity=buy.quantity,
                 ))
 
-        logger.info(f"Grid for {engine.symbol}: buys={buys_placed} sells={sells_placed} | open_buys={len(self._open_buys)} unmatched={len(self._unmatched_sells)}")
+        logger.info(f"Grid for {engine.symbol}: buys={buys_placed} sells={sells_placed} | open_buys={len(self._open_buys.get(engine.symbol, {}))} unmatched={len(self._unmatched_sells.get(engine.symbol, {}))}")
 
     def _cancel_all_orders(self, engine: PairEngine, reason: str = "grid_refresh"):
         try:
@@ -1913,14 +1923,14 @@ class TAGridTrendStrategy(StrategyV2Base):
                           "quantity": f.quantity, "grid_level": f.grid_level, "timestamp": f.timestamp,
                           "rsi": f.rsi, "bb_upper": f.bb_upper, "bb_lower": f.bb_lower,
                           "ema_200": f.ema_200, "atr": f.atr, "grid_state": f.grid_state, "fee": f.fee}
-                    for oid, f in self._open_buys.items()
+                    for oid, f in self._open_buys.get(engine.symbol, {}).items()
                 },
                 "unmatched_sells": {
                     oid: {"order_id": f.order_id, "side": f.side, "price": f.price,
                           "quantity": f.quantity, "grid_level": f.grid_level, "timestamp": f.timestamp,
                           "rsi": f.rsi, "bb_upper": f.bb_upper, "bb_lower": f.bb_lower,
                           "ema_200": f.ema_200, "atr": f.atr, "grid_state": f.grid_state, "fee": f.fee}
-                    for oid, f in self._unmatched_sells.items()
+                    for oid, f in self._unmatched_sells.get(engine.symbol, {}).items()
                 }
             }
             tmp = path.with_suffix('.tmp')
@@ -1944,11 +1954,14 @@ class TAGridTrendStrategy(StrategyV2Base):
                 with open(path, "r") as f:
                     data = json.load(f)
                     self._last_sod_reset = data.get("last_sod_reset", "")
+                    pair_buys = self._open_buys.setdefault(engine.symbol, {})
                     for oid, d in data.get("open_buys", {}).items():
-                        self._open_buys[oid] = FillRecord(**d)
+                        pair_buys[oid] = FillRecord(**d)
+                    pair_sells = self._unmatched_sells.setdefault(engine.symbol, {})
                     for oid, d in data.get("unmatched_sells", {}).items():
-                        self._unmatched_sells[oid] = FillRecord(**d)
-                logger.info(f"Restored {len(self._open_buys)} open buys, {len(self._unmatched_sells)} unmatched sells from {path}")
+                        pair_sells[oid] = FillRecord(**d)
+                sym = engine.symbol if engine else "?"
+                logger.info(f"Restored {len(self._open_buys.get(sym, {}))} open buys, {len(self._unmatched_sells.get(sym, {}))} unmatched sells for {sym} from {path}")
         except Exception as e:
             logger.error(f"Failed to load grid state from {path}: {e}")
 
@@ -1956,12 +1969,13 @@ class TAGridTrendStrategy(StrategyV2Base):
         now = time_mod.time()
         ttl = 86400 * 7
         changed = False
-        for oid in [k for k, f in self._unmatched_sells.items() if (now - f.timestamp) > ttl]:
-            self._unmatched_sells.pop(oid)
-            changed = True
-        for oid in [k for k, f in self._open_buys.items() if (now - f.timestamp) > ttl]:
-            self._open_buys.pop(oid)
-            changed = True
+        for symbol in list(self._open_buys.keys()):
+            for oid in [k for k, f in self._open_buys[symbol].items() if (now - f.timestamp) > ttl]:
+                self._open_buys[symbol].pop(oid)
+                changed = True
+            for oid in [k for k, f in self._unmatched_sells.get(symbol, {}).items() if (now - f.timestamp) > ttl]:
+                self._unmatched_sells[symbol].pop(oid)
+                changed = True
         if changed:
             self._save_grid_state()  # Save all pairs
 

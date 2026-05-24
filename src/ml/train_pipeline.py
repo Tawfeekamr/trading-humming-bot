@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, TimeSeriesSplit
 from sklearn.metrics import classification_report, accuracy_score
 import argparse
 import os
@@ -159,7 +159,7 @@ def main():
     model_path = f'models/regime_{args.pair}.pkl'
     output_path = args.output if args.output else model_path.replace(".pkl", ".pkl.new")
     classifier = RegimeClassifier(model_path=output_path, model_type='random_forest')
-    best_params = classifier.tune_hyperparameters(X_trainval, y_trainval, n_iter=20, cv=3)
+    best_params = classifier.tune_hyperparameters(X_trainval, y_trainval, n_iter=20, cv=TimeSeriesSplit(n_splits=3))
 
     print("\n--- Evaluation on Test Set ---")
     y_pred = classifier.model.predict(X_test)

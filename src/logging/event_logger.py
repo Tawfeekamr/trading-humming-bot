@@ -52,7 +52,8 @@ class EventLogger:
         # Rotate if file exceeds size limit
         if self._file and self._file.tell() > self._MAX_FILE_SIZE:
             self._file.close()
-            path = self._log_dir / f"events_{today}.jsonl"
+            ts = datetime.now(timezone.utc).strftime("%H%M%S")
+            path = self._log_dir / f"events_{today}_{ts}.jsonl"
             self._file = open(path, "a", encoding="utf-8")
         return self._file
 

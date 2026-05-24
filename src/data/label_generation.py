@@ -22,8 +22,8 @@ def generate_regime_labels(df: pd.DataFrame, forward_window: int = 14, trend_thr
     df['future_return'] = df['close'].shift(-forward_window) / df['close'] - 1
 
     # Calculate the max excursion (high/low) in the forward window to see if it just spiked and reverted
-    df['forward_max'] = df['high'].shift(-forward_window).rolling(window=forward_window).max()
-    df['forward_min'] = df['low'].shift(-forward_window).rolling(window=forward_window).min()
+    df['forward_max'] = df['high'].rolling(window=forward_window).max().shift(-forward_window)
+    df['forward_min'] = df['low'].rolling(window=forward_window).min().shift(-forward_window)
 
     df['max_up_move'] = df['forward_max'] / df['close'] - 1
     df['max_down_move'] = df['close'] / df['forward_min'] - 1
