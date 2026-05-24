@@ -91,12 +91,13 @@ graph TD
 5. **Trend Engine (`src/trend/`)**: Directional trades with trailing stops and confidence-weighted position sizing. Only active in TRENDING regime. Risk scales 0.5%-3% based on ML confidence score.
 6. **Capital Manager (`capital_manager.py`)**: Allocates capital across pairs with configurable per-pair limits.
 7. **Cross-Asset ML Correlation Gate**: BTC-USDT is always loaded as a systemic risk signal (even when BTC trading is disabled). When BTC regime = DANGER, all altcoin buy-side operations halt immediately. Sell orders remain unaffected. BTC candle data is fetched via a dedicated CandleFeed independent of traded pairs.
-8. **Dynamic Fee Optimizer**: All orders use LIMIT_MAKER (post-only) to guarantee maker fee rate. Configured in the `fee_optimization` section of strategy.yaml.
+8. **Dynamic Fee Optimizer**: All orders (grid and trend) use LIMIT_MAKER (post-only) to guarantee maker fee rate. Configured in the `fee_optimization` section of strategy.yaml.
 9. **BNB Rebalancer (`src/risk/bnb_rebalancer.py`)**: Maintains BNB balance in the $10-50 range to qualify for the 25% Binance fee discount. Automatically rebalances when balance drifts outside the target window.
 10. **ML Model Hot-Reload**: Tracks file modification time (mtime) per model file. On each indicator refresh cycle, checks for changes. When a model file is updated, loads the new model, validates it, logs the event, and sends a Telegram notification. Zero downtime -- no restart required.
 11. **Auto-Retraining Pipeline**: Two GitHub Actions workflows manage model lifecycle:
     - `.github/workflows/sweep.yml` -- Weekly (Sunday 00:00 UTC) VectorBT parameter sweeps to find optimal grid/trend parameters.
     - `.github/workflows/retrain.yml` -- Monthly (1st of month) ML model retraining with accuracy gating. Both workflows commit results with `[skip ci]` to avoid cascading builds.
-12. **Local SQLite (`trade_journal.py`)**: Stores trade data for all pairs with indicator snapshots.
-13. **Streamlit App (`app.py`)**: Web dashboard reading from SQLite with multi-pair views.
-14. **Telegram Bot (`src/notifications/`)**: Real-time alerts and interactive commands for monitoring and control.
+12. **Per-Pair State Isolation**: Each pair maintains its own open buys, unmatched sells, initial equity, grid throttle timer, and compound scaling. Grid state is saved/loaded per pair with no cross-contamination. Fill matching only pairs buys and sells from the same trading pair.
+13. **Local SQLite (`trade_journal.py`)**: Stores trade data for all pairs with indicator snapshots.
+14. **Streamlit App (`app.py`)**: Web dashboard reading from SQLite with multi-pair views.
+15. **Telegram Bot (`src/notifications/`)**: Real-time alerts and interactive commands for monitoring and control.

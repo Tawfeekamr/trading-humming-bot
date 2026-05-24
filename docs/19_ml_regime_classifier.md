@@ -29,7 +29,7 @@ Every prediction cycle, the model reads 14 technical features from the latest ca
 | `close_location_value` | Where close sits within the candle range |
 | `adx_14` | Trend strength (any direction) |
 | `macd_histogram` | Momentum |
-| `distance_to_vwap` | Price distance from VWAP |
+| `distance_to_vwap` | Price distance from rolling VWAP (50-period) |
 | `obv_roc_14` | On-balance volume rate of change |
 | `choppiness_index` | Ranging vs trending detection (>61.8 = ranging, <38.2 = trending) |
 | `fractal_dimension_index` | Price complexity (~1.0 = trend, ~1.5 = random, ~2.0 = reversal) |
@@ -88,12 +88,12 @@ The threshold is dynamic — calculated as `k * ATR / close` — so it adapts to
 ### Training Process
 
 1. Fetch 1000 candles per timeframe from Binance
-2. Calculate 12 technical features per candle
-3. Generate forward-looking regime labels
+2. Calculate 14 technical features per candle (with epsilon guards preventing inf/NaN)
+3. Generate forward-looking regime labels (correct forward window: rolling then shift)
 4. Split: 80% train+val, 20% test (oldest → newest)
-5. Hyperparameter tuning: 20 iterations of randomized search with 3-fold CV
+5. Hyperparameter tuning: 20 iterations of randomized search with TimeSeriesSplit CV
 6. Evaluate on held-out test set
-7. Save model to `models/regime_rf_v3.pkl`
+7. Save model to `models/regime_{pair}.pkl`
 
 ### Current Model Performance
 

@@ -79,9 +79,16 @@ TA-Enhanced Multi-Pair Grid + Trend Bot — feature overview.
 - Requires manual reset via Telegram `/reset` command
 
 ### Position Guard
-- Caps BTC exposure at 80% of total capital
+- Caps base asset exposure at 80% of total capital
 - Enforces minimum $50 USDT reserve
 - Blocks individual orders that would violate limits
+- Per-pair isolation — each pair tracked independently
+
+### Per-Pair State Isolation
+- Open buys, unmatched sells, initial equity, and grid throttle are all per-pair
+- Fill matching only pairs buys and sells from the same trading pair
+- Grid state files are scoped per pair (`data/grid_state_{symbol}.json`)
+- Orphan cleanup runs every 1000 ticks (removes stale fills older than 7 days)
 
 ## Dynamic Fee Optimization
 

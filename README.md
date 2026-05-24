@@ -221,13 +221,13 @@ pairs:
     step_size: 1
     enabled: true
   - symbol: "ETH-USDT"
-    step_size: 0.001
+    step_size: 0.0001
     enabled: true
   - symbol: "BTC-USDT"
     step_size: 0.00001
     enabled: false               # BTC disabled — ML regime classifier active on altcoins
   - symbol: "BNB-USDT"
-    step_size: 0.01
+    step_size: 0.001
     enabled: true
   - symbol: "XRP-USDT"
     step_size: 0.1

@@ -18,6 +18,7 @@ trading-humming-bot/
 ├── hummingbot_files/
 │   └── scripts/
 │       ├── ta_grid_trend.py            # Dual-engine strategy (Grid + Trend)
+│       ├── pair_engine.py              # Per-pair state container (PairEngine, PairConfig)
 │       └── capital_manager.py          # Multi-pair capital allocation
 ├── src/
 │   ├── indicators/
@@ -40,7 +41,7 @@ trading-humming-bot/
 │   │   ├── regime_classifier.py        # Per-pair ML regime classifier
 │   │   └── train_pipeline.py           # ML model training with Binance data
 │   ├── data/
-│   │   ├── candle_feed.py              # Binance REST candle fetcher
+│   │   ├── candle_feed.py              # Binance REST candle fetcher (with retry + validation)
 │   │   └── ws_feed.py                  # Binance WebSocket feed
 │   ├── notifications/
 │   │   ├── telegram_bot.py             # Async Telegram alerts
@@ -48,7 +49,7 @@ trading-humming-bot/
 │   ├── journal/
 │   │   └── trade_journal.py            # SQLite trade logging + P&L queries
 │   ├── logging/
-│   │   └── event_logger.py             # JSONL structured event logs
+│   │   └── event_logger.py             # JSONL structured event logs (daily rotation + 14-day cleanup)
 │   ├── health.py                       # HTTP health check server
 │   └── logging_config.py              # Logging setup
 ├── models/                             # Per-pair ML models (regime_{symbol}.pkl)

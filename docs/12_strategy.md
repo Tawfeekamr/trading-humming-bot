@@ -276,10 +276,10 @@ pairs:
     step_size: 0.00001
   ETH-USDT:
     enabled: true
-    step_size: 0.001
+    step_size: 0.0001
   BNB-USDT:
     enabled: true
-    step_size: 0.01
+    step_size: 0.001
   DOGE-USDT:
     enabled: true
     step_size: 1

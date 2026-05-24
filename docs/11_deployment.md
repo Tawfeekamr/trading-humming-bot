@@ -158,8 +158,11 @@ Push to main
 │  AWS Tokyo   │  1. git pull origin main
 │              │  2. chmod 777 data logs
 │              │  3. docker compose down
-│              │  4. docker compose up -d --build
-│              │  5. Poll status (10min timeout)
+│              │  4. docker compose build --no-cache
+│              │  5. docker compose up -d
+│              │  6. docker image prune (24h+)
+│              │  7. docker builder prune (all)
+│              │  8. Poll status (10min timeout)
 └──────┬──────┘
        │
        ▼
