@@ -113,17 +113,6 @@ class TelegramCommandHandler:
                     "<b>Signal:</b> /signal_status /signal_pnl /signal_pause /signal_resume /signal_close /signal_history\n"
                     "<b>System:</b> /system /logs /errors /help"
                 )
-
-                # Add active pairs info if multi-pair mode
-                if hasattr(self.strategy, 'pairs') and self.strategy.pairs:
-                    pairs_list = "\n  • ".join([engine.display_pair for engine in self.strategy.pairs.values()])
-                    ping_text += f"\n\n📊 <b>Active pairs:</b>\n  • {pairs_list}"
-
-                # Add signal engine status
-                if hasattr(self.strategy, '_signal_engine') and self.strategy._signal_engine:
-                    status = self.strategy._signal_engine.get_status()
-                    mode = "AUDIT" if status.get("audit_mode") else "LIVE"
-                    ping_text += f"\n\n📡 <b>Signal Copy Engine:</b> {mode} ({status.get('state', 'N/A')})"
                 self._tg_post("sendMessage", data={
                     "chat_id": self._chat_id,
                     "text": ping_text,
@@ -729,16 +718,68 @@ class TelegramCommandHandler:
 
     def _cmd_server(self, update, context):
         try:
-            logger.info("Telegram /server received")
+            logger.info("Telegram /system received")
             stats = get_stats()
-            logger.info(f"Telegram /server response: cpu={stats.cpu_percent:.0f}% ram={stats.ram_percent:.0f}% disk={stats.disk_percent:.0f}%")
-            update.message.reply_text(
-                stats.format_telegram(),
-                parse_mode="HTML"
-            )
+            strategy = self.strategy
+
+            lines = [
+                f"🖥️ <b>System Status</b>",
+                f"━━━━━━━━━━━━━━━━━━━━",
+                f"⚙️ <b>Mode:</b> {strategy.env.upper()}",
+                f"💰 <b>Capital:</b> ${strategy.capital_usdt:,.0f}",
+                f"📊 <b>Pairs:</b> {', '.join(strategy.pairs.keys())}" if hasattr(strategy, 'pairs') else "",
+                f"━━━━━━━━━━━━━━━━━━━━",
+            ]
+
+            # Grid Engine
+            lines.append(f"🤖 <b>Grid Engine</b>")
+            state_machines = getattr(strategy, 'state_machines', {})
+            if hasattr(strategy, 'pairs') and strategy.pairs:
+                for sym in strategy.pairs:
+                    sm = state_machines.get(sym)
+                    state_str = sm.state.value if sm else "UNKNOWN"
+                    emoji = "🟢" if "ACTIVE" in state_str else "🔴"
+                    lines.append(f"  {emoji} {sym}: {state_str}")
+            else:
+                lines.append(f"  ⚪ No pairs")
+
+            # Trend Engine
+            trend_cap = getattr(strategy, '_trend_capital', 0)
+            if trend_cap and trend_cap > 0:
+                trend_positions = 0
+                for sym, eng in strategy.pairs.items():
+                    pm = strategy._position_managers.get(sym) if hasattr(strategy, '_position_managers') else None
+                    if pm and hasattr(pm, 'has_open_position') and pm.has_open_position():
+                        trend_positions += 1
+                lines.append(f"📈 <b>Trend Engine</b>")
+                lines.append(f"  Capital: ${trend_cap:,.0f} | Positions: {trend_positions}")
+            else:
+                lines.append(f"📈 <b>Trend Engine</b>: Capital=$0 (disabled)")
+
+            # Signal Copy Engine
+            sig = getattr(strategy, '_signal_engine', None)
+            if sig:
+                status = sig.get_status()
+                mode = "AUDIT" if status.get("audit_mode") else "LIVE"
+                lines.append(f"📡 <b>Signal Copy Engine</b>")
+                lines.append(f"  Mode: {mode} | State: {status.get('state', 'N/A')}")
+                lines.append(f"  Positions: {status.get('open_positions', 0)} | Trades today: {status.get('risk', {}).get('trades_today', 0)}")
+            else:
+                lines.append(f"📡 <b>Signal Copy Engine</b>: Disabled")
+
+            # ML
+            if hasattr(strategy, '_ml_classifier') and strategy._ml_classifier:
+                lines.append(f"🧠 <b>ML:</b> {strategy._ml_summary()}")
+
+            # Server resources
+            lines.append(f"━━━━━━━━━━━━━━━━━━━━")
+            lines.append(f"💻 CPU: {stats.cpu_percent:.0f}% | RAM: {stats.ram_percent:.0f}% | Disk: {stats.disk_percent:.0f}%")
+            lines.append(f"💾 {stats.disk_used_gb:.1f}/{stats.disk_total_gb:.1f} GB")
+
+            update.message.reply_text("\n".join(lines), parse_mode="HTML")
         except Exception as e:
-            logger.error(f"Error in /server: {e}")
-            update.message.reply_text(f"⚠️ Error getting server status: {e}")
+            logger.error(f"Error in /system: {e}")
+            update.message.reply_text(f"⚠️ Error: {e}")
 
     def _cmd_clear(self, update, context):
         try:

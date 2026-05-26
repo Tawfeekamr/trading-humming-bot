@@ -1849,7 +1849,7 @@ class TAGridTrendStrategy(StrategyV2Base):
             s = self.journal.summary_today()
             sw = self.journal.summary_this_week()
             sm = self.journal.summary_this_month()
-            
+
             ts = self._trend_journal.summary_today()
             tsw = self._trend_journal.summary_this_week()
             tsm = self._trend_journal.summary_this_month()
@@ -1860,10 +1860,31 @@ class TAGridTrendStrategy(StrategyV2Base):
 
             base = getattr(self, '_base_capital', self.capital_usdt)
             growth_pct = ((equity - base) / base * 100) if base > 0 else 0
-            
+
             total_net_today = s['net_pnl'] + ts['net_pnl']
             total_net_week = sw['net_pnl'] + tsw['net_pnl']
             total_net_month = sm['net_pnl'] + tsm['net_pnl']
+
+            # Signal Copy Engine summary
+            sig_section = ""
+            if self._signal_engine:
+                sig_status = self._signal_engine.get_status()
+                sig_risk = sig_status.get("risk", {})
+                sig_journal = self._signal_engine._journal
+                sig_today = sig_journal.summary(days=0) if sig_journal else {}
+                sig_net = sig_today.get("total_pnl", 0.0) or 0.0
+                sig_trades = sig_today.get("total_trades", 0) or 0
+                sig_win_rate = sig_today.get("win_rate", 0) or 0
+                sig_mode = "AUDIT" if sig_status.get("audit_mode") else "LIVE"
+                total_net_today += sig_net
+                sig_section = (
+                    f"•••\n"
+                    f"📡 <b>SIGNAL COPY BOT</b> ({sig_mode})\n"
+                    f"📊 Trades: {sig_trades} | Win: {sig_win_rate}%\n"
+                    f"📈 Net Today: {fmt(sig_net)}\n"
+                    f"📡 Positions: {sig_status.get('open_positions', 0)} | "
+                    f"Signals today: {sig_risk.get('trades_today', 0)}\n"
+                )
 
             msg = (
                 f"📅 <b>Daily Report — {pd.Timestamp.now(tz='UTC').strftime('%b %d, %Y')}</b>\n"
@@ -1877,6 +1898,7 @@ class TAGridTrendStrategy(StrategyV2Base):
                 f"📊 Trades: {ts['total_trades']} (✅{ts['winning']} / ❌{ts['losing']}) Win: {ts['win_rate']}%\n"
                 f"💰 Gross: {fmt(ts['gross_pnl'])}  |  💸 Fees: -${abs(ts['total_fees']):.2f}\n"
                 f"📈 Net Today: {fmt(ts['net_pnl'])}\n"
+                f"{sig_section}"
                 f"•••\n"
                 f"🏆 <b>COMBINED PNL</b>\n"
                 f"📈 Net Today: <b>{fmt(total_net_today)}</b>\n"
