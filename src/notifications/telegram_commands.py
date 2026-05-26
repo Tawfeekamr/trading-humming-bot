@@ -108,10 +108,11 @@ class TelegramCommandHandler:
                 ping_text = (
                     "📡 <b>Telegram Command Handler Online</b>\n"
                     "━━━━━━━━━━━━━━━━━━━━\n"
-                    "<b>Grid:</b> /status /pnl /balance /capital /price /trades /pending /fees /pause /resume /clear\n"
+                    "<b>System:</b> /status /system /price /logs /errors\n"
+                    "<b>Grid:</b> /grid_status /pnl /balance /capital /trades /pending /fees /pause /resume /clear\n"
                     "<b>Trend:</b> /trend_status /trend_capital /trend_pnl /trend_close /trend_history\n"
-                    "<b>Signal:</b> /signal_status /signal_pnl /signal_pause /signal_resume /signal_close /signal_history /signal_channels\n"
-                    "<b>System:</b> /system /logs /errors /help"
+                    "<b>Signal:</b> /signal_status /signal_pnl /signal_channels /signal_history /signal_pause /signal_resume /signal_close\n"
+                    "━━━━━━━━━━━━━━━━━━━━ /help for details"
                 )
                 self._tg_post("sendMessage", data={
                     "chat_id": self._chat_id,
@@ -161,7 +162,16 @@ class TelegramCommandHandler:
     @property
     def _commands(self):
         return {
+            # System
             "status": self._cmd_status,
+            "system": self._cmd_server,
+            "server": self._cmd_server,
+            "help": self._cmd_help,
+            "logs": self._cmd_logs,
+            "errors": self._cmd_errors,
+            "price": self._cmd_price,
+            # Grid
+            "grid_status": self._cmd_grid_status,
             "pnl": self._cmd_pnl,
             "balance": self._cmd_balance,
             "capital": self._cmd_capital,
@@ -170,26 +180,22 @@ class TelegramCommandHandler:
             "reset": self._cmd_reset,
             "trades": self._cmd_trades,
             "pending": self._cmd_pending,
-            "logs": self._cmd_logs,
-            "errors": self._cmd_errors,
             "fees": self._cmd_fees,
-            "price": self._cmd_price,
-            "system": self._cmd_server,
-            "server": self._cmd_server,
             "clear": self._cmd_clear,
-            "help": self._cmd_help,
+            # Trend
             "trend_status": self._cmd_trend_status,
             "trend_capital": self._cmd_trend_capital,
             "trend_pnl": self._cmd_trend_pnl,
             "trend_close": self._cmd_trend_close,
             "trend_history": self._cmd_trend_history,
+            # Signal
             "signal_status": self._cmd_signal_status,
             "signal_pnl": self._cmd_signal_pnl,
+            "signal_channels": self._cmd_signal_channels,
+            "signal_history": self._cmd_signal_history,
             "signal_pause": self._cmd_signal_pause,
             "signal_resume": self._cmd_signal_resume,
             "signal_close": self._cmd_signal_close,
-            "signal_history": self._cmd_signal_history,
-            "signal_channels": self._cmd_signal_channels,
         }
 
     def _dispatch(self, handler, chat_id: str, msg: dict):
@@ -249,6 +255,74 @@ class TelegramCommandHandler:
         return False
 
     def _cmd_status(self, update, context):
+        """Daily summary for all engines — the main overview command."""
+        try:
+            logger.info("Telegram /status received")
+            strategy = self.strategy
+            uptime_s = int(time.time() - self._started_at)
+            hours, remainder = divmod(uptime_s, 3600)
+            minutes, secs = divmod(remainder, 60)
+            mode = strategy.env.upper()
+
+            lines = [
+                f"📊 <b>Daily Status</b> — {mode}",
+                f"━━━━━━━━━━━━━━━━━━━━",
+                f"⏱ Up: {hours}h {minutes}m",
+            ]
+
+            # Grid P&L today
+            try:
+                grid_summary = self.journal.summary_today()
+                grid_trades = grid_summary.get("total_trades", 0)
+                grid_pnl = grid_summary.get("net_pnl", 0)
+                grid_sign = "+" if grid_pnl >= 0 else ""
+                lines.append(f"🤖 <b>Grid:</b> {grid_trades} trades | P&L: {grid_sign}${grid_pnl:.2f}")
+            except Exception:
+                lines.append(f"🤖 <b>Grid:</b> Active")
+
+            # Trend P&L today
+            try:
+                trend_journal = getattr(strategy, '_trend_journal', None)
+                if trend_journal:
+                    ts = trend_journal.summary_today()
+                    trend_trades = ts.get("total_trades", 0)
+                    trend_pnl = ts.get("net_pnl", 0)
+                    trend_sign = "+" if trend_pnl >= 0 else ""
+                    lines.append(f"📈 <b>Trend:</b> {trend_trades} trades | P&L: {trend_sign}${trend_pnl:.2f}")
+                else:
+                    trend_cap = getattr(strategy, '_trend_capital', 0)
+                    lines.append(f"📈 <b>Trend:</b> Capital ${trend_cap:,.0f}" if trend_cap else "📈 <b>Trend:</b> Disabled")
+            except Exception:
+                lines.append(f"📈 <b>Trend:</b> Active")
+
+            # Signal P&L today
+            sig = getattr(strategy, '_signal_engine', None)
+            if sig:
+                sig_mode = "AUDIT" if sig._audit_mode else "LIVE"
+                sig_today = sig._journal.summary(days=0)
+                sig_trades = sig_today.get("total_trades", 0)
+                sig_pnl = sig_today.get("total_pnl", 0)
+                sig_sign = "+" if sig_pnl >= 0 else ""
+                sig_stats = sig.get_status()
+                lines.append(f"📡 <b>Signal ({sig_mode}):</b> {sig_trades} trades | P&L: {sig_sign}${sig_pnl:.2f} | State: {sig_stats.get('state', 'N/A')}")
+            else:
+                lines.append(f"📡 <b>Signal:</b> Disabled")
+
+            # ML regime
+            if hasattr(strategy, '_ml_classifier') and strategy._ml_classifier:
+                lines.append(f"🧠 <b>ML:</b> {strategy._ml_summary()}")
+
+            # Server
+            stats = get_stats()
+            lines.append(f"━━━━━━━━━━━━━━━━━━━━")
+            lines.append(f"💻 CPU: {stats.cpu_percent:.0f}% | RAM: {stats.ram_percent:.0f}% | Disk: {stats.disk_percent:.0f}%")
+
+            update.message.reply_text("\n".join(lines), parse_mode="HTML")
+        except Exception as e:
+            logger.error(f"Error in /status: {e}")
+            update.message.reply_text(f"⚠️ Error: {e}")
+
+    def _cmd_grid_status(self, update, context):
         try:
             if not self._require_grid(update):
                 return
@@ -1050,34 +1124,43 @@ class TelegramCommandHandler:
         display_pair = getattr(self.strategy, 'display_pair', 'Multi-pair')
         update.message.reply_text(
             "📖 <b>Available Commands</b>\n"
-            "•••\n"
-            "/status — Grid state, mode, uptime, pending orders\n"
-            "/pnl — Today / week / month / all-time P&L\n"
-            f"/balance — USDT, {base_asset}, equity, and grid capital\n"
-            "/capital &lt;amount&gt; — Update grid capital (no redeploy)\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "<b>System:</b>\n"
+            "/status — Daily summary (all engines P&L + server)\n"
+            "/system — Full engine details + server resources\n"
             f"/price — Current {display_pair} price with indicators\n"
-            "/pause — Manually pause grid (cancel all orders)\n"
-            "/resume — Resume grid trading\n"
-            "/reset — Reset circuit breaker after halt\n"
-            "/trades — Last 5 closed trades\n"
-            "/pending — Show all pending buy/sell orders\n"
-            "/fees — Fee analysis and overtrading detection\n"
-            "/system — CPU, RAM, Disk usage (alerts at 75%)\n"
             "/logs — Last 30 lines from today's bot log\n"
             "/errors — Recent errors and crashes\n"
-            "/clear — Clear logs and grid state (keeps trade history)\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "<b>Grid:</b>\n"
+            "/grid_status — Grid state, pending orders, uptime\n"
+            "/pnl — Grid P&L (today/week/month)\n"
+            f"/balance — USDT, {base_asset}, equity, grid capital\n"
+            "/capital &lt;amount&gt; — Update grid capital\n"
+            "/pause — Pause grid (cancel all orders)\n"
+            "/resume — Resume grid trading\n"
+            "/reset — Reset circuit breaker\n"
+            "/trades — Last 5 closed grid trades\n"
+            "/pending — All pending buy/sell orders\n"
+            "/fees — Fee analysis and overtrading detection\n"
+            "/clear — Clear logs and grid state\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "<b>Trend:</b>\n"
             "/trend_status — Trend engine status and positions\n"
-            "/trend_capital &lt;amount&gt; — Update trend trading capital\n"
-            "/trend_pnl — Trend strategy P&L report\n"
+            "/trend_capital &lt;amount&gt; — Update trend capital\n"
+            "/trend_pnl — Trend P&L report\n"
             "/trend_close — Force close all trend positions\n"
             "/trend_history — Recent trend trade history\n"
-            "/signal_status — Signal copy engine status\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "<b>Signal:</b>\n"
+            "/signal_status — Signal engine status & positions\n"
             "/signal_pnl — Signal trades P&L report\n"
+            "/signal_channels — Channel stats & approval rates\n"
+            "/signal_history — Recent signal messages\n"
             "/signal_pause — Pause signal execution\n"
             "/signal_resume — Resume signal execution\n"
             "/signal_close &lt;PAIR&gt; — Close a signal position\n"
-            "/signal_history — Recent signal messages\n"
-            "/signal_channels — Channel stats & approval rates\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
             "/help — This message",
             parse_mode="HTML"
         )
