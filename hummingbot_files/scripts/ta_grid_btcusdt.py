@@ -1067,9 +1067,9 @@ class TAGridSOLUSDT(StrategyV2Base):
                 f"🟢 <b>Grid ACTIVATED — {display_pair}</b>\n"
                 f"•••\n"
                 f"💵 <b>Price:</b> ${price:,.2f}\n"
-                f"📐 <b>Range:</b> ${bb.lower:,.0f} → ${bb.upper:,.0f}\n"
+                f"📐 <b>Range:</b> ${bb.lower:,.2f} → ${bb.upper:,.2f}\n"
                 f"📏 <b>Space:</b> ${spacing:,.2f}\n"
-                f"📊 RSI: {rsi:.1f}  |  EMA200: ${ema:,.0f}\n"
+                f"📊 RSI: {rsi:.1f}  |  EMA200: ${ema:,.2f}\n"
                 f"⚠️ <b>Why:</b> {trigger_reason}"
             )
         elif new_state == GridState.PAUSED:
@@ -1077,7 +1077,7 @@ class TAGridSOLUSDT(StrategyV2Base):
                 f"⏸️ <b>Grid PAUSED — {display_pair}</b>\n"
                 f"•••\n"
                 f"💵 <b>Price:</b> ${price:,.2f}\n"
-                f"📊 RSI: {rsi:.1f}  |  EMA200: ${ema:,.0f}\n"
+                f"📊 RSI: {rsi:.1f}  |  EMA200: ${ema:,.2f}\n"
                 f"⚠️ <b>Why:</b> {trigger_reason}\n"
                 f"💤 Holding USDT until re-entry signal."
             )
@@ -1086,8 +1086,8 @@ class TAGridSOLUSDT(StrategyV2Base):
                 f"🔄 <b>Grid REACTIVATING — {display_pair}</b>\n"
                 f"•••\n"
                 f"💵 <b>Price:</b> ${price:,.2f}\n"
-                f"📐 <b>Range:</b> ${bb.lower:,.0f} → ${bb.upper:,.0f}\n"
-                f"📊 RSI: {rsi:.1f}  |  EMA200: ${ema:,.0f}\n"
+                f"📐 <b>Range:</b> ${bb.lower:,.2f} → ${bb.upper:,.2f}\n"
+                f"📊 RSI: {rsi:.1f}  |  EMA200: ${ema:,.2f}\n"
                 f"⚠️ Trigger: {trigger_reason}"
             )
         else:

@@ -172,8 +172,8 @@ class PnLReporter:
             f"🟢 <b>Grid ACTIVATED</b>\n"
             f"•••\n"
             f"💵 Price:    ${price:,.2f}\n"
-            f"📐 Range:    ${bb_lower:,.0f} → ${bb_upper:,.0f}\n"
-            f"📏 <b>Space:</b> ${spacing:,.0f}/level\n"
+            f"📐 Range:    ${bb_lower:,.2f} → ${bb_upper:,.2f}\n"
+            f"📏 <b>Space:</b> ${spacing:,.2f}/level\n"
             f"📊 RSI:      {rsi:.1f}"
         )
 
