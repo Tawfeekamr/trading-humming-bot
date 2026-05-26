@@ -64,14 +64,16 @@ class SignalValidator:
         if sl_distance > self._max_sl_distance_pct:
             return False, f"SL distance {sl_distance:.1f}% > max {self._max_sl_distance_pct}%"
 
-        # Risk:reward ratio check (using TP1)
+        # Risk:reward ratio check (using TP3 if available, else TP2, else TP1)
         risk = entry - signal.stop_loss
-        reward = signal.take_profits[0] - entry
+        tp_index = min(2, len(signal.take_profits) - 1)  # TP3 preferred
+        tp_label = f"TP{tp_index + 1}"
+        reward = signal.take_profits[tp_index] - entry
         if reward <= 0:
-            return False, f"TP1 {signal.take_profits[0]} <= entry {entry}"
+            return False, f"{tp_label} {signal.take_profits[tp_index]} <= entry {entry}"
         rr = reward / risk
         if rr < self._min_rr_ratio:
-            return False, f"R:R {rr:.2f} < min {self._min_rr_ratio}"
+            return False, f"R:R {rr:.2f} (vs {tp_label}) < min {self._min_rr_ratio}"
 
         # Entry zone width check
         if signal.entry_low is not None and signal.entry_high is not None and signal.entry_low > 0:
