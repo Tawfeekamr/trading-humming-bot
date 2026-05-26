@@ -110,7 +110,7 @@ class TelegramCommandHandler:
                     "━━━━━━━━━━━━━━━━━━━━\n"
                     "<b>Grid:</b> /status /pnl /balance /capital /price /trades /pending /fees /pause /resume /clear\n"
                     "<b>Trend:</b> /trend_status /trend_capital /trend_pnl /trend_close /trend_history\n"
-                    "<b>Signal:</b> /signal_status /signal_pnl /signal_pause /signal_resume /signal_close /signal_history\n"
+                    "<b>Signal:</b> /signal_status /signal_pnl /signal_pause /signal_resume /signal_close /signal_history /signal_channels\n"
                     "<b>System:</b> /system /logs /errors /help"
                 )
                 self._tg_post("sendMessage", data={
