@@ -368,7 +368,7 @@ class TelegramCommandHandler:
             base_bal = strategy._get_base_balance()
             base_value = base_bal * price if price else 0
             equity = usdt + base_value
-            base_asset = getattr(strategy, 'base_asset', 'SOL')
+            base_asset = getattr(strategy, 'base_asset', 'CRYPTO')
 
             mode = strategy.env.upper()
             base_cap = getattr(strategy, '_base_capital', strategy.capital_usdt)
@@ -673,7 +673,7 @@ class TelegramCommandHandler:
                 update.message.reply_text("⚠️ Could not fetch live price.")
                 return
 
-            display_pair = getattr(self.strategy, 'display_pair', 'SOL/USDT')
+            display_pair = getattr(self.strategy, 'display_pair', 'Multi-pair')
             self._send_price_detail(update, display_pair, snapshot)
         except Exception as e:
             logger.error(f"Error in /price: {e}")
@@ -848,7 +848,7 @@ class TelegramCommandHandler:
                 for pos in positions:
                     current = getattr(strategy, '_last_price', pos.entry_price)
                     pnl_pct = (current - pos.entry_price) / pos.entry_price * 100 if current and pos.entry_price else 0
-                    lines.append(f"  {pos.amount:.2f} SOL @ ${pos.entry_price:.2f} | SL ${pos.stop_loss:.2f} TP ${pos.take_profit:.2f}")
+                    lines.append(f"  {pos.amount:.6f} base @ ${pos.entry_price:.2f} | SL ${pos.stop_loss:.2f} TP ${pos.take_profit:.2f}")
                     lines.append(f"  P&L: {pnl_pct:+.1f}% | Trail: ${pos.trailing_stop:.2f}")
 
                 lines.append(f"Capital: ${pm._capital:.2f}")
@@ -995,8 +995,8 @@ class TelegramCommandHandler:
 
     def _cmd_help(self, update, context):
         logger.info("Telegram /help received")
-        base_asset = getattr(self.strategy, 'base_asset', 'SOL')
-        display_pair = getattr(self.strategy, 'display_pair', 'SOL/USDT')
+        base_asset = getattr(self.strategy, 'base_asset', 'CRYPTO')
+        display_pair = getattr(self.strategy, 'display_pair', 'Multi-pair')
         update.message.reply_text(
             "📖 <b>Available Commands</b>\n"
             "•••\n"

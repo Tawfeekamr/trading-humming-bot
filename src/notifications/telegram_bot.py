@@ -52,15 +52,27 @@ class TelegramBot:
                         f"Telegram send failed after {max_retries} attempts: {e}"
                     )
 
-    async def alert_startup(self, env: str, capital: float, display_pair: str = "SOL/USDT") -> None:
-        await self.send(
-            f"🟢 <b>Grid Bot STARTED</b>\n"
-            f"•••\n"
-            f"⚙️ <b>Env:</b> {env.upper()}\n"
-            f"💰 <b>Cap:</b> ${capital:,.0f} USDT\n"
-            f"📊 Pair: {display_pair}\n"
-            f"⏰ Time: {self._now()} UTC"
-        )
+    async def alert_startup(self, env: str, capital: float, pairs: str = "",
+                           engines: str = "", grid_levels: int = 0,
+                           signal_channels: int = 0, audit_mode: bool = False) -> None:
+        lines = [
+            f"🟢 <b>Trading Bot STARTED</b>",
+            f"━━━━━━━━━━━━━━━━━━━━",
+            f"⚙️ <b>Mode:</b> {env.upper()}",
+            f"💰 <b>Capital:</b> ${capital:,.0f} USDT",
+        ]
+        if pairs:
+            lines.append(f"📊 <b>Pairs:</b> {pairs}")
+        if grid_levels:
+            lines.append(f"📐 <b>Grid:</b> {grid_levels} levels/side")
+        if engines:
+            lines.append(f"🔧 <b>Engines:</b> {engines}")
+        if signal_channels:
+            mode_tag = "AUDIT" if audit_mode else "LIVE"
+            lines.append(f"📡 <b>Signal Copy:</b> {signal_channels} channels ({mode_tag})")
+        lines.append(f"━━━━━━━━━━━━━━━━━━━━")
+        lines.append(f"⏰ {self._now()} UTC")
+        await self.send("\n".join(lines))
 
     async def alert_shutdown(self, reason: str = "manual") -> None:
         await self.send(

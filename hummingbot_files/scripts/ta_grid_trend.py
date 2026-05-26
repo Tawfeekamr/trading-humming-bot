@@ -147,7 +147,7 @@ class TAGridTrendConfig(StrategyV2ConfigBase):
 
     # Exchange
     exchange: str = Field(default="binance_paper_trade")
-    trading_pair: str = Field(default="SOL-USDT")
+    trading_pair: str = Field(default="DOGE-USDT")
 
     # Grid parameters
     levels: int = Field(default=8)
@@ -629,9 +629,27 @@ class TAGridTrendStrategy(StrategyV2Base):
 
         # Startup Telegram alert
         try:
+            active_pairs = ", ".join(p.symbol for p in self._pair_engines)
+            active_engines = "Grid"
+            if self._trend_engine:
+                active_engines += " + Trend"
+            signal_channels = 0
+            signal_audit = False
+            if self._signal_engine:
+                active_engines += " + Signal"
+                import os as _os
+                _ch = _os.environ.get("SIGNAL_CHANNEL_IDS", "")
+                signal_channels = len([c for c in _ch.split(",") if c.strip()])
+                signal_audit = signal_cfg.get("audit_mode", False)
             loop = asyncio.get_event_loop()
             if loop.is_running():
-                loop.create_task(self.telegram.alert_startup(self.env, self.capital_usdt))
+                loop.create_task(self.telegram.alert_startup(
+                    self.env, self.capital_usdt,
+                    pairs=active_pairs, engines=active_engines,
+                    grid_levels=self.grid_levels,
+                    signal_channels=signal_channels,
+                    audit_mode=signal_audit,
+                ))
         except RuntimeError:
             pass
 
