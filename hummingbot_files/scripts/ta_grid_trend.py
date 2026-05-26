@@ -629,7 +629,7 @@ class TAGridTrendStrategy(StrategyV2Base):
 
         # Startup Telegram alert
         try:
-            active_pairs = ", ".join(p.symbol for p in self._pair_engines)
+            active_pairs = ", ".join(self.pairs.keys())
             active_engines = "Grid"
             if self._trend_engine:
                 active_engines += " + Trend"
