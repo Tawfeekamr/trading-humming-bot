@@ -49,7 +49,7 @@ jobs:
             --document-name "AWS-RunShellScript" \
             --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
             --region "${{ env.AWS_REGION }}" \
-            --parameters commands='["cd /home/ec2-user/trading-humming-bot && git pull origin main 2>&1","cd /home/ec2-user/trading-humming-bot && mkdir -p data logs models","cd /home/ec2-user/trading-humming-bot && docker compose down --remove-orphans 2>&1 || true","cd /home/ec2-user/trading-humming-bot && docker compose build --no-cache bot 2>&1","cd /home/ec2-user/trading-humming-bot && docker compose up -d 2>&1","docker image prune -af --filter until=24h 2>&1 || true","docker builder prune -f 2>&1 || true"]' \
+            --parameters commands='["cd /home/ec2-user/trading-humming-bot && git pull origin main 2>&1","cd /home/ec2-user/trading-humming-bot && mkdir -p data logs models","cd /home/ec2-user/trading-humming-bot && docker compose down --remove-orphans 2>&1 || true","cd /home/ec2-user/trading-humming-bot && docker compose build --no-cache bot 2>&1","cd /home/ec2-user/trading-humming-bot && docker compose up -d 2>&1","docker image prune -af 2>&1 || true","docker builder prune -f 2>&1 || true","docker volume prune -f 2>&1 || true"]' \
             --timeout-seconds 600 \
             --comment "Deploying via GitHub Actions" \
             --query "Command.CommandId" \
