@@ -635,8 +635,7 @@ class TAGridTrendStrategy(StrategyV2Base):
             signal_audit = False
             if self._signal_engine:
                 active_engines += " + Signal"
-                import os as _os
-                _ch = _os.environ.get("SIGNAL_CHANNEL_IDS", "")
+                _ch = os.environ.get("SIGNAL_CHANNEL_IDS", "")
                 signal_channels = len([c for c in _ch.split(",") if c.strip()])
                 signal_audit = signal_cfg.get("audit_mode", False)
             loop = asyncio.get_event_loop()

@@ -107,5 +107,4 @@ class TelegramBot:
 
     @staticmethod
     def _now() -> str:
-        from datetime import datetime
         return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")

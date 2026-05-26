@@ -8,6 +8,10 @@ and executes. Supports audit mode (paper trade) for measuring signal quality.
 import logging
 import os
 import time
+import json
+import urllib.request
+from datetime import datetime, timezone
+from decimal import Decimal
 from enum import Enum
 from typing import Optional, Callable
 
@@ -262,7 +266,6 @@ class SignalEngine:
         order_id = None
         if self._buy_fn:
             try:
-                from decimal import Decimal
                 order_id = self._buy_fn(
                     symbol=signal.pair,
                     amount=Decimal(str(amount)),
@@ -392,7 +395,6 @@ class SignalEngine:
             return
 
         try:
-            from decimal import Decimal
             amount_to_sell = round(pos.remaining_amount, 6)
             if amount_to_sell <= 0:
                 return
@@ -409,11 +411,10 @@ class SignalEngine:
     def _refresh_available_pairs(self):
         """Fetch available Binance USDT pairs."""
         try:
-            import urllib.request
             url = "https://api.binance.com/api/v3/exchangeInfo"
             req = urllib.request.Request(url, headers={"User-Agent": "signal-engine"})
             with urllib.request.urlopen(req, timeout=10) as resp:
-                data = __import__("json").loads(resp.read())
+                data = json.loads(resp.read())
             self._available_pairs = {
                 s["symbol"] for s in data["symbols"]
                 if s["quoteAsset"] == "USDT" and s["status"] == "TRADING"
@@ -437,7 +438,7 @@ class SignalEngine:
     def _log_audit_trade(self, signal: ParsedSignal, channel_name: str,
                          action: str, price: float, reason: str):
         self._journal.log_trade(SignalTrade(
-            timestamp=__import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
+            timestamp=datetime.now(timezone.utc).isoformat(),
             symbol=signal.pair or "",
             channel_name=channel_name,
             action=action,
@@ -457,23 +458,7 @@ class SignalEngine:
 
     def _log_position_trade(self, pos: SignalPosition, price: float, reason: str):
         self._journal.log_trade(SignalTrade(
-            timestamp=__import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
-            symbol=pos.symbol,
-            channel_name=pos.channel_name,
-            action=reason,
-            entry_price=pos.entry_price,
-            current_price=price,
-            quantity=pos.remaining_amount,
-            realized_pnl=(price - pos.entry_price) * pos.remaining_amount,
-            exit_reason=reason,
-            signal_confidence=pos.signal_confidence,
-            stop_loss=pos.stop_loss,
-            take_profits=str(pos.take_profits),
-            tp1_hit=int(pos.tp1_hit),
-            tp2_hit=int(pos.tp2_hit),
-            tp3_hit=int(pos.tp3_hit),
-            raw_message=pos.raw_message[:500],
-            parse_reasoning="",
+            timestamp=datetime.now(timezone.utc).isoformat(),
             is_audit=1 if self._audit_mode else 0,
         ))
 
