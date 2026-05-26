@@ -29,10 +29,16 @@ class SignalEngineState(Enum):
 
 class SignalEngine:
     def __init__(self, config: dict, btc_regime_fn: Callable,
-                 telegram_send_fn: Optional[Callable] = None):
+                 telegram_send_fn: Optional[Callable] = None,
+                 buy_fn: Optional[Callable] = None,
+                 sell_fn: Optional[Callable] = None,
+                 get_price_fn: Optional[Callable] = None):
         self._config = config
         self._get_btc_regime = btc_regime_fn
         self._telegram_send = telegram_send_fn
+        self._buy_fn = buy_fn
+        self._sell_fn = sell_fn
+        self._get_price_fn = get_price_fn
 
         self._enabled = config.get("enabled", False)
         self._audit_mode = config.get("audit_mode", True)
@@ -224,9 +230,76 @@ class SignalEngine:
         logger.info(f"[AUDIT] Signal entered: {signal.pair} @ ${entry:,.2f} from {channel_name}")
 
     def _execute_entry(self, signal: ParsedSignal, channel_name: str, connector):
-        """Live execution: place real order."""
-        # TODO: Implement live order placement via connector when audit period ends
-        logger.warning("Live signal execution not yet implemented")
+        """Place a real buy order via Hummingbot connector."""
+        entry = signal.entry_high or signal.entry_low or 0
+        if entry <= 0:
+            logger.warning(f"Signal has no valid entry price: {signal.pair}")
+            return
+
+        # Get current equity for position sizing
+        current_price = self._get_current_price(connector, signal.pair)
+        equity = self._get_equity(connector)
+
+        # Calculate position size from risk guard
+        usdt_amount = self._risk.get_budget_for_trade(signal, equity)
+        if usdt_amount <= 0:
+            logger.warning(f"Signal budget is 0 for {signal.pair}")
+            return
+
+        # Use entry price (or current market if no entry zone)
+        buy_price = entry if signal.entry_high else current_price
+        if buy_price <= 0:
+            return
+
+        amount = usdt_amount / buy_price
+
+        # Round amount to 6 decimal places
+        amount = round(amount, 6)
+        if amount <= 0:
+            return
+
+        # Place buy order via strategy callback
+        order_id = None
+        if self._buy_fn:
+            try:
+                from decimal import Decimal
+                order_id = self._buy_fn(
+                    symbol=signal.pair,
+                    amount=Decimal(str(amount)),
+                    price=Decimal(str(buy_price)),
+                )
+            except Exception as e:
+                logger.error(f"Signal buy failed for {signal.pair}: {e}")
+                return
+
+        if order_id:
+            self._position_mgr.open_position(
+                symbol=signal.pair,
+                entry_price=buy_price,
+                amount=amount,
+                stop_loss=signal.stop_loss or buy_price * 0.95,
+                take_profits=signal.take_profits,
+                signal_confidence=signal.confidence.value,
+                raw_message=signal.raw_message,
+                channel_name=channel_name,
+                order_id=str(order_id),
+            )
+            self._risk.record_trade_opened()
+            self._log_audit_trade(signal, channel_name, "OPEN_LONG", buy_price, "live_entry")
+            self._notify(
+                f"[LIVE] Signal entered: {signal.pair}\n"
+                f"Entry: ${buy_price:,.2f}\n"
+                f"Amount: {amount:.6f} (${usdt_amount:.2f})\n"
+                f"SL: ${signal.stop_loss:,.2f}\n"
+                f"TPs: {', '.join(f'${tp:,.2f}' for tp in signal.take_profits)}\n"
+                f"Confidence: {signal.confidence.value}\n"
+                f"Channel: {channel_name}"
+            )
+            logger.info(f"[LIVE] Signal entered: {signal.pair} @ ${buy_price:,.2f} "
+                        f"amount={amount:.6f} order={order_id}")
+        else:
+            logger.warning(f"Signal buy returned no order ID for {signal.pair}")
+            self._log_audit_trade(signal, channel_name, "buy_failed", buy_price, "no_order_id")
 
     def _manage_positions(self, connector):
         """Check all signal positions for SL/TP hits."""
@@ -237,6 +310,8 @@ class SignalEngine:
 
             # Stop-loss check
             if current_price <= pos.stop_loss:
+                if not self._audit_mode:
+                    self._execute_close(pos, current_price, "stop_loss")
                 pnl = self._position_mgr.close_position(pos.symbol, current_price, "stop_loss")
                 self._record_close(pos, current_price, "stop_loss", pnl)
                 continue
@@ -244,6 +319,8 @@ class SignalEngine:
             # TP1 hit
             if not pos.tp1_hit and len(pos.take_profits) >= 1 and current_price >= pos.take_profits[0]:
                 pos.tp1_hit = True
+                if not self._audit_mode:
+                    self._execute_close(pos, pos.take_profits[0], "tp1")
                 self._position_mgr.partial_close(pos.symbol, pos.tp1_close_pct, pos.take_profits[0], "tp1")
                 self._position_mgr.update_stop_loss(pos.symbol, pos.entry_price)
                 self._notify(f"[{'AUDIT' if self._audit_mode else 'LIVE'}] TP1 hit: {pos.symbol} @ ${pos.take_profits[0]:,.2f}, SL → breakeven")
@@ -252,6 +329,8 @@ class SignalEngine:
             # TP2 hit
             if not pos.tp2_hit and len(pos.take_profits) >= 2 and current_price >= pos.take_profits[1]:
                 pos.tp2_hit = True
+                if not self._audit_mode:
+                    self._execute_close(pos, pos.take_profits[1], "tp2")
                 self._position_mgr.partial_close(pos.symbol, pos.tp2_close_pct, pos.take_profits[1], "tp2")
                 self._position_mgr.update_stop_loss(pos.symbol, pos.take_profits[0])
                 self._notify(f"[{'AUDIT' if self._audit_mode else 'LIVE'}] TP2 hit: {pos.symbol} @ ${pos.take_profits[1]:,.2f}")
@@ -260,6 +339,8 @@ class SignalEngine:
             # TP3 hit
             if not pos.tp3_hit and len(pos.take_profits) >= 3 and current_price >= pos.take_profits[2]:
                 pos.tp3_hit = True
+                if not self._audit_mode:
+                    self._execute_close(pos, pos.take_profits[2], "tp3")
                 pnl = self._position_mgr.close_position(pos.symbol, pos.take_profits[2], "tp3")
                 self._record_close(pos, pos.take_profits[2], "tp3", pnl)
 
@@ -271,10 +352,9 @@ class SignalEngine:
         if not pos:
             return
 
-        # Use entry price as close price in audit mode (will be updated by position manager)
         close_price = signal.entry_low or pos.entry_price
-        if self._audit_mode:
-            close_price = pos.entry_price * 1.001  # Simulate small profit on manual close
+        if not self._audit_mode:
+            self._execute_close(pos, close_price, "trader_close")
 
         pnl = self._position_mgr.close_position(signal.pair, close_price, "trader_close")
         self._record_close(pos, close_price, "trader_close", pnl)
@@ -283,15 +363,48 @@ class SignalEngine:
     def _get_current_price(self, connector, symbol: str) -> float:
         """Get current price from connector."""
         try:
+            if self._get_price_fn:
+                return self._get_price_fn(symbol)
             if connector is None:
                 return 0
-            # Try to get mid price from connector
             price_obj = connector.get_mid_price(symbol)
             if price_obj:
                 return float(price_obj)
         except Exception:
             pass
         return 0
+
+    def _get_equity(self, connector) -> float:
+        """Get total account equity from connector."""
+        try:
+            if connector is None:
+                return 0
+            bal = connector.get_balance("USDT")
+            if bal:
+                return float(bal.total_balance)
+        except Exception:
+            pass
+        return 0
+
+    def _execute_close(self, pos: SignalPosition, price: float, reason: str):
+        """Place a sell order to close a signal position."""
+        if not self._sell_fn or pos.remaining_amount <= 0:
+            return
+
+        try:
+            from decimal import Decimal
+            amount_to_sell = round(pos.remaining_amount, 6)
+            if amount_to_sell <= 0:
+                return
+            order_id = self._sell_fn(
+                symbol=pos.symbol,
+                amount=Decimal(str(amount_to_sell)),
+                price=Decimal(str(price)),
+            )
+            if order_id:
+                logger.info(f"Signal close order placed: {pos.symbol} {amount_to_sell} @ ${price:,.2f} ({reason})")
+        except Exception as e:
+            logger.error(f"Signal close failed for {pos.symbol}: {e}")
 
     def _refresh_available_pairs(self):
         """Fetch available Binance USDT pairs."""

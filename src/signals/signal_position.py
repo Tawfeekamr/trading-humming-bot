@@ -33,6 +33,7 @@ class SignalPosition:
     exit_reason: str = ""
     tp1_close_pct: float = 0.33
     tp2_close_pct: float = 0.50
+    order_id: str = ""
 
     @property
     def remaining_amount(self) -> float:

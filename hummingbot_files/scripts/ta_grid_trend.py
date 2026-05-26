@@ -620,6 +620,9 @@ class TAGridTrendStrategy(StrategyV2Base):
                 config=signal_cfg,
                 btc_regime_fn=_signal_btc_regime,
                 telegram_send_fn=lambda msg: asyncio.get_event_loop().create_task(self.telegram.send(msg)) if self.telegram else None,
+                buy_fn=lambda symbol, amount, price: self.buy(self.exchange, symbol, amount, OrderType.LIMIT_MAKER, price=price),
+                sell_fn=lambda symbol, amount, price: self.sell(self.exchange, symbol, amount, OrderType.LIMIT_MAKER, price=price),
+                get_price_fn=lambda symbol: self._last_price.get(symbol, 0),
             )
             self._signal_engine.start_listener()
             logger.info("Signal Copy Engine initialized")

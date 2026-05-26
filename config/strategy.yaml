@@ -109,7 +109,7 @@ fee_optimization:
 # ── Signal Copy Engine ──────────────────────────────────────────
 signal_copy:
   enabled: true                     # Signal Copy Engine active
-  audit_mode: true                  # Paper trade first, log to journal, don't execute
+  audit_mode: false                 # Execute trades (paper money on testnet)
   ai_model: "glm-4-flash"          # ZhipuAI GLM model for signal parsing
 
   # Position management
