@@ -185,6 +185,12 @@ class TelegramCommandHandler:
             "trend_pnl": self._cmd_trend_pnl,
             "trend_close": self._cmd_trend_close,
             "trend_history": self._cmd_trend_history,
+            "signal_status": self._cmd_signal_status,
+            "signal_pnl": self._cmd_signal_pnl,
+            "signal_pause": self._cmd_signal_pause,
+            "signal_resume": self._cmd_signal_resume,
+            "signal_close": self._cmd_signal_close,
+            "signal_history": self._cmd_signal_history,
         }
 
     def _dispatch(self, handler, chat_id: str, msg: dict):
@@ -1014,6 +1020,131 @@ class TelegramCommandHandler:
             "/trend_pnl — Trend strategy P&L report\n"
             "/trend_close — Force close all trend positions\n"
             "/trend_history — Recent trend trade history\n"
+            "/signal_status — Signal copy engine status\n"
+            "/signal_pnl — Signal trades P&L report\n"
+            "/signal_pause — Pause signal execution\n"
+            "/signal_resume — Resume signal execution\n"
+            "/signal_close &lt;PAIR&gt; — Close a signal position\n"
+            "/signal_history — Recent signal messages\n"
             "/help — This message",
             parse_mode="HTML"
         )
+
+    # ── Signal Copy Commands ─────────────────────────────────────────
+
+    def _cmd_signal_status(self, update, context):
+        engine = getattr(self.strategy, '_signal_engine', None)
+        if engine is None:
+            update.message.reply_text("Signal engine not configured.")
+            return
+        status = engine.get_status()
+        risk = status.get("risk", {})
+        positions = engine._position_mgr.get_open_positions()
+
+        mode_tag = "AUDIT" if status.get("audit_mode") else "LIVE"
+        lines = [
+            f"📡 <b>SIGNAL ENGINE ({mode_tag})</b>",
+            "•••",
+            f"State: <b>{status['state']}</b>",
+            f"Open positions: {status['open_positions']}/{engine._risk._max_positions}",
+            f"Trades today: {risk.get('trades_today', 0)}/{risk.get('max_trades', 0)}",
+            f"Daily P&L: ${risk.get('daily_pnl', 0):.2f}",
+        ]
+
+        if positions:
+            lines.append("•••")
+            lines.append("📈 <b>Open Positions:</b>")
+            for pos in positions:
+                pnl_pct = 0
+                if pos.entry_price > 0:
+                    pnl_pct = ((pos.remaining_amount * pos.entry_price) - (pos.amount * pos.entry_price)) / (pos.amount * pos.entry_price) * 100
+                lines.append(
+                    f"  {pos.symbol}: ${pos.entry_price:,.2f} ({pos.hold_minutes}m) "
+                    f"SL=${pos.stop_loss:,.2f} TPs={'✅' if pos.tp1_hit else '⬜'}/{'✅' if pos.tp2_hit else '⬜'}/{'✅' if pos.tp3_hit else '⬜'}"
+                )
+
+        update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
+    def _cmd_signal_pnl(self, update, context):
+        engine = getattr(self.strategy, '_signal_engine', None)
+        if engine is None:
+            update.message.reply_text("Signal engine not configured.")
+            return
+
+        journal = engine._journal
+        today = journal.summary(days=0)
+        week = journal.summary(days=7)
+        month = journal.summary(days=30)
+        by_channel = journal.summary_by_channel(days=30)
+
+        lines = [
+            "📊 <b>SIGNAL P&L</b>",
+            "•••",
+            f"Today: {today['total_trades']} trades, ${today['total_pnl']:.2f} ({today['win_rate']:.0f}% win)",
+            f"Week: {week['total_trades']} trades, ${week['total_pnl']:.2f} ({week['win_rate']:.0f}% win)",
+            f"Month: {month['total_trades']} trades, ${month['total_pnl']:.2f} ({month['win_rate']:.0f}% win)",
+        ]
+
+        if by_channel:
+            lines.append("•••")
+            lines.append("📋 <b>By Channel (30d):</b>")
+            for name, stats in by_channel.items():
+                lines.append(f"  {name}: {stats['trades']} trades, ${stats['pnl']:.2f} ({stats['win_rate']:.0f}% win)")
+
+        update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
+    def _cmd_signal_pause(self, update, context):
+        engine = getattr(self.strategy, '_signal_engine', None)
+        if engine is None:
+            update.message.reply_text("Signal engine not configured.")
+            return
+        engine.pause()
+        update.message.reply_text("⏸ Signal engine paused.")
+
+    def _cmd_signal_resume(self, update, context):
+        engine = getattr(self.strategy, '_signal_engine', None)
+        if engine is None:
+            update.message.reply_text("Signal engine not configured.")
+            return
+        engine.resume()
+        update.message.reply_text("▶️ Signal engine resumed.")
+
+    def _cmd_signal_close(self, update, context=None):
+        engine = getattr(self.strategy, '_signal_engine', None)
+        if engine is None:
+            update.message.reply_text("Signal engine not configured.")
+            return
+        text = getattr(update.message, 'text', '')
+        parts = text.split()
+        if len(parts) < 2:
+            update.message.reply_text("Usage: /signal_close BTC-USDT")
+            return
+        pair = parts[1].upper().replace("/", "-")
+        if not pair.endswith("-USDT"):
+            pair = f"{pair}-USDT"
+        result = engine.manual_close(pair)
+        if result:
+            update.message.reply_text(f"Closed signal position: {pair}")
+        else:
+            update.message.reply_text(f"No open signal position for {pair}")
+
+    def _cmd_signal_history(self, update, context):
+        engine = getattr(self.strategy, '_signal_engine', None)
+        if engine is None:
+            update.message.reply_text("Signal engine not configured.")
+            return
+
+        signals = engine._journal.recent_signals(limit=10)
+        if not signals:
+            update.message.reply_text("No signals received yet.")
+            return
+
+        lines = ["📨 <b>Recent Signals</b>", "•••"]
+        for s in signals:
+            ts = s.get("timestamp", "")[:16]
+            action = s.get("action", "?")
+            pair = s.get("pair", "?")
+            text = s.get("text", "")[:60]
+            lines.append(f"{ts} [{action}] {pair}: {text}")
+
+        update.message.reply_text("\n".join(lines), parse_mode="HTML")

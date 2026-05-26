@@ -1,0 +1,373 @@
+"""
+signal_engine.py — Orchestrator for the Signal Copy Trading Engine.
+
+Receives messages from ChannelListener, parses via GLM, validates,
+and executes. Supports audit mode (paper trade) for measuring signal quality.
+"""
+
+import logging
+import os
+import time
+from enum import Enum
+from typing import Optional, Callable
+
+from .channel_listener import ChannelListener
+from .signal_parser import SignalParser, ParsedSignal, SignalAction, SignalConfidence
+from .signal_validator import SignalValidator
+from .signal_risk import SignalRiskGuard
+from .signal_position import SignalPositionManager, SignalPosition
+from .signal_journal import SignalJournal, SignalTrade
+
+logger = logging.getLogger(__name__)
+
+
+class SignalEngineState(Enum):
+    LISTENING = "LISTENING"
+    PAUSED = "PAUSED"
+    DISABLED = "DISABLED"
+
+
+class SignalEngine:
+    def __init__(self, config: dict, btc_regime_fn: Callable,
+                 telegram_send_fn: Optional[Callable] = None):
+        self._config = config
+        self._get_btc_regime = btc_regime_fn
+        self._telegram_send = telegram_send_fn
+
+        self._enabled = config.get("enabled", False)
+        self._audit_mode = config.get("audit_mode", True)
+        self._manual_pause = False
+        self._state = SignalEngineState.LISTENING
+
+        # Sub-components
+        channel_ids = [int(c.strip()) for c in
+                       os.environ.get("SIGNAL_CHANNEL_IDS", "").split(",") if c.strip()]
+        self._listener = ChannelListener(
+            api_id=int(os.environ.get("TELEGRAM_API_ID", "0")),
+            api_hash=os.environ.get("TELEGRAM_API_HASH", ""),
+            channel_ids=channel_ids,
+            session_name=config.get("session_name", "signal_listener"),
+        )
+        self._parser = SignalParser(
+            api_key=os.environ.get("ZHIPU_API_KEY", ""),
+            model=config.get("ai_model", "glm-4-flash"),
+        )
+        self._validator = SignalValidator(config)
+        self._risk = SignalRiskGuard(config)
+        self._position_mgr = SignalPositionManager(config)
+        self._journal = SignalJournal()
+
+        # Fetch available Binance pairs on init
+        self._available_pairs: set[str] = set()
+        self._last_pair_refresh = 0
+
+        logger.info(f"Signal Engine initialized: "
+                     f"enabled={self._enabled}, audit={self._audit_mode}, "
+                     f"channels={len(channel_ids)}")
+
+    @property
+    def state(self) -> SignalEngineState:
+        if not self._enabled:
+            return SignalEngineState.DISABLED
+        if self._manual_pause:
+            return SignalEngineState.PAUSED
+        return self._state
+
+    def start_listener(self):
+        """Start Telethon listener in background thread."""
+        if self._enabled:
+            self._listener.start()
+
+    def stop_listener(self):
+        self._listener.stop()
+
+    def tick(self, connector=None):
+        """Called from on_tick(). Processes queued messages and manages positions."""
+        if not self._enabled or self._manual_pause:
+            return
+
+        # Refresh available pairs every hour
+        if time.time() - self._last_pair_refresh > 3600:
+            self._refresh_available_pairs()
+
+        # Process queued messages
+        while True:
+            msg = self._listener.get_message()
+            if msg is None:
+                break
+            self._process_message(msg, connector)
+
+        # Manage open positions
+        if connector:
+            self._manage_positions(connector)
+
+    def get_status(self) -> dict:
+        risk_status = self._risk.get_status()
+        positions = self._position_mgr.get_open_positions()
+        return {
+            "state": self.state.value,
+            "audit_mode": self._audit_mode,
+            "open_positions": len(positions),
+            "risk": risk_status,
+        }
+
+    def pause(self):
+        self._manual_pause = True
+        logger.info("Signal engine paused")
+
+    def resume(self):
+        self._manual_pause = False
+        logger.info("Signal engine resumed")
+
+    def manual_close(self, symbol: str) -> Optional[str]:
+        """Manually close a signal position. Returns reason or None."""
+        pos = self._position_mgr.get_position(symbol)
+        if not pos:
+            return None
+        pos.is_closed = True
+        pos.exit_reason = "manual"
+        return "manual"
+
+    def _process_message(self, msg: dict, connector):
+        """Full pipeline: parse → validate → execute."""
+        text = msg["text"]
+        channel_name = msg.get("channel_name", "unknown")
+
+        # Parse with GLM
+        signal = self._parser.parse(text)
+        logger.info(f"Signal parsed: action={signal.action.value}, pair={signal.pair}, "
+                     f"reasoning={signal.parse_reasoning[:80]}")
+
+        # Log raw message for audit
+        self._journal.log_raw_message(
+            channel_id=msg.get("channel_id", 0),
+            channel_name=channel_name,
+            message_id=msg.get("message_id", 0),
+            text=text,
+            parsed_action=signal.action.value,
+            parsed_pair=signal.pair or "",
+            parse_reasoning=signal.parse_reasoning,
+        )
+
+        if signal.action == SignalAction.NOT_A_SIGNAL:
+            return
+
+        # Handle CLOSE signals
+        if signal.action == SignalAction.CLOSE:
+            self._handle_close(signal, channel_name)
+            return
+
+        # Handle UPDATE signals
+        if signal.action == SignalAction.UPDATE_SL:
+            if signal.pair and signal.stop_loss:
+                self._position_mgr.update_stop_loss(signal.pair, signal.stop_loss)
+                logger.info(f"Signal SL updated: {signal.pair} → ${signal.stop_loss:,.2f}")
+            return
+
+        if signal.action != SignalAction.OPEN_LONG:
+            return
+
+        # Validate
+        valid, reason = self._validator.validate(signal)
+        if not valid:
+            logger.info(f"Signal rejected ({channel_name}): {reason}")
+            self._notify(f"Signal rejected: {signal.pair} — {reason}")
+            self._log_audit_trade(signal, channel_name, "rejected", 0, reason)
+            return
+
+        # BTC correlation gate
+        btc_regime, _, _ = self._get_btc_regime()
+        if btc_regime == "DANGER" and self._config.get("use_btc_correlation_gate", True):
+            logger.info(f"Signal blocked by BTC DANGER: {signal.pair}")
+            self._notify(f"Signal blocked (BTC DANGER): {signal.pair}")
+            self._log_audit_trade(signal, channel_name, "blocked_btc", 0, "btc_danger")
+            return
+
+        # Risk checks
+        if not self._risk.can_trade():
+            logger.info("Signal blocked by risk guard")
+            self._log_audit_trade(signal, channel_name, "blocked_risk", 0, "risk_limit")
+            return
+
+        # Execute (or simulate in audit mode)
+        if self._audit_mode:
+            self._simulate_entry(signal, channel_name)
+        else:
+            self._execute_entry(signal, channel_name, connector)
+
+    def _simulate_entry(self, signal: ParsedSignal, channel_name: str):
+        """Paper trade: log the signal as if we entered."""
+        entry = signal.entry_high or signal.entry_low or 0
+        if entry <= 0:
+            return
+
+        self._position_mgr.open_position(
+            symbol=signal.pair,
+            entry_price=entry,
+            amount=100,  # Simulated amount
+            stop_loss=signal.stop_loss or entry * 0.95,
+            take_profits=signal.take_profits,
+            signal_confidence=signal.confidence.value,
+            raw_message=signal.raw_message,
+            channel_name=channel_name,
+        )
+        self._risk.record_trade_opened()
+
+        self._log_audit_trade(signal, channel_name, "OPEN_LONG", entry, "audit_entry")
+        self._notify(
+            f"[AUDIT] Signal entered: {signal.pair}\n"
+            f"Entry: ${entry:,.2f}\n"
+            f"SL: ${signal.stop_loss:,.2f}\n"
+            f"TPs: {', '.join(f'${tp:,.2f}' for tp in signal.take_profits)}\n"
+            f"Channel: {channel_name}"
+        )
+        logger.info(f"[AUDIT] Signal entered: {signal.pair} @ ${entry:,.2f} from {channel_name}")
+
+    def _execute_entry(self, signal: ParsedSignal, channel_name: str, connector):
+        """Live execution: place real order."""
+        # TODO: Implement live order placement via connector when audit period ends
+        logger.warning("Live signal execution not yet implemented")
+
+    def _manage_positions(self, connector):
+        """Check all signal positions for SL/TP hits."""
+        for pos in self._position_mgr.get_open_positions():
+            current_price = self._get_current_price(connector, pos.symbol)
+            if current_price <= 0:
+                continue
+
+            # Stop-loss check
+            if current_price <= pos.stop_loss:
+                pnl = self._position_mgr.close_position(pos.symbol, current_price, "stop_loss")
+                self._record_close(pos, current_price, "stop_loss", pnl)
+                continue
+
+            # TP1 hit
+            if not pos.tp1_hit and len(pos.take_profits) >= 1 and current_price >= pos.take_profits[0]:
+                pos.tp1_hit = True
+                self._position_mgr.partial_close(pos.symbol, pos.tp1_close_pct, pos.take_profits[0], "tp1")
+                self._position_mgr.update_stop_loss(pos.symbol, pos.entry_price)
+                self._notify(f"[{'AUDIT' if self._audit_mode else 'LIVE'}] TP1 hit: {pos.symbol} @ ${pos.take_profits[0]:,.2f}, SL → breakeven")
+                self._log_position_trade(pos, pos.take_profits[0], "tp1")
+
+            # TP2 hit
+            if not pos.tp2_hit and len(pos.take_profits) >= 2 and current_price >= pos.take_profits[1]:
+                pos.tp2_hit = True
+                self._position_mgr.partial_close(pos.symbol, pos.tp2_close_pct, pos.take_profits[1], "tp2")
+                self._position_mgr.update_stop_loss(pos.symbol, pos.take_profits[0])
+                self._notify(f"[{'AUDIT' if self._audit_mode else 'LIVE'}] TP2 hit: {pos.symbol} @ ${pos.take_profits[1]:,.2f}")
+                self._log_position_trade(pos, pos.take_profits[1], "tp2")
+
+            # TP3 hit
+            if not pos.tp3_hit and len(pos.take_profits) >= 3 and current_price >= pos.take_profits[2]:
+                pos.tp3_hit = True
+                pnl = self._position_mgr.close_position(pos.symbol, pos.take_profits[2], "tp3")
+                self._record_close(pos, pos.take_profits[2], "tp3", pnl)
+
+    def _handle_close(self, signal: ParsedSignal, channel_name: str):
+        """Handle CLOSE signal from trader."""
+        if not signal.pair:
+            return
+        pos = self._position_mgr.get_position(signal.pair)
+        if not pos:
+            return
+
+        # Use entry price as close price in audit mode (will be updated by position manager)
+        close_price = signal.entry_low or pos.entry_price
+        if self._audit_mode:
+            close_price = pos.entry_price * 1.001  # Simulate small profit on manual close
+
+        pnl = self._position_mgr.close_position(signal.pair, close_price, "trader_close")
+        self._record_close(pos, close_price, "trader_close", pnl)
+        self._notify(f"Signal closed by trader: {signal.pair}")
+
+    def _get_current_price(self, connector, symbol: str) -> float:
+        """Get current price from connector."""
+        try:
+            if connector is None:
+                return 0
+            # Try to get mid price from connector
+            price_obj = connector.get_mid_price(symbol)
+            if price_obj:
+                return float(price_obj)
+        except Exception:
+            pass
+        return 0
+
+    def _refresh_available_pairs(self):
+        """Fetch available Binance USDT pairs."""
+        try:
+            import urllib.request
+            url = "https://api.binance.com/api/v3/exchangeInfo"
+            req = urllib.request.Request(url, headers={"User-Agent": "signal-engine"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = __import__("json").loads(resp.read())
+            self._available_pairs = {
+                s["symbol"] for s in data["symbols"]
+                if s["quoteAsset"] == "USDT" and s["status"] == "TRADING"
+            }
+            self._validator.set_available_pairs(self._available_pairs)
+            self._last_pair_refresh = time.time()
+            logger.info(f"Refreshed {len(self._available_pairs)} Binance pairs")
+        except Exception as e:
+            logger.warning(f"Failed to refresh pairs: {e}")
+
+    def _record_close(self, pos: SignalPosition, price: float, reason: str, pnl: Optional[float]):
+        """Record a closed position in the journal."""
+        if pnl is not None:
+            self._risk.record_trade_closed(pnl)
+        self._log_position_trade(pos, price, reason)
+        self._notify(
+            f"[{'AUDIT' if self._audit_mode else 'LIVE'}] Closed: {pos.symbol} "
+            f"({reason}) @ ${price:,.2f}, PnL: ${pnl or 0:.2f}"
+        )
+
+    def _log_audit_trade(self, signal: ParsedSignal, channel_name: str,
+                         action: str, price: float, reason: str):
+        self._journal.log_trade(SignalTrade(
+            timestamp=__import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
+            symbol=signal.pair or "",
+            channel_name=channel_name,
+            action=action,
+            entry_price=signal.entry_high or signal.entry_low or 0,
+            current_price=price,
+            quantity=0,
+            realized_pnl=0,
+            exit_reason=reason,
+            signal_confidence=signal.confidence.value,
+            stop_loss=signal.stop_loss or 0,
+            take_profits=str(signal.take_profits),
+            tp1_hit=0, tp2_hit=0, tp3_hit=0,
+            raw_message=signal.raw_message[:500],
+            parse_reasoning=signal.parse_reasoning,
+            is_audit=1 if self._audit_mode else 0,
+        ))
+
+    def _log_position_trade(self, pos: SignalPosition, price: float, reason: str):
+        self._journal.log_trade(SignalTrade(
+            timestamp=__import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
+            symbol=pos.symbol,
+            channel_name=pos.channel_name,
+            action=reason,
+            entry_price=pos.entry_price,
+            current_price=price,
+            quantity=pos.remaining_amount,
+            realized_pnl=(price - pos.entry_price) * pos.remaining_amount,
+            exit_reason=reason,
+            signal_confidence=pos.signal_confidence,
+            stop_loss=pos.stop_loss,
+            take_profits=str(pos.take_profits),
+            tp1_hit=int(pos.tp1_hit),
+            tp2_hit=int(pos.tp2_hit),
+            tp3_hit=int(pos.tp3_hit),
+            raw_message=pos.raw_message[:500],
+            parse_reasoning="",
+            is_audit=1 if self._audit_mode else 0,
+        ))
+
+    def _notify(self, message: str):
+        """Send Telegram notification."""
+        if self._telegram_send:
+            try:
+                self._telegram_send(message)
+            except Exception as e:
+                logger.error(f"Signal notify failed: {e}")

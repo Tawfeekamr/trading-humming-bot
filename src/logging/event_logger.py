@@ -39,6 +39,31 @@ class EventLogger:
                 continue
         if removed:
             logger.info(f"Cleaned up {removed} old event log files (>{self._MAX_LOG_AGE_DAYS}d)")
+        self._cleanup_hummingbot_logs()
+
+    def _cleanup_hummingbot_logs(self) -> None:
+        _MAX_HB_LOG_SIZE = 50 * 1024 * 1024  # 50MB
+        removed = 0
+        truncated = 0
+        for path in self._log_dir.glob("logs_*.log.*"):
+            try:
+                if path.stat().st_size > _MAX_HB_LOG_SIZE:
+                    path.unlink()
+                    removed += 1
+            except OSError:
+                continue
+        for path in self._log_dir.glob("logs_*.log"):
+            try:
+                if path.stat().st_size > _MAX_HB_LOG_SIZE:
+                    content = path.read_text(encoding="utf-8", errors="replace")
+                    lines = content.splitlines()
+                    keep = lines[-5000:]
+                    path.write_text("\n".join(keep) + "\n", encoding="utf-8")
+                    truncated += 1
+            except OSError:
+                continue
+        if removed or truncated:
+            logger.info(f"Hummingbot log cleanup: removed {removed} rotated files, truncated {truncated} active logs")
 
     def _get_file(self) -> Any:
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")

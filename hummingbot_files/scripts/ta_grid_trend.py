@@ -604,6 +604,26 @@ class TAGridTrendStrategy(StrategyV2Base):
         self._sys_monitor = SystemAlertMonitor(self.telegram, interval_sec=300)
         self._sys_monitor.start()
 
+        # ── Signal Copy Engine ──
+        self._signal_engine = None
+        signal_cfg = cfg.get("signal_copy", {})
+        if signal_cfg.get("enabled", False):
+            from src.signals.signal_engine import SignalEngine
+
+            def _signal_btc_regime():
+                pred = self._ml_predictions.get("BTC-USDT", (None, 0.0, 0.0))
+                regime_map = {0: "RANGING", 1: "TRENDING", 2: "DANGER"}
+                regime_str = regime_map.get(pred[0], "RANGING") if pred[0] is not None else "RANGING"
+                return (regime_str, pred[1], pred[2])
+
+            self._signal_engine = SignalEngine(
+                config=signal_cfg,
+                btc_regime_fn=_signal_btc_regime,
+                telegram_send_fn=lambda msg: asyncio.get_event_loop().create_task(self.telegram.send(msg)) if self.telegram else None,
+            )
+            self._signal_engine.start_listener()
+            logger.info("Signal Copy Engine initialized")
+
         # Startup Telegram alert
         try:
             loop = asyncio.get_event_loop()
@@ -709,6 +729,13 @@ class TAGridTrendStrategy(StrategyV2Base):
             # ── Trend Engine (all pairs) ──
             for symbol, engine in self.pairs.items():
                 self._trend_tick(engine)
+
+            # ── Signal Copy Engine ──
+            if self._signal_engine is not None:
+                try:
+                    self._signal_engine.tick(connector)
+                except Exception as e:
+                    logger.error(f"Signal engine tick error: {e}")
 
             # ── Periodic orphan cleanup ──
             if self._tick_count % 1000 == 0:
@@ -2053,6 +2080,10 @@ class TAGridTrendStrategy(StrategyV2Base):
         # Save capital manager state
         if hasattr(self, '_capital_mgr'):
             self._capital_mgr.save()
+
+        # Stop signal engine listener
+        if hasattr(self, '_signal_engine') and self._signal_engine is not None:
+            self._signal_engine.stop_listener()
 
         super().on_stop()
         if hasattr(self, "_sys_monitor"):

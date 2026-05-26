@@ -1,0 +1,199 @@
+"""
+signal_journal.py — SQLite journal for signal copy trading.
+Logs every raw message (audit) and every executed trade with P&L.
+"""
+
+import sqlite3
+import logging
+import threading
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
+
+DB_PATH = Path("data/signal_journal.db")
+
+
+@dataclass
+class SignalTrade:
+    timestamp: str
+    symbol: str
+    channel_name: str
+    action: str              # "OPEN_LONG" | "CLOSE" | etc
+    entry_price: float
+    current_price: float
+    quantity: float
+    realized_pnl: float
+    exit_reason: str         # "stop_loss" | "tp1" | "tp2" | "tp3" | "manual" | "btc_danger"
+    signal_confidence: str
+    stop_loss: float
+    take_profits: str        # JSON string
+    tp1_hit: int
+    tp2_hit: int
+    tp3_hit: int
+    raw_message: str
+    parse_reasoning: str
+    is_audit: int            # 1 = paper trade (audit mode), 0 = live
+
+
+class SignalJournal:
+    def __init__(self, db_path: Path = DB_PATH):
+        self.db_path = db_path
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.Lock()
+        self._init_db()
+
+    def _conn(self):
+        conn = sqlite3.connect(str(self.db_path), timeout=10)
+        conn.execute("PRAGMA journal_mode=WAL")
+        return conn
+
+    def _init_db(self):
+        with self._conn() as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS raw_messages (
+                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp     TEXT NOT NULL,
+                    channel_id    INTEGER,
+                    channel_name  TEXT,
+                    message_id    INTEGER,
+                    text          TEXT,
+                    parsed_action TEXT,
+                    parsed_pair   TEXT,
+                    parse_reasoning TEXT
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS signal_trades (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp       TEXT NOT NULL,
+                    symbol          TEXT NOT NULL,
+                    channel_name    TEXT,
+                    action          TEXT,
+                    entry_price     REAL,
+                    current_price   REAL,
+                    quantity        REAL,
+                    realized_pnl    REAL,
+                    exit_reason     TEXT,
+                    signal_confidence TEXT,
+                    stop_loss       REAL,
+                    take_profits    TEXT,
+                    tp1_hit         INTEGER DEFAULT 0,
+                    tp2_hit         INTEGER DEFAULT 0,
+                    tp3_hit         INTEGER DEFAULT 0,
+                    raw_message     TEXT,
+                    parse_reasoning TEXT,
+                    is_audit        INTEGER DEFAULT 1
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_st_timestamp ON signal_trades(timestamp)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_st_channel ON signal_trades(channel_name)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_rm_timestamp ON raw_messages(timestamp)")
+
+    def log_raw_message(self, channel_id: int, channel_name: str,
+                        message_id: int, text: str,
+                        parsed_action: str, parsed_pair: str,
+                        parse_reasoning: str = ""):
+        with self._lock:
+            try:
+                with self._conn() as conn:
+                    conn.execute(
+                        "INSERT INTO raw_messages (timestamp, channel_id, channel_name, message_id, text, parsed_action, parsed_pair, parse_reasoning) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        (datetime.now(timezone.utc).isoformat(), channel_id, channel_name,
+                         message_id, text, parsed_action, parsed_pair, parse_reasoning),
+                    )
+            except Exception as e:
+                logger.error(f"Signal journal write failed: {e}")
+
+    def log_trade(self, trade: SignalTrade):
+        with self._lock:
+            try:
+                with self._conn() as conn:
+                    conn.execute(
+                        "INSERT INTO signal_trades "
+                        "(timestamp, symbol, channel_name, action, entry_price, current_price, quantity, "
+                        "realized_pnl, exit_reason, signal_confidence, stop_loss, take_profits, "
+                        "tp1_hit, tp2_hit, tp3_hit, raw_message, parse_reasoning, is_audit) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (trade.timestamp, trade.symbol, trade.channel_name, trade.action,
+                         trade.entry_price, trade.current_price, trade.quantity,
+                         trade.realized_pnl, trade.exit_reason, trade.signal_confidence,
+                         trade.stop_loss, trade.take_profits,
+                         trade.tp1_hit, trade.tp2_hit, trade.tp3_hit,
+                         trade.raw_message, trade.parse_reasoning, trade.is_audit),
+                    )
+            except Exception as e:
+                logger.error(f"Signal trade journal write failed: {e}")
+
+    def summary(self, days: int = 0) -> dict:
+        """Get P&L summary. days=0 means today, -1 means all time."""
+        if days == 0:
+            cutoff = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            where = f"timestamp >= '{cutoff}'"
+        elif days > 0:
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+            where = f"timestamp >= '{cutoff}'"
+        else:
+            where = "1=1"
+
+        try:
+            with self._conn() as conn:
+                row = conn.execute(
+                    f"SELECT COUNT(*), SUM(realized_pnl), AVG(realized_pnl), "
+                    f"SUM(CASE WHEN realized_pnl > 0 THEN 1 ELSE 0 END) "
+                    f"FROM signal_trades WHERE {where}"
+                ).fetchone()
+                total, total_pnl, avg_pnl, wins = row
+                wins = wins or 0
+                total = total or 0
+                win_rate = (wins / total * 100) if total > 0 else 0
+                return {
+                    "total_trades": total,
+                    "total_pnl": total_pnl or 0,
+                    "avg_pnl": avg_pnl or 0,
+                    "win_rate": round(win_rate, 1),
+                }
+        except Exception:
+            return {"total_trades": 0, "total_pnl": 0, "avg_pnl": 0, "win_rate": 0}
+
+    def summary_by_channel(self, days: int = 7) -> dict:
+        """Get P&L breakdown by channel."""
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        try:
+            with self._conn() as conn:
+                rows = conn.execute(
+                    f"SELECT channel_name, COUNT(*), SUM(realized_pnl), "
+                    f"SUM(CASE WHEN realized_pnl > 0 THEN 1 ELSE 0 END) "
+                    f"FROM signal_trades WHERE timestamp >= ? GROUP BY channel_name",
+                    (cutoff,),
+                ).fetchall()
+                result = {}
+                for name, total, pnl, wins in rows:
+                    wins = wins or 0
+                    result[name] = {
+                        "trades": total,
+                        "pnl": pnl or 0,
+                        "win_rate": round(wins / total * 100, 1) if total > 0 else 0,
+                    }
+                return result
+        except Exception:
+            return {}
+
+    def recent_signals(self, limit: int = 10) -> list[dict]:
+        """Get recent raw messages with parse results."""
+        try:
+            with self._conn() as conn:
+                rows = conn.execute(
+                    "SELECT timestamp, channel_name, parsed_action, parsed_pair, text "
+                    "FROM raw_messages ORDER BY id DESC LIMIT ?",
+                    (limit,),
+                ).fetchall()
+                return [
+                    {"timestamp": r[0], "channel": r[1], "action": r[2],
+                     "pair": r[3], "text": r[4][:100] if r[4] else ""}
+                    for r in rows
+                ]
+        except Exception:
+            return []
