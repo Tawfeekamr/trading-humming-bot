@@ -929,7 +929,7 @@ class TelegramCommandHandler:
                     if pm:
                         positions = pm.get_all_positions()
                         total_open += len(positions)
-                        total_max = getattr(pm, '_max_positions', 8)
+                        total_max += getattr(pm, '_max_positions', 2)
 
                 lines.append(f"Open positions: {total_open}/{total_max}")
                 lines.append("•••")
