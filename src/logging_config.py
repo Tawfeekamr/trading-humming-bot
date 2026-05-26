@@ -3,6 +3,7 @@ import json
 import logging
 import logging.handlers
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -39,7 +40,6 @@ def setup_logging(level: str = None) -> None:
     console.setFormatter(JsonFormatter())
 
     # File handler — plain text, daily rotation, keep 30 days
-    from datetime import datetime, timezone
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     file_handler = logging.handlers.RotatingFileHandler(
         log_dir / f"bot_{today}.log",

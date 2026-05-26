@@ -5,6 +5,7 @@ Server resource monitoring: CPU, RAM, Disk.
 Provides current stats and threshold alerting via Telegram.
 """
 
+import asyncio
 import logging
 import time
 import threading
@@ -132,7 +133,6 @@ class SystemAlertMonitor:
             )
             logger.warning(f"Resource alert: {' | '.join(alerts)}")
             try:
-                import asyncio
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
                     loop.create_task(self._bot.send(msg))

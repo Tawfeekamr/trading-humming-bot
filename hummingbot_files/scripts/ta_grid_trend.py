@@ -6,11 +6,13 @@ Both engines share one connector but have isolated capital and state.
 """
 import os
 import asyncio
+import gc as gc_mod
 import logging
 import math
 import threading
 import json
 import traceback as traceback_mod
+import urllib.request
 from datetime import datetime, timezone
 from decimal import Decimal
 from dotenv import load_dotenv
@@ -54,7 +56,6 @@ def _global_exception_handler(exc_type, exc_value, exc_tb):
         token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
         chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
         if token and chat_id:
-            import urllib.request
             msg = f"🚨 <b>UNCAUGHT EXCEPTION</b>\n{exc_type.__name__}: {exc_value}\n\n<pre>{tb_str[:600]}</pre>"
             url = f"https://api.telegram.org/bot{token}/sendMessage?chat_id={chat_id}&parse_mode=HTML&text="
             urllib.request.urlopen(url + urllib.request.quote(msg), timeout=5)
@@ -691,9 +692,8 @@ class TAGridTrendStrategy(StrategyV2Base):
 
     def _check_time_drift(self):
         try:
-            import urllib.request as urllib_req
             start = time_mod.time() * 1000
-            with urllib_req.urlopen("https://api.binance.com/api/v3/time", timeout=5) as resp:
+            with urllib.request.urlopen("https://api.binance.com/api/v3/time", timeout=5) as resp:
                 server_time = json.loads(resp.read().decode())["serverTime"]
             end = time_mod.time() * 1000
             latency = (end - start) / 2
@@ -1027,7 +1027,6 @@ class TAGridTrendStrategy(StrategyV2Base):
 
     def _run_ml_prediction(self, pair: str):
         """Run ML regime prediction for a single pair. Updates self._ml_predictions[pair]."""
-        import gc as gc_mod
 
         if pair not in self._ml_models:
             return
