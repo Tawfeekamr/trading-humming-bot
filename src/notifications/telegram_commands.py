@@ -107,14 +107,23 @@ class TelegramCommandHandler:
 
                 ping_text = (
                     "📡 <b>Telegram Command Handler Online</b>\n"
-                    "Commands: /status /pnl /balance /capital /price /trades /pending /fees /system /clear /help\n"
-                    "Trend: /trend_status /trend_capital /trend_pnl /trend_close /trend_history"
+                    "━━━━━━━━━━━━━━━━━━━━\n"
+                    "<b>Grid:</b> /status /pnl /balance /capital /price /trades /pending /fees /pause /resume /clear\n"
+                    "<b>Trend:</b> /trend_status /trend_capital /trend_pnl /trend_close /trend_history\n"
+                    "<b>Signal:</b> /signal_status /signal_pnl /signal_pause /signal_resume /signal_close /signal_history\n"
+                    "<b>System:</b> /system /logs /errors /help"
                 )
 
                 # Add active pairs info if multi-pair mode
                 if hasattr(self.strategy, 'pairs') and self.strategy.pairs:
                     pairs_list = "\n  • ".join([engine.display_pair for engine in self.strategy.pairs.values()])
                     ping_text += f"\n\n📊 <b>Active pairs:</b>\n  • {pairs_list}"
+
+                # Add signal engine status
+                if hasattr(self.strategy, '_signal_engine') and self.strategy._signal_engine:
+                    status = self.strategy._signal_engine.get_status()
+                    mode = "AUDIT" if status.get("audit_mode") else "LIVE"
+                    ping_text += f"\n\n📡 <b>Signal Copy Engine:</b> {mode} ({status.get('state', 'N/A')})"
                 self._tg_post("sendMessage", data={
                     "chat_id": self._chat_id,
                     "text": ping_text,
