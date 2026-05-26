@@ -181,6 +181,49 @@ class SignalJournal:
         except Exception:
             return {}
 
+    def channel_stats(self) -> list[dict]:
+        """Get per-channel message and trade stats."""
+        try:
+            with self._conn() as conn:
+                # Message counts by channel
+                msg_rows = conn.execute(
+                    "SELECT channel_name, COUNT(*), "
+                    "SUM(CASE WHEN parsed_action = 'NOT_A_SIGNAL' THEN 1 ELSE 0 END), "
+                    "SUM(CASE WHEN parsed_action = 'OPEN_LONG' THEN 1 ELSE 0 END), "
+                    "SUM(CASE WHEN parsed_action = 'CLOSE' THEN 1 ELSE 0 END), "
+                    "SUM(CASE WHEN parsed_action = 'UPDATE_SL' THEN 1 ELSE 0 END) "
+                    "FROM raw_messages GROUP BY channel_name ORDER BY COUNT(*) DESC"
+                ).fetchall()
+
+                # Trade counts by channel (approved/executed)
+                trade_rows = conn.execute(
+                    "SELECT channel_name, COUNT(*), "
+                    "SUM(CASE WHEN action = 'rejected' OR action LIKE 'blocked%' THEN 1 ELSE 0 END), "
+                    "SUM(CASE WHEN action = 'OPEN_LONG' OR action = 'audit_entry' OR action = 'live_entry' THEN 1 ELSE 0 END), "
+                    "SUM(realized_pnl) "
+                    "FROM signal_trades GROUP BY channel_name"
+                ).fetchall()
+                trade_map = {r[0]: r for r in trade_rows}
+
+                result = []
+                for name, total_msgs, not_signal, open_long, close_cnt, update_sl in msg_rows:
+                    trades = trade_map.get(name)
+                    result.append({
+                        "channel": name,
+                        "messages": total_msgs,
+                        "not_signal": not_signal or 0,
+                        "signals": open_long or 0,
+                        "closes": close_cnt or 0,
+                        "updates": update_sl or 0,
+                        "trades_total": trades[1] if trades else 0,
+                        "trades_rejected": trades[2] if trades else 0,
+                        "trades_approved": trades[3] if trades else 0,
+                        "trades_pnl": trades[4] if trades else 0,
+                    })
+                return result
+        except Exception:
+            return []
+
     def recent_signals(self, limit: int = 10) -> list[dict]:
         """Get recent raw messages with parse results."""
         try:

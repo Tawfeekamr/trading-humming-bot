@@ -189,6 +189,7 @@ class TelegramCommandHandler:
             "signal_resume": self._cmd_signal_resume,
             "signal_close": self._cmd_signal_close,
             "signal_history": self._cmd_signal_history,
+            "signal_channels": self._cmd_signal_channels,
         }
 
     def _dispatch(self, handler, chat_id: str, msg: dict):
@@ -1076,6 +1077,7 @@ class TelegramCommandHandler:
             "/signal_resume — Resume signal execution\n"
             "/signal_close &lt;PAIR&gt; — Close a signal position\n"
             "/signal_history — Recent signal messages\n"
+            "/signal_channels — Channel stats & approval rates\n"
             "/help — This message",
             parse_mode="HTML"
         )
@@ -1196,5 +1198,42 @@ class TelegramCommandHandler:
             pair = s.get("pair", "?")
             text = s.get("text", "")[:60]
             lines.append(f"{ts} [{action}] {pair}: {text}")
+
+        update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
+    def _cmd_signal_channels(self, update, context):
+        engine = getattr(self.strategy, '_signal_engine', None)
+        if engine is None:
+            update.message.reply_text("Signal engine not configured.")
+            return
+
+        channel_ids_str = os.environ.get("SIGNAL_CHANNEL_IDS", "")
+        channel_count = len([c for c in channel_ids_str.split(",") if c.strip()])
+        mode_tag = "AUDIT" if engine._audit_mode else "LIVE"
+
+        stats = engine._journal.channel_stats()
+        total_msgs = sum(s["messages"] for s in stats)
+        total_approved = sum(s["trades_approved"] for s in stats)
+        total_rejected = sum(s["trades_rejected"] for s in stats)
+
+        lines = [
+            f"📡 <b>SIGNAL CHANNELS</b> ({mode_tag})",
+            f"━━━━━━━━━━━━━━━━━━━━",
+            f"Listening: <b>{channel_count}</b> channel(s)",
+            f"Messages received: <b>{total_msgs}</b>",
+            f"Signals approved: <b>{total_approved}</b>",
+            f"Signals rejected: <b>{total_rejected}</b>",
+        ]
+
+        if stats:
+            lines.append("━━━━━━━━━━━━━━━━━━━━")
+            for s in stats:
+                name = s["channel"]
+                lines.append(f"📋 <b>{name}</b>")
+                lines.append(f"  Messages: {s['messages']} | Signals: {s['signals']} | Noise: {s['not_signal']}")
+                lines.append(f"  Approved: {s['trades_approved']} | Rejected: {s['trades_rejected']} | P&L: ${s['trades_pnl'] or 0:.2f}")
+        else:
+            lines.append("•••")
+            lines.append("No messages received yet.")
 
         update.message.reply_text("\n".join(lines), parse_mode="HTML")
