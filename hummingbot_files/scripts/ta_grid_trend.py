@@ -644,7 +644,7 @@ class TAGridTrendStrategy(StrategyV2Base):
                 loop.create_task(self.telegram.alert_startup(
                     self.env, self.capital_usdt,
                     pairs=active_pairs, engines=active_engines,
-                    grid_levels=self.grid_levels,
+                    grid_levels=self.levels,
                     signal_channels=signal_channels,
                     audit_mode=signal_audit,
                 ))
