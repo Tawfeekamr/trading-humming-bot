@@ -108,7 +108,7 @@ fee_optimization:
 
 # ── Signal Copy Engine ──────────────────────────────────────────
 signal_copy:
-  enabled: false                    # Start disabled — enable after Telethon auth
+  enabled: true                     # Signal Copy Engine active
   audit_mode: true                  # Paper trade first, log to journal, don't execute
   ai_model: "glm-4-flash"          # ZhipuAI GLM model for signal parsing
 
