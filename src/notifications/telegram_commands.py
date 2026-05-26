@@ -107,12 +107,12 @@ class TelegramCommandHandler:
 
                 ping_text = (
                     "📡 <b>Telegram Command Handler Online</b>\n"
-                    "━━━━━━━━━━━━━━━━━━━━\n"
+                    "•••\n"
                     "<b>System:</b> /status /system /price /logs /errors\n"
                     "<b>Grid:</b> /grid_status /pnl /balance /capital /trades /pending /fees /pause /resume /clear\n"
                     "<b>Trend:</b> /trend_status /trend_capital /trend_pnl /trend_close /trend_history\n"
                     "<b>Signal:</b> /signal_status /signal_pnl /signal_channels /signal_history /signal_pause /signal_resume /signal_close\n"
-                    "━━━━━━━━━━━━━━━━━━━━ /help for details"
+                    "••• /help for details"
                 )
                 self._tg_post("sendMessage", data={
                     "chat_id": self._chat_id,
@@ -266,7 +266,7 @@ class TelegramCommandHandler:
 
             lines = [
                 f"📊 <b>Daily Status</b> — {mode}",
-                f"━━━━━━━━━━━━━━━━━━━━",
+                f"•••",
                 f"⏱ Up: {hours}h {minutes}m",
             ]
 
@@ -314,7 +314,7 @@ class TelegramCommandHandler:
 
             # Server
             stats = get_stats()
-            lines.append(f"━━━━━━━━━━━━━━━━━━━━")
+            lines.append(f"•••")
             lines.append(f"💻 CPU: {stats.cpu_percent:.0f}% | RAM: {stats.ram_percent:.0f}% | Disk: {stats.disk_percent:.0f}%")
 
             update.message.reply_text("\n".join(lines), parse_mode="HTML")
@@ -799,11 +799,11 @@ class TelegramCommandHandler:
 
             lines = [
                 f"🖥️ <b>System Status</b>",
-                f"━━━━━━━━━━━━━━━━━━━━",
+                f"•••",
                 f"⚙️ <b>Mode:</b> {strategy.env.upper()}",
                 f"💰 <b>Capital:</b> ${strategy.capital_usdt:,.0f}",
                 f"📊 <b>Pairs:</b> {', '.join(strategy.pairs.keys())}" if hasattr(strategy, 'pairs') else "",
-                f"━━━━━━━━━━━━━━━━━━━━",
+                f"•••",
             ]
 
             # Grid Engine
@@ -847,7 +847,7 @@ class TelegramCommandHandler:
                 lines.append(f"🧠 <b>ML:</b> {strategy._ml_summary()}")
 
             # Server resources
-            lines.append(f"━━━━━━━━━━━━━━━━━━━━")
+            lines.append(f"•••")
             lines.append(f"💻 CPU: {stats.cpu_percent:.0f}% | RAM: {stats.ram_percent:.0f}% | Disk: {stats.disk_percent:.0f}%")
             lines.append(f"💾 {stats.disk_used_gb:.1f}/{stats.disk_total_gb:.1f} GB")
 
@@ -1124,14 +1124,14 @@ class TelegramCommandHandler:
         display_pair = getattr(self.strategy, 'display_pair', 'Multi-pair')
         update.message.reply_text(
             "📖 <b>Available Commands</b>\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
+            "•••\n"
             "<b>System:</b>\n"
             "/status — Daily summary (all engines P&L + server)\n"
             "/system — Full engine details + server resources\n"
             f"/price — Current {display_pair} price with indicators\n"
             "/logs — Last 30 lines from today's bot log\n"
             "/errors — Recent errors and crashes\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
+            "•••\n"
             "<b>Grid:</b>\n"
             "/grid_status — Grid state, pending orders, uptime\n"
             "/pnl — Grid P&L (today/week/month)\n"
@@ -1144,14 +1144,14 @@ class TelegramCommandHandler:
             "/pending — All pending buy/sell orders\n"
             "/fees — Fee analysis and overtrading detection\n"
             "/clear — Clear logs and grid state\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
+            "•••\n"
             "<b>Trend:</b>\n"
             "/trend_status — Trend engine status and positions\n"
             "/trend_capital &lt;amount&gt; — Update trend capital\n"
             "/trend_pnl — Trend P&L report\n"
             "/trend_close — Force close all trend positions\n"
             "/trend_history — Recent trend trade history\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
+            "•••\n"
             "<b>Signal:</b>\n"
             "/signal_status — Signal engine status & positions\n"
             "/signal_pnl — Signal trades P&L report\n"
@@ -1160,7 +1160,7 @@ class TelegramCommandHandler:
             "/signal_pause — Pause signal execution\n"
             "/signal_resume — Resume signal execution\n"
             "/signal_close &lt;PAIR&gt; — Close a signal position\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
+            "•••\n"
             "/help — This message",
             parse_mode="HTML"
         )
@@ -1301,7 +1301,7 @@ class TelegramCommandHandler:
 
         lines = [
             f"📡 <b>SIGNAL CHANNELS</b> ({mode_tag})",
-            f"━━━━━━━━━━━━━━━━━━━━",
+            f"•••",
             f"Listening: <b>{channel_count}</b> channel(s)",
             f"Messages received: <b>{total_msgs}</b>",
             f"Signals approved: <b>{total_approved}</b>",
@@ -1309,7 +1309,7 @@ class TelegramCommandHandler:
         ]
 
         if stats:
-            lines.append("━━━━━━━━━━━━━━━━━━━━")
+            lines.append("•••")
             for s in stats:
                 name = s["channel"]
                 lines.append(f"📋 <b>{name}</b>")

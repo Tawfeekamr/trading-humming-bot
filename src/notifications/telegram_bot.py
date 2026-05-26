@@ -57,7 +57,7 @@ class TelegramBot:
                            signal_channels: int = 0, audit_mode: bool = False) -> None:
         lines = [
             f"🟢 <b>Trading Bot STARTED</b>",
-            f"━━━━━━━━━━━━━━━━━━━━",
+            f"•••",
             f"⚙️ <b>Mode:</b> {env.upper()}",
             f"💰 <b>Capital:</b> ${capital:,.0f} USDT",
         ]
@@ -70,7 +70,7 @@ class TelegramBot:
         if signal_channels:
             mode_tag = "AUDIT" if audit_mode else "LIVE"
             lines.append(f"📡 <b>Signal Copy:</b> {signal_channels} channels ({mode_tag})")
-        lines.append(f"━━━━━━━━━━━━━━━━━━━━")
+        lines.append(f"•••")
         lines.append(f"⏰ {self._now()} UTC")
         await self.send("\n".join(lines))
 
