@@ -667,6 +667,13 @@ class TAGridTrendStrategy(StrategyV2Base):
         if legacy_trend_path.exists() and first_engine:
             self._position_managers[first_engine.symbol].load_state(legacy_trend_path)
 
+        # Reconcile CapitalManager with restored positions
+        self._capital_mgr._allocations.clear()
+        for symbol, pm in self._position_managers.items():
+            for pos in pm.get_all_positions():
+                notional = pos.amount * pos.entry_price
+                self._capital_mgr.allocate(symbol, "trend", notional)
+
         logger.info(f"Dual-engine strategy started on {self.exchange} with {len(self.pairs)} pair(s)")
 
         # Time drift check — warn if system clock is out of sync with Binance
@@ -1240,6 +1247,7 @@ class TAGridTrendStrategy(StrategyV2Base):
                 trend_pair = getattr(pos, 'pair', self.trading_pair)
                 if hasattr(self, '_capital_mgr'):
                     self._capital_mgr.release(trend_pair, "trend")
+                    self._capital_mgr.save()
                 self._trend_journal.log_trade(
                     side="SELL", entry_price=closed["entry_price"], exit_price=closed["exit_price"],
                     amount=closed["amount"], fee=round(fee, 2), pnl=closed["pnl"],
@@ -1620,6 +1628,7 @@ class TAGridTrendStrategy(StrategyV2Base):
             notional = pos.amount * pos.entry_price
             if hasattr(self, '_capital_mgr'):
                 self._capital_mgr.allocate(engine.symbol, "trend", notional)
+                self._capital_mgr.save()
             self._save_trend_state(engine)
             self.event_log.log("trend_entry", amount=round(amount, 2), price=self._last_price[engine.symbol],
                                sl=sl, tp=tp, score=score.total, pair=engine.symbol)
