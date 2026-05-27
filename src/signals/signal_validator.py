@@ -31,11 +31,11 @@ class SignalValidator:
         if signal.action != SignalAction.OPEN_LONG:
             return True, ""  # CLOSE/UPDATE signals don't need full validation
 
-        # Pair must exist on Binance
+        # Pair must exist on exchange
         if signal.pair:
-            binance_symbol = signal.pair.replace("-", "")
-            if self._available_pairs and binance_symbol not in self._available_pairs:
-                return False, f"Pair {signal.pair} not available on Binance"
+            pair_variants = {signal.pair, signal.pair.replace("-", "")}
+            if self._available_pairs and not pair_variants.intersection(self._available_pairs):
+                return False, f"Pair {signal.pair} not available on exchange"
 
         # Not blacklisted
         if signal.pair in self._blacklisted_pairs:
