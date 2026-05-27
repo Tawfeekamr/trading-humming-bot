@@ -59,8 +59,8 @@ class SignalEngine:
             session_name=config.get("session_name", "signal_listener"),
         )
         self._parser = SignalParser(
-            api_key=os.environ.get("ZHIPU_API_KEY", ""),
-            model=config.get("ai_model", "glm-4-flash"),
+            api_key=os.environ.get("DEEPSEEK_API_KEY", ""),
+            model=config.get("ai_model", "deepseek-chat"),
         )
         self._validator = SignalValidator(config)
         self._risk = SignalRiskGuard(config)

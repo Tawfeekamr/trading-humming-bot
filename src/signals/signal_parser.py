@@ -1,7 +1,7 @@
 """
-signal_parser.py — Parses trader Telegram messages into structured signals using ZhipuAI GLM.
+signal_parser.py — Parses trader Telegram messages into structured signals using DeepSeek.
 
-Uses GLM-4-Flash for fast, cheap structured extraction.
+Uses DeepSeek-Chat (V4) for fast structured extraction.
 HTTP calls via http.client (no external library needed).
 """
 
@@ -48,7 +48,7 @@ SYSTEM_PROMPT = """You are a trading signal parser. Extract structured trade inf
 
 RULES:
 1. Only extract ACTIONABLE trading signals. General market commentary, motivation posts, questions, or charts without clear entry/exit are NOT signals.
-2. All trading is SPOT only (no futures, no leverage, no shorts). If the trader says "SHORT" or "SELL" as an opening position (not closing), the action is NOT_A_SIGNAL.
+2. We trade SPOT only. Ignore any leverage mentions (e.g. "2-5x", "10x") — still extract the signal. Only reject if the direction is explicitly SHORT/SELL as an opening position.
 3. Normalize all pairs to format: "BTC-USDT", "ETH-USDT", etc. Add -USDT suffix if missing.
 4. If the trader gives a price range for entry (e.g., "95-96k"), extract both entry_low and entry_high.
 5. If only one entry price is given, set entry_low = entry_high.
@@ -76,14 +76,14 @@ OUTPUT FORMAT (JSON only, no markdown, no code blocks):
 class SignalParser:
     """Parses trader messages into structured signals using ZhipuAI GLM."""
 
-    def __init__(self, api_key: str = "", model: str = "glm-4-flash"):
-        self._api_key = api_key or os.environ.get("ZHIPU_API_KEY", "")
+    def __init__(self, api_key: str = "", model: str = "deepseek-chat"):
+        self._api_key = api_key or os.environ.get("DEEPSEEK_API_KEY", "")
         self._model = model
 
     def parse(self, message: str) -> ParsedSignal:
         """Parse a trader's message into a structured signal."""
         if not self._api_key:
-            logger.warning("ZHIPU_API_KEY not set, cannot parse signals")
+            logger.warning("DEEPSEEK_API_KEY not set, cannot parse signals")
             return ParsedSignal(action=SignalAction.NOT_A_SIGNAL, raw_message=message)
 
         prompt = f"Parse this trading signal message:\n\n{message}"
@@ -96,7 +96,7 @@ class SignalParser:
             return ParsedSignal(action=SignalAction.NOT_A_SIGNAL, raw_message=message)
 
     def _call_glm(self, prompt: str) -> dict:
-        """HTTP call to ZhipuAI GLM API. Returns parsed JSON dict."""
+        """HTTP call to DeepSeek API. Returns parsed JSON dict."""
         body = json.dumps({
             "model": self._model,
             "messages": [
@@ -106,14 +106,17 @@ class SignalParser:
             "temperature": 0.1,
         })
 
-        conn = http.client.HTTPSConnection("open.bigmodel.cn", timeout=15)
-        conn.request("POST", "/api/paas/v4/chat/completions", body=body, headers={
+        conn = http.client.HTTPSConnection("api.deepseek.com", timeout=30)
+        conn.request("POST", "/chat/completions", body=body, headers={
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self._api_key}",
         })
         resp = conn.getresponse()
         data = json.loads(resp.read())
         conn.close()
+
+        if "error" in data:
+            raise RuntimeError(f"GLM API error {data['error'].get('code', '?')}: {data['error'].get('message', data['error'])}")
 
         text = data["choices"][0]["message"]["content"]
         # Strip markdown code blocks if present
