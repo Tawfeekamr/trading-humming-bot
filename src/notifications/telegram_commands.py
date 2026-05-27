@@ -111,7 +111,7 @@ class TelegramCommandHandler:
                     "<b>System:</b> /status /system /price /logs /errors\n"
                     "<b>Grid:</b> /grid_status /pnl /balance /capital /trades /pending /fees /pause /resume /clear\n"
                     "<b>Trend:</b> /trend_status /trend_capital /trend_pnl /trend_close /trend_history\n"
-                    "<b>Signal:</b> /signal_status /signal_pnl /signal_channels /signal_history /signal_pause /signal_resume /signal_close\n"
+                    "<b>Signal:</b> /signal_status /signal_pnl /signal_channels /signal_history /signal_pause /signal_resume /signal_close /signal_inject\n"
                     "••• /help for details"
                 )
                 self._tg_post("sendMessage", data={
@@ -196,6 +196,7 @@ class TelegramCommandHandler:
             "signal_pause": self._cmd_signal_pause,
             "signal_resume": self._cmd_signal_resume,
             "signal_close": self._cmd_signal_close,
+            "signal_inject": self._cmd_signal_inject,
         }
 
     def _dispatch(self, handler, chat_id: str, msg: dict):
@@ -1162,6 +1163,7 @@ class TelegramCommandHandler:
             "/signal_pause — Pause signal execution\n"
             "/signal_resume — Resume signal execution\n"
             "/signal_close &lt;PAIR&gt; — Close a signal position\n"
+            "/signal_inject &lt;text&gt; — Manually inject a signal for execution\n"
             "•••\n"
             "/help — This message",
             parse_mode="HTML"
@@ -1264,6 +1266,38 @@ class TelegramCommandHandler:
             update.message.reply_text(f"Closed signal position: {pair}")
         else:
             update.message.reply_text(f"No open signal position for {pair}")
+
+    def _cmd_signal_inject(self, update, context=None):
+        engine = getattr(self.strategy, '_signal_engine', None)
+        if engine is None:
+            update.message.reply_text("Signal engine not configured.")
+            return
+        text = getattr(update.message, 'text', '')
+        # Get everything after /signal_inject
+        signal_text = text.split(None, 1)
+        if len(signal_text) < 2:
+            update.message.reply_text("Usage: /signal_inject <signal message text>")
+            return
+        signal_text = signal_text[1].strip()
+        if not signal_text:
+            update.message.reply_text("Usage: /signal_inject <signal message text>")
+            return
+
+        connector = self.strategy.connectors.get(self.strategy.exchange) if hasattr(self.strategy, 'connectors') else None
+        try:
+            signal = engine.inject_signal(signal_text, connector)
+            reply = (
+                f"📡 <b>Signal Injected</b>\n"
+                f"Action: {signal.action.value}\n"
+                f"Pair: {signal.pair or 'N/A'}\n"
+                f"Entry: {signal.entry_low} - {signal.entry_high}\n"
+                f"SL: {signal.stop_loss}\n"
+                f"TPs: {signal.take_profits}\n"
+                f"Reasoning: {signal.parse_reasoning[:200]}"
+            )
+            update.message.reply_text(reply)
+        except Exception as e:
+            update.message.reply_text(f"⚠️ Signal inject failed: {e}")
 
     def _cmd_signal_history(self, update, context):
         engine = getattr(self.strategy, '_signal_engine', None)

@@ -129,6 +129,13 @@ class SignalEngine:
         self._manual_pause = False
         logger.info("Signal engine resumed")
 
+    def inject_signal(self, text: str, connector) -> ParsedSignal:
+        """Manually inject a signal message. Returns parsed signal."""
+        signal = self._parser.parse(text)
+        msg = {"text": text, "channel_name": "manual_inject", "channel_id": 0, "message_id": 0}
+        self._process_message(msg, connector)
+        return signal
+
     def manual_close(self, symbol: str) -> Optional[str]:
         """Manually close a signal position. Returns reason or None."""
         pos = self._position_mgr.get_position(symbol)
