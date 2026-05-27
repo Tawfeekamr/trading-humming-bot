@@ -130,7 +130,7 @@ signal_copy:
   daily_loss_limit_pct: 5.0         # Halt after losing this % of signal capital
   max_trades_per_day: 10            # Maximum signal trades per day
   cooldown_minutes: 5               # Wait between trades
-  use_btc_correlation_gate: true    # Pause when BTC regime is DANGER
+  use_btc_correlation_gate: false   # Pause when BTC regime is DANGER (disabled for testing)
   blacklisted_pairs: []             # Pairs to never trade from signals
 
   # Telethon
