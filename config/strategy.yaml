@@ -110,6 +110,7 @@ fee_optimization:
 signal_copy:
   enabled: true                     # Signal Copy Engine active
   audit_mode: false                 # Execute trades (paper money on testnet)
+  exchange: "gate_io_paper_trade"   # Dedicated exchange for signal copy (3000+ tokens)
   ai_model: "deepseek-chat"          # DeepSeek model for signal parsing
 
   # Position management

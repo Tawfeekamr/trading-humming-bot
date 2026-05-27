@@ -416,19 +416,20 @@ class SignalEngine:
             logger.error(f"Signal close failed for {pos.symbol}: {e}")
 
     def _refresh_available_pairs(self):
-        """Fetch available Binance USDT pairs."""
+        """Fetch available Gate.io USDT pairs."""
         try:
-            url = "https://api.binance.com/api/v3/exchangeInfo"
+            url = "https://api.gateio.ws/api/v4/spot/tickers"
             req = urllib.request.Request(url, headers={"User-Agent": "signal-engine"})
-            with urllib.request.urlopen(req, timeout=10) as resp:
+            with urllib.request.urlopen(req, timeout=15) as resp:
                 data = json.loads(resp.read())
             self._available_pairs = {
-                s["symbol"] for s in data["symbols"]
-                if s["quoteAsset"] == "USDT" and s["status"] == "TRADING"
+                t["currency_pair"].replace("_", "-")
+                for t in data
+                if t["currency_pair"].endswith("_USDT")
             }
             self._validator.set_available_pairs(self._available_pairs)
             self._last_pair_refresh = time.time()
-            logger.info(f"Refreshed {len(self._available_pairs)} Binance pairs")
+            logger.info(f"Refreshed {len(self._available_pairs)} Gate.io pairs")
         except Exception as e:
             logger.warning(f"Failed to refresh pairs: {e}")
 

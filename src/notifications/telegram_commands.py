@@ -1283,7 +1283,7 @@ class TelegramCommandHandler:
             update.message.reply_text("Usage: /signal_inject <signal message text>")
             return
 
-        connector = self.strategy.connectors.get(self.strategy.exchange) if hasattr(self.strategy, 'connectors') else None
+        connector = self.strategy.connectors.get(self.strategy.signal_exchange) if hasattr(self.strategy, 'connectors') else None
         try:
             signal = engine.inject_signal(signal_text, connector)
             reply = (

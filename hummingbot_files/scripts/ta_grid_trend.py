@@ -199,6 +199,14 @@ class TAGridTrendConfig(StrategyV2ConfigBase):
             # Legacy single-pair mode
             pair = cfg.get("pair", self.trading_pair)
             markets[self.exchange] = {pair: {}}
+
+        # Register signal exchange connector (Gate.io for wider altcoin support)
+        signal_cfg = cfg.get("signal_copy", {})
+        signal_ex = signal_cfg.get("exchange", "")
+        if signal_ex and signal_cfg.get("enabled", False):
+            # Paper trade connectors need at least one pair to initialize
+            markets.setdefault(signal_ex, {})["BTC-USDT"] = {}
+
         return markets
 
 
@@ -609,6 +617,7 @@ class TAGridTrendStrategy(StrategyV2Base):
         # ── Signal Copy Engine ──
         self._signal_engine = None
         signal_cfg = cfg.get("signal_copy", {})
+        self.signal_exchange = signal_cfg.get("exchange", self.exchange)
         if signal_cfg.get("enabled", False):
             from src.signals.signal_engine import SignalEngine
 
@@ -622,9 +631,9 @@ class TAGridTrendStrategy(StrategyV2Base):
                 config=signal_cfg,
                 btc_regime_fn=_signal_btc_regime,
                 telegram_send_fn=lambda msg: asyncio.get_event_loop().create_task(self.telegram.send(msg)) if self.telegram else None,
-                buy_fn=lambda symbol, amount, price: self.buy(self.exchange, symbol, amount, OrderType.LIMIT_MAKER, price=price),
-                sell_fn=lambda symbol, amount, price: self.sell(self.exchange, symbol, amount, OrderType.LIMIT_MAKER, price=price),
-                get_price_fn=lambda symbol: self._last_price.get(symbol, 0),
+                buy_fn=lambda symbol, amount, price: self.buy(self.signal_exchange, symbol, amount, OrderType.LIMIT_MAKER, price=price),
+                sell_fn=lambda symbol, amount, price: self.sell(self.signal_exchange, symbol, amount, OrderType.LIMIT_MAKER, price=price),
+                get_price_fn=lambda symbol: self._get_signal_price(symbol),
             )
             self._signal_engine.start_listener()
             logger.info("Signal Copy Engine initialized")
@@ -715,6 +724,18 @@ class TAGridTrendStrategy(StrategyV2Base):
 
     # ── Force-Ready Watchdog ──
 
+    def _get_signal_price(self, symbol: str) -> float:
+        """Get mid price from the signal exchange connector."""
+        try:
+            connector = self.connectors.get(self.signal_exchange)
+            if connector:
+                price = connector.get_mid_price(symbol)
+                if price:
+                    return float(price)
+        except Exception:
+            pass
+        return self._last_price.get(symbol, 0)
+
     def _force_connector_ready(self):
         try:
             time_mod.sleep(30)
@@ -759,7 +780,8 @@ class TAGridTrendStrategy(StrategyV2Base):
             # ── Signal Copy Engine ──
             if self._signal_engine is not None:
                 try:
-                    self._signal_engine.tick(connector)
+                    signal_connector = self.connectors.get(self.signal_exchange)
+                    self._signal_engine.tick(signal_connector)
                 except Exception as e:
                     logger.error(f"Signal engine tick error: {e}")
 
