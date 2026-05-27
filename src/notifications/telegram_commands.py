@@ -956,7 +956,9 @@ class TelegramCommandHandler:
 
                 # Get capital info from CapitalManager
                 if hasattr(strategy, '_capital_mgr'):
-                    lines.append(f"Capital: ${strategy._capital_mgr.total_capital:.2f} | Available: ${strategy._capital_mgr.available:.2f}")
+                    cm = strategy._capital_mgr
+                    used = cm.total_capital - cm.available
+                    lines.append(f"Capital: ${cm.total_capital:.2f} | In use: ${used:.2f} | Available: ${cm.available:.2f}")
                 elif hasattr(strategy, '_position_manager'):
                     lines.append(f"Capital: ${strategy._position_manager._capital:.2f}")
 

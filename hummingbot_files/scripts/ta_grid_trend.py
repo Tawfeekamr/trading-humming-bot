@@ -1237,6 +1237,9 @@ class TAGridTrendStrategy(StrategyV2Base):
             # It's an exit fill
             closed = pm.finalize_exit(pos.entry_order_id, price, fee)
             if closed:
+                trend_pair = getattr(pos, 'pair', self.trading_pair)
+                if hasattr(self, '_capital_mgr'):
+                    self._capital_mgr.release(trend_pair, "trend")
                 self._trend_journal.log_trade(
                     side="SELL", entry_price=closed["entry_price"], exit_price=closed["exit_price"],
                     amount=closed["amount"], fee=round(fee, 2), pnl=closed["pnl"],
@@ -1244,7 +1247,6 @@ class TAGridTrendStrategy(StrategyV2Base):
                     take_profit=closed["take_profit"], exit_reason=closed["exit_reason"],
                     signal_score=0, duration_minutes=closed["duration_minutes"],
                 )
-                trend_pair = getattr(pos, 'pair', self.trading_pair)
                 trend_engine = self.pairs.get(trend_pair)
                 self._save_trend_state(trend_engine)
                 trend_display = trend_pair.replace("-", "/")
@@ -1615,6 +1617,9 @@ class TAGridTrendStrategy(StrategyV2Base):
         )
 
         if pos:
+            notional = pos.amount * pos.entry_price
+            if hasattr(self, '_capital_mgr'):
+                self._capital_mgr.allocate(engine.symbol, "trend", notional)
             self._save_trend_state(engine)
             self.event_log.log("trend_entry", amount=round(amount, 2), price=self._last_price[engine.symbol],
                                sl=sl, tp=tp, score=score.total, pair=engine.symbol)
