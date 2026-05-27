@@ -441,6 +441,7 @@ class TAGridTrendStrategy(StrategyV2Base):
         )
 
         trend_capital = float(os.environ.get("TREND_CAPITAL_USDT", trend_cfg.get("capital", 0)))
+        self._trend_capital = trend_capital
         self._position_managers: Dict[str, PositionManager] = {}
         for symbol in self.pairs:
             self._position_managers[symbol] = PositionManager(
