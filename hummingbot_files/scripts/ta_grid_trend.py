@@ -205,18 +205,12 @@ class TAGridTrendConfig(StrategyV2ConfigBase):
         signal_ex = signal_cfg.get("exchange", "")
         if signal_ex and signal_cfg.get("enabled", False):
             signal_pairs = markets.setdefault(signal_ex, {})
-            # Popular altcoins from signal channels + major pairs for price data
+            # Core pairs for price data + most common signal channel altcoins
+            # Unlisted pairs use Gate.io REST API price fallback in signal_engine
             for pair in [
-                "BTC-USDT", "ETH-USDT", "SOL-USDT", "XRP-USDT", "DOGE-USDT",
-                "ADA-USDT", "AVAX-USDT", "DOT-USDT", "LINK-USDT", "MATIC-USDT",
-                "UNI-USDT", "ATOM-USDT", "FIL-USDT", "APT-USDT", "ARB-USDT",
-                "OP-USDT", "NEAR-USDT", "FTM-USDT", "INJ-USDT", "SUI-USDT",
-                "SEI-USDT", "TIA-USDT", "JUP-USDT", "WIF-USDT", "PEPE-USDT",
-                "FLOKI-USDT", "BONK-USDT", "RENDER-USDT", "FET-USDT", "STX-USDT",
-                "IMX-USDT", "GRT-USDT", "RUNE-USDT", "AAVE-USDT", "MKR-USDT",
-                "SNX-USDT", "COMP-USDT", "CRV-USDT", "LDO-USDT", "RPL-USDT",
-                "ONDO-USDT", "ENA-USDT", "ETHFI-USDT", "W-USDT", "T-USDT",
-                "ENA-USDT", "LISTA-USDT", "ZRO-USDT", "BANANA-USDT", "HYPE-USDT",
+                "BTC-USDT", "ETH-USDT", "SOL-USDT", "BNB-USDT", "XRP-USDT",
+                "DOGE-USDT", "ADA-USDT", "AVAX-USDT", "DOT-USDT", "LINK-USDT",
+                "HYPE-USDT", "SUI-USDT", "APT-USDT", "ARB-USDT", "OP-USDT",
             ]:
                 signal_pairs[pair] = {}
 
