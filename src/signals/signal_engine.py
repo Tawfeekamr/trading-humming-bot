@@ -250,11 +250,13 @@ class SignalEngine:
         # Get current equity for position sizing
         current_price = self._get_current_price(connector, signal.pair)
         equity = self._get_equity(connector)
+        logger.info(f"Signal execution: pair={signal.pair} entry={entry} "
+                     f"current_price={current_price} equity={equity}")
 
         # Calculate position size from risk guard
         usdt_amount = self._risk.get_budget_for_trade(signal, equity)
         if usdt_amount <= 0:
-            logger.warning(f"Signal budget is 0 for {signal.pair}")
+            logger.warning(f"Signal budget is 0 for {signal.pair} (equity={equity})")
             return
 
         # Use entry price (or current market if no entry zone)
@@ -385,16 +387,18 @@ class SignalEngine:
         return 0
 
     def _get_equity(self, connector) -> float:
-        """Get total account equity from connector."""
+        """Get total account equity from connector, with config fallback."""
         try:
-            if connector is None:
-                return 0
-            bal = connector.get_balance("USDT")
-            if bal:
-                return float(bal.total_balance)
+            if connector is not None:
+                bal = connector.get_balance("USDT")
+                if bal and float(bal.total_balance) > 0:
+                    return float(bal.total_balance)
         except Exception:
             pass
-        return 0
+        # Fallback: use max_capital_usdt as total equity for position sizing
+        fallback = self._config.get("max_capital_usdt", 1000)
+        logger.info(f"Signal equity fallback: using ${fallback} (connector balance unavailable)")
+        return float(fallback)
 
     def _execute_close(self, pos: SignalPosition, price: float, reason: str):
         """Place a sell order to close a signal position."""
