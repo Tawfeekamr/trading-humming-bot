@@ -17,6 +17,7 @@ class SignalValidator:
         self._min_rr_ratio = config.get("min_rr_ratio", 1.5)
         self._max_sl_distance_pct = config.get("max_sl_distance_pct", 5.0)
         self._max_entry_zone_pct = config.get("max_entry_zone_pct", 3.0)
+        self._min_quality_score = config.get("min_quality_score", 5)
         self._available_pairs = available_pairs or set()
         self._blacklisted_pairs = set(config.get("blacklisted_pairs", []))
 
@@ -80,5 +81,9 @@ class SignalValidator:
             zone_pct = (signal.entry_high - signal.entry_low) / signal.entry_low * 100
             if zone_pct > self._max_entry_zone_pct:
                 return False, f"Entry zone {zone_pct:.1f}% too wide (max {self._max_entry_zone_pct}%)"
+
+        # AI quality score check
+        if signal.quality_score < self._min_quality_score:
+            return False, f"Quality score {signal.quality_score}/10 < min {self._min_quality_score} ({signal.quality_reason})"
 
         return True, ""

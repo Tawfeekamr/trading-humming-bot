@@ -1293,6 +1293,7 @@ class TelegramCommandHandler:
                 f"Entry: {signal.entry_low} - {signal.entry_high}\n"
                 f"SL: {signal.stop_loss}\n"
                 f"TPs: {signal.take_profits}\n"
+                f"Quality: {signal.quality_score}/10 — {signal.quality_reason[:100]}\n"
                 f"Reasoning: {signal.parse_reasoning[:200]}"
             )
             update.message.reply_text(reply)

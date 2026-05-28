@@ -41,10 +41,12 @@ class ParsedSignal:
     confidence: SignalConfidence = SignalConfidence.MEDIUM
     raw_message: str = ""
     parse_reasoning: str = ""
+    quality_score: int = 5
+    quality_reason: str = ""
     is_market_entry: bool = False
 
 
-SYSTEM_PROMPT = """You are a trading signal parser. Extract structured trade information from Telegram messages sent by professional crypto traders.
+SYSTEM_PROMPT = """You are a trading signal parser and quality scorer. Extract structured trade information from Telegram messages and score signal quality.
 
 RULES:
 1. Only extract ACTIONABLE trading signals. General market commentary, motivation posts, questions, or charts without clear entry/exit are NOT signals.
@@ -59,6 +61,20 @@ RULES:
 10. Convert shorthand: "95k" = 95000, "0.5" stays 0.5, "$100" = 100.0
 11. If the message is just market commentary, analysis, or chat with no specific entry/exit, action is NOT_A_SIGNAL.
 
+QUALITY SCORING (1-10):
+Score the signal's trading quality based on:
+- Risk:Reward ratio (higher R:R = better score)
+- Stop-loss proximity (too tight = risky, too wide = sloppy)
+- Number of take-profit levels (more TPs = better planned)
+- Entry zone clarity (specific prices > vague ranges)
+- Technical reasoning mentioned (support/resistance, patterns = bonus)
+- Signal source credibility indicators
+
+Scoring guide:
+- 8-10: Excellent R:R (2:1+), clear SL, multiple TPs, technical confluence
+- 5-7: Decent signal but some weaknesses (wide SL, few TPs, no reasoning)
+- 1-4: Poor signal (no SL, unrealistic TPs, vague entry, no structure)
+
 OUTPUT FORMAT (JSON only, no markdown, no code blocks):
 {
     "action": "OPEN_LONG" | "CLOSE" | "UPDATE_SL" | "UPDATE_TP" | "NOT_A_SIGNAL",
@@ -68,6 +84,8 @@ OUTPUT FORMAT (JSON only, no markdown, no code blocks):
     "stop_loss": 93500.0 | null,
     "take_profits": [98000.0, 100000.0, 103000.0],
     "confidence": "high" | "medium" | "low",
+    "quality_score": 8,
+    "quality_reason": "Strong R:R of 2.5:1, tight SL, 3 TPs with technical confluence",
     "is_market_entry": false,
     "reasoning": "Brief explanation of your parsing"
 }"""
@@ -171,5 +189,7 @@ class SignalParser:
             confidence=confidence,
             raw_message=raw_message,
             parse_reasoning=data.get("reasoning", ""),
+            quality_score=max(1, min(10, int(data.get("quality_score", 5)))),
+            quality_reason=data.get("quality_reason", ""),
             is_market_entry=data.get("is_market_entry", False),
         )

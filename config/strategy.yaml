@@ -121,6 +121,7 @@ signal_copy:
   min_rr_ratio: 1.0                 # Minimum risk:reward (vs TP3)
   max_sl_distance_pct: 10.0         # Max stop-loss distance from entry (%)
   max_entry_zone_pct: 3.0           # Max entry zone width (%)
+  min_quality_score: 5              # Min AI quality score (1-10) to execute trade
 
   # TP scaling
   tp1_close_pct: 33                 # Close 33% at TP1, move SL to breakeven
