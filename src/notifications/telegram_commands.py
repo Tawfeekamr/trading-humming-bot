@@ -1296,7 +1296,7 @@ class TelegramCommandHandler:
                 f"Quality: {signal.quality_score}/10 — {signal.quality_reason[:100]}\n"
                 f"Reasoning: {signal.parse_reasoning[:200]}"
             )
-            update.message.reply_text(reply)
+            update.message.reply_text(reply, parse_mode="HTML")
         except Exception as e:
             update.message.reply_text(f"⚠️ Signal inject failed: {e}")
 
