@@ -373,17 +373,28 @@ class SignalEngine:
         self._notify(f"Signal closed by trader: {signal.pair}")
 
     def _get_current_price(self, connector, symbol: str) -> float:
-        """Get current price from connector."""
+        """Get current price from connector, with Gate.io REST API fallback."""
         try:
             if self._get_price_fn:
-                return self._get_price_fn(symbol)
-            if connector is None:
-                return 0
-            price_obj = connector.get_mid_price(symbol)
-            if price_obj:
-                return float(price_obj)
+                price = self._get_price_fn(symbol)
+                if price > 0:
+                    return price
+            if connector is not None:
+                price_obj = connector.get_mid_price(symbol)
+                if price_obj:
+                    return float(price_obj)
         except Exception:
             pass
+        # Fallback: fetch from Gate.io REST API for any unregistered pair
+        try:
+            gate_pair = symbol.replace("-", "_")
+            url = f"https://api.gateio.ws/api/v4/spot/tickers?currency_pair={gate_pair}"
+            with urllib.request.urlopen(url, timeout=5) as resp:
+                data = json.loads(resp.read().decode())
+                if data and data[0].get("last"):
+                    return float(data[0]["last"])
+        except Exception as e:
+            logger.debug(f"Gate.io price fallback failed for {symbol}: {e}")
         return 0
 
     def _get_equity(self, connector) -> float:
