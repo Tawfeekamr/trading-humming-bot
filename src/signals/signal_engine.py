@@ -294,7 +294,6 @@ class SignalEngine:
                 signal_confidence=signal.confidence.value,
                 raw_message=signal.raw_message,
                 channel_name=channel_name,
-                order_id=str(order_id),
             )
             self._risk.record_trade_opened()
             self._log_audit_trade(signal, channel_name, "OPEN_LONG", buy_price, "live_entry")
