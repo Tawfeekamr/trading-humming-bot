@@ -9,5 +9,5 @@ pub use ema::Ema;
 pub use rsi::Rsi;
 pub use atr::Atr;
 pub use bollinger::BollingerBands;
-pub use support_resistance::SupportResistance;
+pub use support_resistance::{SupportResistance, LevelKind};
 pub use candlestick::{CandlestickPatterns, Pattern};
