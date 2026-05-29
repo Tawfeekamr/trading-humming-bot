@@ -23,6 +23,7 @@ services:
       start_period: 60s
     environment:
       - CONFIG_PASSWORD=${CONFIG_PASSWORD:-changeme}
+      - USE_TRADING_ENGINE=${USE_TRADING_ENGINE:-true}
     volumes:
       - ./data:/home/hummingbot/data
       - ./logs:/home/hummingbot/logs
