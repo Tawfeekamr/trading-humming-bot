@@ -61,6 +61,18 @@ RULES:
 10. Convert shorthand: "95k" = 95000, "0.5" stays 0.5, "$100" = 100.0
 11. If the message is just market commentary, analysis, or chat with no specific entry/exit, action is NOT_A_SIGNAL.
 
+CRITICAL — Distinguishing NEW ENTRY signals from RESULT UPDATES:
+A message is a NEW ENTRY signal (action: OPEN_LONG) if it has an ENTRY price/zone and TARGETS without checkmarks (✅).
+A message is a RESULT UPDATE (action: NOT_A_SIGNAL) if targets have ✅ checkmarks, show "X% Profit", or say "Loss" — these report past results, not new trades.
+A message that has ENTRY + TARGETS + STOP LOSS but NO checkmarks (✅) is ALWAYS a new entry signal, regardless of whether the same signal ID appeared in earlier result updates.
+
+Examples:
+- "ENTRY: 56.80 - 57.00 | TARGETS: 59.50 - 62.00 - 65.00 | STOP LOSS: 52.00" → OPEN_LONG (new entry)
+- "Target 1: 59.50✅ | Target 2: 62.00✅ | 🔥70.2% Profit🔥" → NOT_A_SIGNAL (result update)
+- "ENTRY: 0.2805 - 0.2825 | TARGETS: 0.2950 - 0.3075 | STOP LOSS: 0.2550" → OPEN_LONG (new entry)
+- "STOP LOSS: 0.0650 | 🚫19.4% Loss🚫" → NOT_A_SIGNAL (past result)
+- "📍SIGNAL ID: #2144📍 COIN: $HYPE/USDT ENTRY: 56.80-57.00 TARGETS: 59.50-62.00-65.00 STOP LOSS: 52.00" → OPEN_LONG
+
 QUALITY SCORING (1-10):
 Score the signal's trading quality based on:
 - Risk:Reward ratio (higher R:R = better score)
