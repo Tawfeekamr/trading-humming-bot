@@ -27,6 +27,12 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build and install trading-engine-core wheel
+        run: pip install maturin && cd trading-engine-core && maturin develop
+
       - name: Run unit tests
         run: pytest tests/ -v --tb=short
 
