@@ -91,6 +91,8 @@ trend:
   risk_per_trade_pct: 2.0
   max_position_pct: 25.0
   max_positions: 2
+  max_total_positions: 3        # Max trend positions across ALL pairs combined
+  exit_signal_threshold: 2      # Close position when signal score drops below this
   trailing_stop_pct: 1.5
   trailing_activation_pct: 1.5
   rr_ratio: 2.0

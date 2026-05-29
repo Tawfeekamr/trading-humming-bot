@@ -453,10 +453,12 @@ class TAGridTrendStrategy(StrategyV2Base):
             confirmation_ticks=trend_cfg.get("confirmation_ticks", 2),
             sl_buffer_pct=trend_cfg.get("sl_buffer_pct", 0.2),
             rr_ratio=trend_cfg.get("rr_ratio", 2.0),
+            exit_signal_threshold=trend_cfg.get("exit_signal_threshold", 2),
         )
 
         trend_capital = float(os.environ.get("TREND_CAPITAL_USDT", trend_cfg.get("capital", 0)))
         self._trend_capital = trend_capital
+        self._trend_max_total_positions = trend_cfg.get("max_total_positions", trend_cfg.get("max_positions", 2))
         self._position_managers: Dict[str, PositionManager] = {}
         for symbol in self.pairs:
             self._position_managers[symbol] = PositionManager(
@@ -484,6 +486,8 @@ class TAGridTrendStrategy(StrategyV2Base):
             max_drawdown_pct=trend_cfg.get("max_drawdown_pct", 10.0),
             daily_loss_limit_pct=trend_cfg.get("daily_loss_limit_pct", 5.0),
         )
+        self._trend_breaker.set_peak_equity(trend_capital)
+        self._trend_breaker.set_start_of_day_equity(trend_capital)
 
         # ── ML Regime Classifier (per-pair) ──
         self._ml_models: Dict[str, RegimeClassifier] = {}
@@ -842,6 +846,9 @@ class TAGridTrendStrategy(StrategyV2Base):
                 (self._cached_indicators.get(engine.symbol) or [None, None, None, None, 0])[4] or 0
             )
             circuit_breaker.set_start_of_day_equity(equity)
+            # Also reset trend circuit breaker start-of-day equity
+            trend_equity = self._estimate_trend_equity()
+            self._trend_breaker.set_start_of_day_equity(trend_equity)
             self._last_sod_reset = today_str
             self.event_log.log("daily_reset", equity=round(equity, 2))
             logger.info(f"Start-of-day equity reset: ${equity:.2f}")
@@ -1188,9 +1195,22 @@ class TAGridTrendStrategy(StrategyV2Base):
             for pos in pm.get_all_positions():
                 pm.update_trailing(pos, self._last_price[engine.symbol])
 
-        # Check exits every tick
+        # Update trend circuit breaker and check drawdown/daily limits
+        if pm.open_count > 0:
+            trend_equity = self._estimate_trend_equity()
+            self._trend_breaker.update_peak(trend_equity)
+            if self._trend_breaker.check(trend_equity) or self._trend_breaker.check_daily(trend_equity):
+                logger.critical(f"Trend circuit breaker triggered! Equity: ${trend_equity:.2f}")
+                self._close_all_trend_positions(engine)
+                return
+
+        # Check exits every tick (SL/TP/trailing)
         if pm.open_count > 0:
             self._check_trend_exits(engine)
+
+        # Check signal-based exit (throttled to every 55 ticks)
+        if pm.open_count > 0 and self._trend_tick_count % 55 == 0:
+            self._check_signal_exit(engine)
 
         # Force close
         if self._trend_force_close:
@@ -1283,7 +1303,7 @@ class TAGridTrendStrategy(StrategyV2Base):
                     amount=closed["amount"], fee=round(fee, 2), pnl=closed["pnl"],
                     pnl_pct=closed["pnl_pct"], stop_loss=closed["stop_loss"],
                     take_profit=closed["take_profit"], exit_reason=closed["exit_reason"],
-                    signal_score=0, duration_minutes=closed["duration_minutes"],
+                    signal_score=getattr(pos, 'signal_score', 0), duration_minutes=closed["duration_minutes"],
                 )
                 trend_engine = self.pairs.get(trend_pair)
                 self._save_trend_state(trend_engine)
@@ -1556,6 +1576,15 @@ class TAGridTrendStrategy(StrategyV2Base):
 
     # ── Trend Engine Methods ──
 
+    def _estimate_trend_equity(self) -> float:
+        """Estimate trend engine equity: base capital + unrealized PnL from all open positions."""
+        equity = self._trend_capital
+        for symbol, pm in self._position_managers.items():
+            for pos in pm.get_all_positions():
+                current_price = self._last_price.get(symbol, pos.entry_price)
+                equity += (current_price - pos.entry_price) * pos.amount
+        return equity
+
     def _check_trend_exits(self, engine: PairEngine):
         if not self._last_price.get(engine.symbol, 0):
             return
@@ -1565,6 +1594,27 @@ class TAGridTrendStrategy(StrategyV2Base):
             pos = pm.get_position(exit_info["order_id"])
             if pos:
                 self._execute_trend_exit(pos, exit_info, engine)
+
+    def _check_signal_exit(self, engine: PairEngine):
+        """Check if signal score has degraded enough to exit positions."""
+        if not self._last_price.get(engine.symbol, 0):
+            return
+        candles = self._cached_candles.get(engine.symbol)
+        if candles is None or len(candles) < 200:
+            return
+
+        pm = self._position_managers.get(engine.symbol, self._position_manager)
+        current_score = self._trend_manager.evaluate(candles, self._last_price[engine.symbol])
+        if self._trend_manager.should_exit(current_score):
+            for pos in pm.get_all_positions():
+                if not pos.exit_order_id:
+                    logger.info(f"Signal degradation exit for {engine.symbol}: score={current_score.total}")
+                    self._execute_trend_exit(pos, {
+                        "order_id": pos.entry_order_id,
+                        "exit_price": self._last_price[engine.symbol],
+                        "reason": "signal_degradation",
+                    }, engine)
+                    break  # exit one position per tick
 
     def _execute_trend_exit(self, pos, exit_info: dict, engine: PairEngine):
         exit_price = exit_info["exit_price"]
@@ -1584,6 +1634,10 @@ class TAGridTrendStrategy(StrategyV2Base):
     def _evaluate_trend_signals(self, engine: PairEngine):
         pm = self._position_managers.get(engine.symbol, self._position_manager)
         if not pm.can_open():
+            return
+        # Global position limit across all pairs
+        total_positions = sum(mgr.open_count for mgr in self._position_managers.values())
+        if total_positions >= self._trend_max_total_positions:
             return
         if self._trend_breaker.halted:
             return
@@ -1625,11 +1679,9 @@ class TAGridTrendStrategy(StrategyV2Base):
 
     def _open_trend_position(self, candles: pd.DataFrame, score, engine: PairEngine):
         sr_levels = self._trend_manager._sr.detect(candles)
-        atr = ATR(14)
-        closes = candles["close"]
-        atr_val = None
-        if "high" in candles.columns and "low" in candles.columns:
-            atr_val = atr.calculate(candles["high"], candles["low"], closes)
+        # Reuse cached ATR from per-pair indicators (avoids cold-start with no warmup)
+        cached = self._cached_indicators.get(engine.symbol)
+        atr_val = cached[3] if cached else None
 
         sl = self._trend_manager.calculate_stop_loss(self._last_price[engine.symbol], sr_levels, atr_val)
         tp = self._trend_manager.calculate_take_profit(self._last_price[engine.symbol], sl)
@@ -1652,6 +1704,7 @@ class TAGridTrendStrategy(StrategyV2Base):
         pos = pm.open_position(
             entry_order_id=str(order_id), entry_price=self._last_price[engine.symbol],
             amount=amount, stop_loss=sl, take_profit=tp, entry_time=entry_time,
+            signal_score=score.total,
         )
 
         if pos:

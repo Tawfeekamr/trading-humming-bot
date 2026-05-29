@@ -17,6 +17,7 @@ class TrendPosition:
     stop_loss: float
     take_profit: float
     entry_time: str
+    signal_score: int = 0
     trailing_stop: float = 0.0
     trailing_activated: bool = False
     highest_price: float = 0.0

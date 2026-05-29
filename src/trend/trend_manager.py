@@ -23,7 +23,8 @@ class TrendManager:
     def __init__(self, ema_fast: int = 20, ema_slow: int = 50, ema_trend: int = 200,
                  rsi_period: int = 14, rsi_min: float = 40, rsi_max: float = 70,
                  min_signal_score: int = 3, confirmation_ticks: int = 2,
-                 sl_buffer_pct: float = 0.2, rr_ratio: float = 2.0) -> None:
+                 sl_buffer_pct: float = 0.2, rr_ratio: float = 2.0,
+                 exit_signal_threshold: int = 2) -> None:
         self._ema_fast = EMA(ema_fast)
         self._ema_slow = EMA(ema_slow)
         self._ema_trend = EMA(ema_trend)
@@ -38,6 +39,7 @@ class TrendManager:
         self._confirmation_ticks = confirmation_ticks
         self._sl_buffer_pct = sl_buffer_pct / 100.0
         self._rr_ratio = rr_ratio
+        self._exit_signal_threshold = exit_signal_threshold
 
         self._prev_ema_fast: Optional[float] = None
         self._prev_ema_slow: Optional[float] = None
@@ -98,7 +100,7 @@ class TrendManager:
         return score.total >= self._min_signal_score
 
     def should_exit(self, score: SignalScore) -> bool:
-        return score.total < 2
+        return score.total < self._exit_signal_threshold
 
     def confirm_entry(self, score: SignalScore) -> bool:
         if not self.should_enter(score):
