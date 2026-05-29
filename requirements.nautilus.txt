@@ -1,0 +1,15 @@
+# NautilusTrader with Interactive Brokers adapter
+# Requires Python >=3.12, <3.15
+nautilus_trader[ib]>=1.227.0
+
+# Async HTTP client (ML poller)
+aiohttp>=3.9
+
+# MQTT client (status bridge)
+paho-mqtt>=2.0
+
+# Config loading
+pyyaml>=6.0
+
+# Data handling
+pandas>=2.0

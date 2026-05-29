@@ -19,13 +19,9 @@ WORKDIR /app
 # Upgrade build tools
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 
-# Install NautilusTrader with Interactive Brokers adapter + MQTT client
-RUN pip install --no-cache-dir \
-    "nautilus_trader[ib]>=1.227.0" \
-    paho-mqtt>=2.0 \
-    aiohttp>=3.9 \
-    pyyaml>=6.0 \
-    pandas>=2.0
+# Install dependencies from requirements file
+COPY requirements.nautilus.txt /tmp/requirements.nautilus.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.nautilus.txt && rm /tmp/requirements.nautilus.txt
 
 # Copy nautilus package source
 COPY src/nautilus/ /app/src/nautilus/
