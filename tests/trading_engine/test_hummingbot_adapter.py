@@ -1,6 +1,12 @@
 """HummingbotAdapter tests — uses mocks, no real Hummingbot dependency."""
 from decimal import Decimal
 from src.trading_engine.adapter import Order, InstrumentInfo
+from src.trading_engine.adapter.hummingbot_integration import (
+    build_grid_config,
+    init_trading_engine,
+    tick_trading_engine,
+    route_fill,
+)
 
 
 class MockBalance:
@@ -195,3 +201,52 @@ def test_get_instrument():
     assert info.symbol == "BTC-USDT"
     assert info.price_precision == 4
     assert info.quantity_precision == 4
+
+
+def test_build_grid_config():
+    config = build_grid_config("BTC-USDT", {"grid_levels": 3, "capital": 2000})
+    assert config["levels"] == 3
+    assert config["capital"] == 2000
+    assert config["ema_period"] == 200  # default
+
+
+def test_init_trading_engine():
+    connector = MockConnector()
+    strategy = MockStrategy()
+    host = init_trading_engine(connector, strategy, ["BTC-USDT"], {"grid_levels": 3})
+    assert len(host.strategies) == 1
+    assert host.strategies[0].instrument_id == "BTC-USDT"
+
+
+def test_tick_trading_engine():
+    connector = MockConnector()
+    strategy = MockStrategy()
+    host = init_trading_engine(connector, strategy, ["BTC-USDT"], {
+        "grid_levels": 3, "ema_period": 5, "rsi_period": 5,
+        "atr_period": 5, "bollinger_period": 5,
+    })
+    # Feed bars — need enough to warm up indicators
+    prices = [50000, 50100, 49900, 50200, 49800, 50100, 49900, 50150, 49850, 50050]
+    for i, price in enumerate(prices):
+        tick_trading_engine(host, "BTC-USDT", {
+            "open": price, "high": price * 1.001, "low": price * 0.999,
+            "close": price, "volume": 1000.0, "timestamp": i * 3600,
+        })
+    # Should have processed all bars without error
+    assert host.strategies[0].state.value != "inactive"
+
+
+def test_route_fill():
+    connector = MockConnector()
+    strategy = MockStrategy()
+    host = init_trading_engine(connector, strategy, ["BTC-USDT"], {"grid_levels": 3})
+
+    class MockEvent:
+        order_id = "hb-buy-1"
+        trading_pair = "BTC-USDT"
+        trade_type = type('TT', (), {'__str__': lambda s: 'BUY'})()
+        price = 50000.0
+        amount = 0.001
+
+    route_fill(host, MockEvent())
+    # Fill was routed — no crash = success
