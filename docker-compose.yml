@@ -29,3 +29,25 @@ services:
       - ./models:/home/hummingbot/models
       - ./.env:/home/hummingbot/.env
       - ./config:/home/hummingbot/config:ro
+
+  nautilus-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile.nautilus
+    restart: unless-stopped
+    depends_on:
+      mosquitto:
+        condition: service_started
+    env_file: .env.docker
+    environment:
+      - IB_HOST=${IB_HOST:-host.docker.internal}
+      - IB_PORT=${IB_PORT:-7497}
+      - IB_CLIENT_ID=${IB_CLIENT_ID:-1}
+      - IB_TRADING_MODE=${IB_TRADING_MODE:-paper}
+      - NAUTILUS_CONFIG_PATH=/app/config/nautilus.yaml
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./config/nautilus.yaml:/app/config/nautilus.yaml:ro
+    profiles:
+      - forex
