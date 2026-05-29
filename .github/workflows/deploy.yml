@@ -31,7 +31,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build and install trading-engine-core wheel
-        run: pip install maturin && cd trading-engine-core && maturin develop
+        run: pip install maturin && cd trading-engine-core && maturin build --release && pip install target/wheels/trading_engine_core*.whl
 
       - name: Run unit tests
         run: pytest tests/ -v --tb=short
