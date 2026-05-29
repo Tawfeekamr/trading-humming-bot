@@ -17,9 +17,10 @@ pub struct CandlestickPatterns {
 impl CandlestickPatterns {
     pub fn new(body_ratio_threshold: f64) -> Self { Self { body_ratio_threshold } }
     pub fn detect(&self, current: &Bar, previous: Option<&Bar>) -> Pattern {
-        if self.is_doji(current) { return Pattern::Doji; }
+        // Check specific single-candle patterns before doji (they're more specific)
         if self.is_hammer(current) { return Pattern::Hammer; }
         if self.is_inverted_hammer(current) { return Pattern::InvertedHammer; }
+        if self.is_doji(current) { return Pattern::Doji; }
         if let Some(prev) = previous {
             if self.is_bullish_engulfing(current, prev) { return Pattern::BullishEngulfing; }
             if self.is_bearish_engulfing(current, prev) { return Pattern::BearishEngulfing; }
