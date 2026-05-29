@@ -502,6 +502,36 @@ class TAGridSOLUSDT(StrategyV2Base):
         if legacy_grid_path.exists() and first_engine:
             self._load_grid_state(first_engine, legacy_path=legacy_grid_path)
 
+        # Initialize trading engine (Phase 5) — after connector is available
+        self._te_host = None
+        if self.use_trading_engine:
+            try:
+                te_config = {
+                    "grid_levels": self.levels,
+                    "capital": self.capital_usdt,
+                    "spacing_atr_multiplier": self.atr_multiplier,
+                    "ema_period": self.ema_period,
+                    "rsi_period": self.rsi_period,
+                    "atr_period": self.atr_period,
+                    "bollinger_period": self.bb_period,
+                    "bollinger_std_dev": self.bb_std,
+                    "order_refresh_seconds": self.order_refresh_time,
+                    "rsi_oversold": self.rsi_oversold,
+                    "rsi_overbought": self.rsi_overbought,
+                }
+                pairs = list(self._pair_engines.keys())
+                self._te_host = init_trading_engine(
+                    connector=self.connectors.get(self.exchange),
+                    strategy_ref=self,
+                    pairs=pairs,
+                    config=te_config,
+                )
+                self.logger().info(f"Trading engine initialized for {len(pairs)} pairs: {pairs}")
+            except Exception as e:
+                self.logger().error(f"Failed to initialize trading engine: {e}")
+                self._te_host = None
+                self.use_trading_engine = False
+
         # Start force-ready watchdog (bypasses connector freeze after 30s)
         threading.Thread(target=self._force_connector_ready, daemon=True).start()
 
