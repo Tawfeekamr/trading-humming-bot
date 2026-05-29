@@ -28,3 +28,6 @@ Thumbs.db
 # Terraform state
 iac/**/*.tfstate*
 iac/**/.terraform/
+
+# Rust build artifacts
+trading-engine-core/target/
