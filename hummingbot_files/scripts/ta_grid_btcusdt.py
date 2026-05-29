@@ -93,6 +93,15 @@ except ImportError:
     from pair_engine import PairEngine, PairConfig
     from capital_manager import CapitalManager
 
+# Trading engine integration (Phase 5)
+try:
+    from src.trading_engine.adapter.hummingbot_integration import (
+        init_trading_engine, tick_trading_engine, route_fill, build_grid_config,
+    )
+    _TRADING_ENGINE_AVAILABLE = True
+except ImportError:
+    _TRADING_ENGINE_AVAILABLE = False
+
 try:
     from hummingbot.strategy.strategy_v2_base import StrategyV2Base, StrategyV2ConfigBase
     from hummingbot.connector.connector_base import ConnectorBase
@@ -258,6 +267,12 @@ class TAGridSOLUSDT(StrategyV2Base):
         atr_cfg = ind_cfg.get("atr", {})
         self.atr_period = atr_cfg.get("period", config.atr_period)
         self.atr_multiplier = atr_cfg.get("spacing_multiplier", config.atr_multiplier)
+
+        # Trading engine feature flag
+        self.use_trading_engine = (
+            _TRADING_ENGINE_AVAILABLE
+            and os.environ.get("USE_TRADING_ENGINE", "false").lower() == "true"
+        )
 
         # Risk config
         self.max_drawdown_pct = float(os.environ.get("MAX_DRAWDOWN_PCT", risk_cfg.get("max_drawdown_pct", config.max_drawdown_pct)))
