@@ -67,9 +67,10 @@ class SignalEngine:
         self._position_mgr = SignalPositionManager(config)
         self._journal = SignalJournal()
 
-        # Fetch available Binance pairs on init
+        # Fetch available Gate.io pairs on init
         self._available_pairs: set[str] = set()
         self._last_pair_refresh = 0
+        self._refresh_available_pairs()  # Fetch immediately on startup
 
         logger.info(f"Signal Engine initialized: "
                      f"enabled={self._enabled}, audit={self._audit_mode}, "

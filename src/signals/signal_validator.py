@@ -32,11 +32,13 @@ class SignalValidator:
         if signal.action != SignalAction.OPEN_LONG:
             return True, ""  # CLOSE/UPDATE signals don't need full validation
 
-        # Pair must exist on exchange
-        if signal.pair:
+        # Pair must exist on Gate.io (skip check if pair list hasn't loaded yet)
+        if signal.pair and self._available_pairs:
             pair_variants = {signal.pair, signal.pair.replace("-", "")}
-            if self._available_pairs and not pair_variants.intersection(self._available_pairs):
-                return False, f"Pair {signal.pair} not available on exchange"
+            if not pair_variants.intersection(self._available_pairs):
+                logger.warning(f"Pair {signal.pair} not found in {len(self._available_pairs)} Gate.io pairs — allowing anyway (may be newly listed)")
+                # Don't reject — Gate.io lists new pairs frequently, and the exchange
+                # will reject the order if the pair truly doesn't exist
 
         # Not blacklisted
         if signal.pair in self._blacklisted_pairs:
