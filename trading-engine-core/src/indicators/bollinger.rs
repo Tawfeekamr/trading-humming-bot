@@ -1,6 +1,7 @@
 use std::fmt;
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "python", pyo3::pyclass)]
 pub struct BollingerBands {
     period: u32,
     std_dev_multiplier: f64,
@@ -39,4 +40,41 @@ impl BollingerBands {
     pub fn percent_b(&self) -> f64 { self.percent_b }
     pub fn is_initialized(&self) -> bool { self.initialized }
     pub fn reset(&mut self) { self.window.clear(); self.upper = 0.0; self.middle = 0.0; self.lower = 0.0; self.bandwidth = 0.0; self.percent_b = 0.5; self.initialized = false; }
+}
+
+#[cfg(feature = "python")]
+#[pyo3::pymethods]
+impl BollingerBands {
+    #[new]
+    fn py_new(period: u32, std_dev: f64) -> Self { Self::new(period, std_dev) }
+
+    #[pyo3(name = "update")]
+    fn py_update(&mut self, close: f64) { self.update(close); }
+
+    #[getter]
+    #[pyo3(name = "upper")]
+    fn py_upper(&self) -> f64 { self.upper() }
+
+    #[getter]
+    #[pyo3(name = "middle")]
+    fn py_middle(&self) -> f64 { self.middle() }
+
+    #[getter]
+    #[pyo3(name = "lower")]
+    fn py_lower(&self) -> f64 { self.lower() }
+
+    #[getter]
+    #[pyo3(name = "bandwidth")]
+    fn py_bandwidth(&self) -> f64 { self.bandwidth() }
+
+    #[getter]
+    #[pyo3(name = "percent_b")]
+    fn py_percent_b(&self) -> f64 { self.percent_b() }
+
+    #[getter]
+    #[pyo3(name = "is_initialized")]
+    fn py_is_initialized(&self) -> bool { self.is_initialized() }
+
+    #[pyo3(name = "reset")]
+    fn py_reset(&mut self) { self.reset(); }
 }

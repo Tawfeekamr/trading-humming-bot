@@ -1,6 +1,7 @@
 use std::fmt;
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "python", pyo3::pyclass)]
 pub struct Atr {
     period: u32,
     value: f64,
@@ -43,4 +44,31 @@ impl Atr {
         (high - low) > avg * 1.5
     }
     pub fn reset(&mut self) { self.value = 0.0; self.prev_close = None; self.count = 0; self.initialized = false; self.atr_history.clear(); }
+}
+
+#[cfg(feature = "python")]
+#[pyo3::pymethods]
+impl Atr {
+    #[new]
+    fn py_new(period: u32) -> Self { Self::new(period) }
+
+    #[pyo3(name = "update_bar")]
+    fn py_update_bar(&mut self, open: f64, high: f64, low: f64, close: f64) {
+        self.update_bar(open, high, low, close);
+    }
+
+    #[getter]
+    #[pyo3(name = "value")]
+    fn py_value(&self) -> f64 { self.value() }
+
+    #[getter]
+    #[pyo3(name = "is_initialized")]
+    fn py_is_initialized(&self) -> bool { self.is_initialized() }
+
+    #[getter]
+    #[pyo3(name = "count")]
+    fn py_count(&self) -> u32 { self.count() }
+
+    #[pyo3(name = "reset")]
+    fn py_reset(&mut self) { self.reset(); }
 }

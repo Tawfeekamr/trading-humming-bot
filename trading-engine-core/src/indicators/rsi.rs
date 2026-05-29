@@ -1,6 +1,7 @@
 use std::fmt;
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "python", pyo3::pyclass)]
 pub struct Rsi {
     period: u32,
     avg_gain: f64,
@@ -48,4 +49,29 @@ impl Rsi {
     pub fn is_initialized(&self) -> bool { self.initialized }
     pub fn count(&self) -> u32 { self.count }
     pub fn reset(&mut self) { self.avg_gain = 0.0; self.avg_loss = 0.0; self.prev_close = None; self.value = 50.0; self.count = 0; self.initialized = false; }
+}
+
+#[cfg(feature = "python")]
+#[pyo3::pymethods]
+impl Rsi {
+    #[new]
+    fn py_new(period: u32) -> Self { Self::new(period) }
+
+    #[pyo3(name = "update")]
+    fn py_update(&mut self, close: f64) { self.update(close); }
+
+    #[getter]
+    #[pyo3(name = "value")]
+    fn py_value(&self) -> f64 { self.value() }
+
+    #[getter]
+    #[pyo3(name = "is_initialized")]
+    fn py_is_initialized(&self) -> bool { self.is_initialized() }
+
+    #[getter]
+    #[pyo3(name = "count")]
+    fn py_count(&self) -> u32 { self.count() }
+
+    #[pyo3(name = "reset")]
+    fn py_reset(&mut self) { self.reset(); }
 }
