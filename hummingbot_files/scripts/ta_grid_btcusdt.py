@@ -756,6 +756,26 @@ class TAGridSOLUSDT(StrategyV2Base):
             except Exception as e:
                 logger.error(f"Overtrading check failed: {e}")
 
+        # ── Trading Engine Path (Phase 5) ──
+        if self.use_trading_engine and self._te_host is not None:
+            try:
+                if engine.symbol in self.candle_feeds:
+                    df = self.candle_feeds[engine.symbol].fetch_candles(limit=250)
+                    if df is not None and len(df) > 0:
+                        last = df.iloc[-1]
+                        bar = {
+                            "open": float(last["open"]),
+                            "high": float(last["high"]),
+                            "low": float(last["low"]),
+                            "close": float(last["close"]),
+                            "volume": float(last.get("volume", 0)),
+                            "timestamp": int(last.get("timestamp", 0)),
+                        }
+                        tick_trading_engine(self._te_host, engine.symbol, bar)
+            except Exception as e:
+                self.logger().error(f"Trading engine tick error for {engine.symbol}: {e}")
+            return  # Skip old PairEngine grid logic for this pair
+
         # Fetch candles for this pair
         should_fetch = (
             self._last_candle_time.get(engine.symbol) is None or
