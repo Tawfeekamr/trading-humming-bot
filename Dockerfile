@@ -4,6 +4,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 python3
 RUN python3 -m pip install --no-cache-dir --break-system-packages maturin
 COPY trading-engine-core/ /build/trading-engine-core/
 WORKDIR /build/trading-engine-core
+ENV PYO3_PYTHON=/usr/bin/python3
 RUN maturin build --release --out /build/wheels
 # The wheel is in /build/wheels/
 
