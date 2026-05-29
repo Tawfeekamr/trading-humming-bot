@@ -184,6 +184,10 @@ class SignalEngine:
         if signal.action != SignalAction.OPEN_LONG:
             return
 
+        # Fill missing stop-loss using ATR-based default
+        if signal.stop_loss is None:
+            self._fill_default_sl(signal, connector)
+
         # Validate
         valid, reason = self._validator.validate(signal)
         if not valid:
@@ -395,6 +399,94 @@ class SignalEngine:
         except Exception as e:
             logger.debug(f"Gate.io price fallback failed for {symbol}: {e}")
         return 0
+
+    def _fill_default_sl(self, signal: ParsedSignal, connector):
+        """Fill missing stop-loss using ATR-based default.
+
+        When a signal has no explicit SL, compute ATR from recent candles
+        and set SL = entry - (ATR × multiplier) for LONG positions.
+        Entry defaults to current market price if not specified.
+        """
+        if not signal.pair or signal.stop_loss is not None:
+            return
+
+        # Resolve entry price: use signal entry or current market price
+        entry = signal.entry_high or signal.entry_low
+        if not entry or entry <= 0:
+            entry = self._get_current_price(connector, signal.pair)
+        if entry <= 0:
+            logger.warning(f"Cannot compute default SL for {signal.pair}: no entry/market price")
+            return
+
+        # Fetch recent candles from Gate.io to compute ATR
+        atr = self._fetch_atr(signal.pair)
+        if atr <= 0:
+            logger.warning(f"Cannot compute default SL for {signal.pair}: ATR unavailable")
+            return
+
+        multiplier = self._config.get("default_sl_atr_multiplier", 2.0)
+        sl_distance = atr * multiplier
+
+        # Compute SL (below entry for LONG)
+        default_sl = entry - sl_distance
+
+        # Cap at max_sl_distance_pct
+        max_sl_pct = self._config.get("max_sl_distance_pct", 10.0) / 100.0
+        max_sl_distance = entry * max_sl_pct
+        if sl_distance > max_sl_distance:
+            default_sl = entry - max_sl_distance
+            logger.info(f"Default SL capped at {max_sl_pct*100:.0f}% for {signal.pair}")
+
+        # Round to reasonable precision
+        if default_sl > 1:
+            default_sl = round(default_sl, 2)
+        else:
+            default_sl = round(default_sl, 6)
+
+        signal.stop_loss = default_sl
+
+        # Also set entry if it was missing
+        if not signal.entry_low and not signal.entry_high:
+            signal.entry_low = entry
+            signal.entry_high = entry
+            signal.is_market_entry = True
+
+        logger.info(f"Default SL set for {signal.pair}: ${default_sl:,.4f} "
+                     f"(ATR={atr:.4f} × {multiplier}, entry=${entry:,.4f})")
+        self._notify(
+            f"📐 <b>Default SL</b>: {signal.pair}\n"
+            f"Entry: ${entry:,.4f} (market)\n"
+            f"SL: ${default_sl:,.4f} (ATR×{multiplier})\n"
+            f"Distance: {(entry - default_sl) / entry * 100:.1f}%"
+        )
+
+    def _fetch_atr(self, pair: str) -> float:
+        """Fetch recent candles from Gate.io and compute ATR(14)."""
+        try:
+            gate_pair = pair.replace("-", "_")
+            url = f"https://api.gateio.ws/api/v4/spot/candlesticks?currency_pair={gate_pair}&interval=1h&limit=15"
+            req = urllib.request.Request(url, headers={"User-Agent": "signal-engine"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode())
+            if not data or len(data) < 14:
+                return 0.0
+            # Gate.io candlestick format: [timestamp, volume, close, high, low, amount]
+            # Compute ATR(14) using simple average of true ranges
+            true_ranges = []
+            for i in range(1, len(data)):
+                high = float(data[i][3])
+                low = float(data[i][4])
+                prev_close = float(data[i - 1][2])
+                tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+                true_ranges.append(tr)
+            if not true_ranges:
+                return 0.0
+            # Use last 14 TRs for ATR
+            atr = sum(true_ranges[-14:]) / len(true_ranges[-14:])
+            return atr
+        except Exception as e:
+            logger.debug(f"ATR fetch failed for {pair}: {e}")
+            return 0.0
 
     def _get_equity(self, connector) -> float:
         """Get total account equity from connector, with config fallback."""

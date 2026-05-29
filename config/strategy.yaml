@@ -122,6 +122,7 @@ signal_copy:
   max_capital_usdt: 1000            # Hard cap
   min_rr_ratio: 1.0                 # Minimum risk:reward (vs TP3)
   max_sl_distance_pct: 10.0         # Max stop-loss distance from entry (%)
+  default_sl_atr_multiplier: 2.0   # Default SL = entry ± ATR × this (when signal has no SL)
   max_entry_zone_pct: 3.0           # Max entry zone width (%)
   min_quality_score: 5              # Min AI quality score (1-10) to execute trade
 
