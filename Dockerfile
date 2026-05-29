@@ -1,7 +1,7 @@
 # Stage 1: Build Rust wheel
 FROM rust:1.82-slim AS rust-builder
 RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-pip python3-venv && rm -rf /var/lib/apt/lists/*
-RUN python3 -m pip install --no-cache-dir maturin
+RUN python3 -m pip install --no-cache-dir --break-system-packages maturin
 COPY trading-engine-core/ /build/trading-engine-core/
 WORKDIR /build/trading-engine-core
 RUN maturin build --release --out /build/wheels
