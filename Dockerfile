@@ -1,10 +1,8 @@
-# Stage 1: Build Rust wheel
-FROM rust:1.82-slim AS rust-builder
-RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-pip python3-venv && rm -rf /var/lib/apt/lists/*
-# Use venv to avoid PEP 668 externally-managed issues with maturin
-RUN python3 -m venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
-ENV PYO3_PYTHON=/opt/venv/bin/python3
+# Stage 1: Build Rust wheel (use Python image + install Rust for reliable interpreter detection)
+FROM python:3.13-slim AS rust-builder
+RUN apt-get update && apt-get install -y --no-install-recommends curl build-essential pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH="/root/.cargo/bin:${PATH}"
 RUN pip install --no-cache-dir maturin
 COPY trading-engine-core/ /build/trading-engine-core/
 WORKDIR /build/trading-engine-core
