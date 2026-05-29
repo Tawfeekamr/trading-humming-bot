@@ -104,6 +104,9 @@ try:
 except ImportError:
     ML_AVAILABLE = False
 
+# Trading engine (Rust indicators + StrategyHost)
+_trading_engine_enabled = os.environ.get("USE_TRADING_ENGINE", "").lower() == "true"
+
 
 try:
     from hummingbot.strategy.strategy_v2_base import StrategyV2Base, StrategyV2ConfigBase
@@ -697,6 +700,37 @@ class TAGridTrendStrategy(StrategyV2Base):
 
         logger.info(f"Dual-engine strategy started on {self.exchange} with {len(self.pairs)} pair(s)")
 
+        # ── Trading Engine (Rust indicators + StrategyHost) ──
+        self._trading_host = None
+        self._trading_engine_warmed_up: Dict[str, bool] = {}
+        if _trading_engine_enabled:
+            try:
+                from src.trading_engine.adapter.hummingbot_integration import init_trading_engine
+                connector = self.connectors.get(self.exchange)
+                if connector:
+                    pairs = list(self.pairs.keys())
+                    te_config = {
+                        "grid_levels": self.levels,
+                        "capital": self.capital_usdt,
+                        "spacing_atr_multiplier": self.atr_multiplier,
+                        "ema_period": self.ema_period,
+                        "rsi_period": self.rsi_period,
+                        "atr_period": self.atr_period,
+                        "bollinger_period": self.bb_period,
+                        "bollinger_std_dev": self.bb_std,
+                        "order_refresh_seconds": self.order_refresh_time,
+                        "rsi_oversold": self.rsi_oversold,
+                        "rsi_overbought": self.rsi_overbought,
+                    }
+                    self._trading_host = init_trading_engine(connector, self, pairs, te_config)
+                    self._trading_engine_warmed_up = {s: False for s in pairs}
+                    logger.info(f"Trading engine ENABLED — Rust indicators active for {len(pairs)} pairs: {pairs}")
+            except Exception as e:
+                logger.error(f"Trading engine init failed, falling back to Python indicators: {e}")
+                import traceback as _tb
+                logger.error(_tb.format_exc())
+                self._trading_host = None
+
         # Time drift check — warn if system clock is out of sync with Binance
         self._check_time_drift()
 
@@ -978,10 +1012,43 @@ class TAGridTrendStrategy(StrategyV2Base):
                 ml_regime=ml_regime if ml_regime is not None else 0,
                 pair=engine.symbol,
             )
+
+            # ── Feed bar to trading engine (Rust indicators + StrategyHost) ──
+            if self._trading_host is not None:
+                from src.trading_engine.adapter.hummingbot_integration import tick_trading_engine
+                # Warm up Rust indicators from full candle history on first fetch
+                if not self._trading_engine_warmed_up.get(engine.symbol, True):
+                    for strategy in self._trading_host.strategies:
+                        if hasattr(strategy, 'ema') and strategy.instrument_id == engine.symbol:
+                            for i in range(len(df)):
+                                c = float(df["close"].iloc[i])
+                                h = float(df["high"].iloc[i])
+                                l = float(df["low"].iloc[i])
+                                strategy.ema.update(c)
+                                strategy.rsi.update(c)
+                                strategy.atr.update_bar(c, h, l, c)
+                                strategy.bollinger.update(c)
+                            logger.info(f"Rust indicators warmed up for {engine.symbol} from {len(df)} historical bars")
+                            break
+                    self._trading_engine_warmed_up[engine.symbol] = True
+                # Feed latest bar to trading engine
+                bar = {
+                    "open": float(df["open"].iloc[-1]),
+                    "high": float(df["high"].iloc[-1]),
+                    "low": float(df["low"].iloc[-1]),
+                    "close": current_price,
+                    "volume": float(df["volume"].iloc[-1]) if "volume" in df.columns else 0.0,
+                    "timestamp": int(time_mod.time()),
+                }
+                tick_trading_engine(self._trading_host, engine.symbol, bar)
         else:
             if self._cached_indicators.get(engine.symbol) is None:
                 return
             bb_result, rsi_value, ema_value, atr_value, current_price = self._cached_indicators[engine.symbol]
+
+        # Skip inline grid logic when trading engine handles it
+        if self._trading_host is not None:
+            return
 
         # Evaluate state
         state_machine = self.state_machines[engine.symbol]
@@ -1227,6 +1294,14 @@ class TAGridTrendStrategy(StrategyV2Base):
 
     def did_fill_order(self, event):
         try:
+            # Route fill to trading engine for state synchronization
+            if self._trading_host is not None:
+                try:
+                    from src.trading_engine.adapter.hummingbot_integration import route_fill
+                    route_fill(self._trading_host, event)
+                except Exception as te_err:
+                    logger.debug(f"Trading engine fill routing skipped: {te_err}")
+
             order_id = str(getattr(event, 'order_id', getattr(event, 'client_order_id', '')))
             # Route to trend if order_id matches any per-pair position manager
             is_trend = False
@@ -2208,6 +2283,14 @@ class TAGridTrendStrategy(StrategyV2Base):
     # ── Graceful Shutdown ──
 
     def on_stop(self):
+        # Stop trading engine host
+        if getattr(self, '_trading_host', None) is not None:
+            try:
+                self._trading_host.stop()
+                logger.info("Trading engine host stopped")
+            except Exception:
+                pass
+
         # Save state for all pairs
         for engine in self.pairs.values():
             self._save_grid_state(engine)

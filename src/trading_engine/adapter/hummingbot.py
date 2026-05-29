@@ -42,6 +42,7 @@ class HummingbotAdapter(ExecutionAdapter):
         """Submit an order via strategy buy/sell methods.
 
         Converts float to Decimal to avoid precision issues.
+        Uses LIMIT_MAKER for maker-fee savings.
         Tracks submitted orders for cancellation/retrieval.
 
         Args:
@@ -54,7 +55,13 @@ class HummingbotAdapter(ExecutionAdapter):
         pair = order.instrument_id
         quantity = Decimal(str(order.quantity))
         price = Decimal(str(order.price))
-        order_type = order.order_type
+
+        # Use LIMIT_MAKER for maker rebates (same as inline grid logic)
+        try:
+            from hummingbot.core.data_type.common import OrderType as HbOrderType
+            order_type = HbOrderType.LIMIT_MAKER
+        except ImportError:
+            order_type = order.order_type
 
         if order.side == "BUY":
             order_id = self._strategy.buy(
