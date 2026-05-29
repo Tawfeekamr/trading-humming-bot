@@ -1168,6 +1168,13 @@ class TAGridSOLUSDT(StrategyV2Base):
 
     def did_fill_order(self, event):
         try:
+            # Route fill to trading engine (Phase 5)
+            if self.use_trading_engine and self._te_host is not None:
+                try:
+                    route_fill(self._te_host, event)
+                except Exception as e:
+                    self.logger().error(f"Trading engine fill routing error: {e}")
+
             # Route to correct pair based on trading pair
             trading_pair = getattr(event, 'trading_pair', None)
             if not trading_pair:
@@ -1615,6 +1622,13 @@ class TAGridSOLUSDT(StrategyV2Base):
     # ── Graceful Shutdown ────────────────────────────────────────────
 
     def on_stop(self):
+        # Stop trading engine (Phase 5)
+        if self._te_host is not None:
+            try:
+                self._te_host.stop()
+            except Exception:
+                pass
+
         # Save state for all pairs
         for engine in self.pairs.values():
             self._save_grid_state_single(engine)
