@@ -119,6 +119,7 @@ pub struct TrendConfig {
 pub struct RiskConfig {
     pub max_drawdown_pct: f64,
     pub daily_loss_limit_pct: f64,
+    #[serde(default, alias = "max_base_exposure_pct")]
     pub max_exposure_pct: f64,
 }
 
