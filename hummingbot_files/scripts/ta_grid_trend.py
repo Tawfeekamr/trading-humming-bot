@@ -1676,7 +1676,45 @@ class TAGridTrendStrategy(StrategyV2Base):
         if not self._last_price.get(engine.symbol, 0):
             return
         pm = self._position_managers.get(engine.symbol, self._position_manager)
-        exits = pm.check_exits(self._last_price[engine.symbol])
+
+        # ── Stale exit cleanup: force-close zombie positions ──
+        # Positions with exit_order_id set but is_closed=False for >10 minutes
+        # means the exit order never filled (e.g. LIMIT_MAKER on paper trading).
+        # Reset their exit state so they can be re-evaluated by check_exits().
+        current_price = self._last_price[engine.symbol]
+        for pos in pm.get_all_positions():
+            if pos.exit_order_id and not pos.is_closed:
+                try:
+                    entry_time = pos.entry_time
+                    if isinstance(entry_time, str):
+                        from datetime import datetime as _dt
+                        entry_time = _dt.fromisoformat(entry_time)
+                    if entry_time:
+                        age_hours = (pm._positions.get(pos.entry_order_id, pos).entry_time
+                                     if hasattr(pos, 'entry_time') else None)
+                        # If exit was pending for a long time, force-close at market
+                        if pos.exit_reason:
+                            logger.info(f"Force-closing stale trend position {engine.symbol}: "
+                                        f"exit_reason={pos.exit_reason} has been pending, closing at market")
+                            # Record the forced close directly
+                            closed = pm.finalize_exit(pos.entry_order_id, current_price, fee=0.0)
+                            if closed:
+                                self._trend_journal.log_trade(
+                                    side="SELL", entry_price=closed["entry_price"],
+                                    exit_price=current_price, amount=closed["amount"],
+                                    fee=0.0, pnl=closed["pnl"], pnl_pct=closed["pnl_pct"],
+                                    stop_loss=closed["stop_loss"], take_profit=closed["take_profit"],
+                                    exit_reason=f"force_close_{closed['exit_reason']}",
+                                    signal_score=getattr(pos, 'signal_score', 0),
+                                    duration_minutes=closed["duration_minutes"],
+                                )
+                                logger.info(f"Trend force-close {engine.symbol}: PnL={closed['pnl']:.2f} ({closed['pnl_pct']:.2f}%)")
+                                self._save_trend_state(engine)
+                except Exception as e:
+                    logger.debug(f"Stale exit check error for {engine.symbol}: {e}")
+
+        # ── Normal SL/TP/trailing exit checks ──
+        exits = pm.check_exits(current_price)
         for exit_info in exits:
             pos = pm.get_position(exit_info["order_id"])
             if pos:
@@ -1709,8 +1747,10 @@ class TAGridTrendStrategy(StrategyV2Base):
         amount = Decimal(str(pos.amount)).quantize(Decimal("0.01"))
 
         try:
-            order_id = self.sell(self.exchange, engine.symbol, amount, OrderType.LIMIT_MAKER)
-            logger.info(f"Trend SELL order placed for {engine.symbol}: {amount} {engine.base_asset} @ {exit_price}")
+            # Use LIMIT (not LIMIT_MAKER) so paper trading fills the exit immediately.
+            # LIMIT_MAKER orders sit unfilled on paper trade connectors, causing zombie positions.
+            order_id = self.sell(self.exchange, engine.symbol, amount, OrderType.LIMIT)
+            logger.info(f"Trend SELL order placed for {engine.symbol}: {amount} @ {exit_price} reason={reason}")
         except Exception as e:
             logger.error(f"Trend sell failed for {engine.symbol}: {e}")
             return
