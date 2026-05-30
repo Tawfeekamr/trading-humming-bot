@@ -1811,6 +1811,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokio-native-tls"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbae76ab933c85776efabc971569dd6119c580d8f5d448769dec1764bf796ef2"
+dependencies = [
+ "native-tls",
+ "tokio",
+]
+
+[[package]]
 name = "tokio-rustls"
 version = "0.26.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1850,10 +1860,9 @@ checksum = "edc5f74e248dc973e0dbb7b74c7e0d6fcc301c694ff50049504004ef4d0cdcd9"
 dependencies = [
  "futures-util",
  "log",
- "rustls",
- "rustls-pki-types",
+ "native-tls",
  "tokio",
- "tokio-rustls",
+ "tokio-native-tls",
  "tungstenite",
 ]
 
@@ -2021,9 +2030,8 @@ dependencies = [
  "http",
  "httparse",
  "log",
+ "native-tls",
  "rand 0.8.6",
- "rustls",
- "rustls-pki-types",
  "sha1",
  "thiserror 1.0.69",
  "utf-8",
