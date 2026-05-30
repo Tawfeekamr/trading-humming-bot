@@ -1,1 +1,2 @@
-// src/notifications/mod.rs — Telegram notifications
+pub mod telegram;
+pub use telegram::TelegramBot;

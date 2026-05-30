@@ -1,0 +1,131 @@
+use anyhow::Result;
+use reqwest::Client;
+use tracing::{info, warn, error};
+
+pub struct TelegramBot {
+    token: String,
+    chat_id: String,
+    client: Client,
+    enabled: bool,
+}
+
+impl TelegramBot {
+    pub fn new(token: &str, chat_id: &str) -> Self {
+        Self {
+            token: token.to_string(),
+            chat_id: chat_id.to_string(),
+            client: Client::new(),
+            enabled: !token.is_empty() && !chat_id.is_empty(),
+        }
+    }
+
+    pub fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    pub async fn send(&self, message: &str) -> Result<()> {
+        if !self.enabled { return Ok(()); }
+
+        let url = format!("https://api.telegram.org/bot{}/sendMessage", self.token);
+
+        for attempt in 0..3 {
+            match self.client
+                .post(&url)
+                .form(&[
+                    ("chat_id", self.chat_id.as_str()),
+                    ("text", message),
+                    ("parse_mode", "HTML"),
+                ])
+                .send()
+                .await
+            {
+                Ok(_) => return Ok(()),
+                Err(e) => {
+                    if attempt < 2 {
+                        warn!("Telegram send failed (attempt {}): {}", attempt + 1, e);
+                        tokio::time::sleep(tokio::time::Duration::from_millis(500 * (attempt + 1) as u64)).await;
+                    } else {
+                        error!("Telegram send failed after 3 attempts: {}", e);
+                        return Err(e.into());
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn format_status_message(
+        &self,
+        pair: &str,
+        state: &str,
+        pnl: f64,
+        open_orders: usize,
+        details: &str,
+    ) -> String {
+        format!(
+            "📊 <b>Status — {}</b>\n\
+             State: {}\n\
+             PnL: ${:.2}\n\
+             Open Orders: {}\n\
+             {}",
+            pair, state, pnl, open_orders, details
+        )
+    }
+
+    pub fn format_startup_message(
+        &self,
+        env: &str,
+        capital: f64,
+        pairs: &str,
+        grid_levels: usize,
+    ) -> String {
+        format!(
+            "🚀 <b>Trading Bot Started</b>\n\
+             Env: {}\n\
+             Capital: ${:.2}\n\
+             Pairs: {}\n\
+             Grid Levels: {}",
+            env, capital, pairs, grid_levels
+        )
+    }
+
+    pub fn format_error_message(&self, source: &str, error: &str) -> String {
+        format!(
+            "🚨 <b>Error</b>\n\
+             Source: {}\n\
+             Error: {}",
+            source, error
+        )
+    }
+
+    pub fn format_shutdown_message(&self, reason: &str) -> String {
+        format!("🛑 <b>Bot Stopped</b>\nReason: {}", reason)
+    }
+
+    /// Poll for commands — returns list of text commands received
+    pub async fn poll_commands(&self, last_update_id: &mut i64) -> Result<Vec<String>> {
+        if !self.enabled { return Ok(Vec::new()); }
+
+        let url = format!("https://api.telegram.org/bot{}/getUpdates", self.token);
+        let resp: serde_json::Value = self.client
+            .get(&url)
+            .query(&[("offset", (*last_update_id + 1).to_string())])
+            .send()
+            .await?
+            .json()
+            .await?;
+
+        let mut commands = Vec::new();
+        if let Some(updates) = resp["result"].as_array() {
+            for update in updates {
+                if let Some(update_id) = update["update_id"].as_i64() {
+                    *last_update_id = update_id;
+                }
+                if let Some(text) = update["message"]["text"].as_str() {
+                    commands.push(text.to_string());
+                }
+            }
+        }
+        Ok(commands)
+    }
+}
