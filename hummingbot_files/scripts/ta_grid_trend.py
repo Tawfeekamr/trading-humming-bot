@@ -1015,11 +1015,15 @@ class TAGridTrendStrategy(StrategyV2Base):
             )
 
 
+            # Use 6 decimal places for price-based indicators to preserve
+            # precision for low-price assets like DOGE (~$0.10).
+            # round(0.10138, 2)=0.1 loses all variance; round(0.10138, 6)=0.101380.
+            _dp = 6  # decimal places for price-type values
             self.event_log.log("indicators_updated",
-                rsi=round(rsi_value, 2), bb_upper=round(bb_result.upper, 2),
-                bb_mid=round(bb_result.mid, 2), bb_lower=round(bb_result.lower, 2),
-                ema_200=round(ema_value, 2), atr=round(atr_value, 2),
-                price=round(current_price, 2), grid_state=self.state_machines[engine.symbol].state.value,
+                rsi=round(rsi_value, 2), bb_upper=round(bb_result.upper, _dp),
+                bb_mid=round(bb_result.mid, _dp), bb_lower=round(bb_result.lower, _dp),
+                ema_200=round(ema_value, _dp), atr=round(atr_value, _dp),
+                price=round(current_price, _dp), grid_state=self.state_machines[engine.symbol].state.value,
                 ml_confidence=round(ml_confidence, 3),
                 ml_regime=ml_regime if ml_regime is not None else 0,
                 pair=engine.symbol,
