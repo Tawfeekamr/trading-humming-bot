@@ -129,3 +129,51 @@ impl PaperTradeEngine {
         &self.trade_history
     }
 }
+
+/// Connector trait implementation for paper trading
+pub struct PaperTradeConnector {
+    engine: std::sync::Mutex<PaperTradeEngine>,
+}
+
+impl PaperTradeConnector {
+    pub fn new(balances: std::collections::HashMap<String, f64>) -> Self {
+        Self {
+            engine: std::sync::Mutex::new(PaperTradeEngine::new(balances)),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::connector::Connector for PaperTradeConnector {
+    async fn place_order(&self, req: &OrderRequest) -> anyhow::Result<OrderResponse> {
+        let mut engine = self.engine.lock().unwrap();
+        engine.place_order(req)
+    }
+
+    async fn cancel_order(&self, symbol: &str, order_id: &str) -> anyhow::Result<()> {
+        let mut engine = self.engine.lock().unwrap();
+        engine.cancel_order(order_id)
+    }
+
+    async fn cancel_all_orders(&self, symbol: &str) -> anyhow::Result<Vec<CancelResult>> {
+        Ok(Vec::new()) // Not implemented for paper
+    }
+
+    async fn get_balances(&self) -> anyhow::Result<std::collections::HashMap<String, f64>> {
+        let engine = self.engine.lock().unwrap();
+        Ok(engine.balances().clone())
+    }
+
+    async fn get_open_orders(&self, symbol: &str) -> anyhow::Result<Vec<OpenOrder>> {
+        Ok(Vec::new()) // Not implemented for paper
+    }
+
+    async fn get_order_book(&self, symbol: &str, limit: u16) -> anyhow::Result<OrderBook> {
+        Ok(OrderBook {
+            symbol: symbol.to_string(),
+            bids: Vec::new(),
+            asks: Vec::new(),
+            timestamp: 0,
+        })
+    }
+}
