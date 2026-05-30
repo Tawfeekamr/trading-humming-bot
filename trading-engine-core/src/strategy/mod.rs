@@ -48,4 +48,11 @@ pub trait Strategy: Send {
     async fn on_stop(&mut self) -> Result<()>;
 
     fn status(&self) -> StrategyStatus;
+
+    /// Pause or resume the strategy
+    fn set_paused(&mut self, _paused: bool) {}
+    /// Current capital including compounded profits
+    fn current_capital(&self) -> f64 { 0.0 }
+    /// Initial capital before compounding
+    fn initial_capital(&self) -> f64 { 0.0 }
 }

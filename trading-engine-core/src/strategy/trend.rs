@@ -179,4 +179,8 @@ impl TrendStrategy {
     pub fn set_position(&mut self, pos: Option<TrendPosition>) {
         self.position = pos;
     }
+
+    pub fn set_paused(&mut self, _paused: bool) {
+        // Trend strategy doesn't have a pause state — no-op
+    }
 }

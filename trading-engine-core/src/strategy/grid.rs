@@ -213,6 +213,18 @@ impl GridStrategy {
         self.current_capital
     }
 
+    pub fn initial_capital(&self) -> f64 {
+        self.initial_capital
+    }
+
+    pub fn set_paused(&mut self, paused: bool) {
+        if paused {
+            self.state = GridState::Paused;
+        } else {
+            self.state = GridState::Active;
+        }
+    }
+
     pub fn peak_equity(&self) -> f64 {
         self.peak_equity
     }
