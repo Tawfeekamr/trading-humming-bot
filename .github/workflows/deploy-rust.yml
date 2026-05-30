@@ -11,31 +11,13 @@ on:
 
 env:
   AWS_REGION: "ap-northeast-1"
-  S3_BUCKET: "trading-bot-deploy-274134914906"
 
 jobs:
-  build:
-    name: Build & Deploy Rust Binary
+  deploy:
+    name: Build & Deploy on EC2
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install musl-tools
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
-
-      - name: Add musl target
-        run: rustup target add x86_64-unknown-linux-musl
-
-      - name: Build release binary
-        run: |
-          cd trading-engine-core
-          cargo build --release --target x86_64-unknown-linux-musl
-          ls -lh target/x86_64-unknown-linux-musl/release/trading-bot
-
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -43,132 +25,70 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Create S3 bucket if needed
-        run: |
-          aws s3 mb s3://${{ env.S3_BUCKET }} --region ${{ env.AWS_REGION }} 2>/dev/null || true
-
-      - name: Upload binary to S3
-        run: |
-          aws s3 cp trading-engine-core/target/x86_64-unknown-linux-musl/release/trading-bot \
-            s3://${{ env.S3_BUCKET }}/trading-bot \
-            --region ${{ env.AWS_REGION }}
-
-      - name: Stop existing bot on EC2
-        run: |
-          aws ssm send-command \
-            --document-name "AWS-RunShellScript" \
-            --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
-            --region "${{ env.AWS_REGION }}" \
-            --parameters commands='["sudo systemctl stop trading-bot 2>/dev/null || true","cd /home/ec2-user/trading-humming-bot && docker compose down --remove-orphans 2>/dev/null || true"]' \
-            --timeout-seconds 120 \
-            --comment "Stop existing bot before Rust deploy" \
-            --query "Command.CommandId" --output text
-
-      - name: Deploy binary to EC2 via SSM
+      - name: Deploy via SSM (git pull + cargo build + restart)
         run: |
           COMMAND_ID=$(aws ssm send-command \
             --document-name "AWS-RunShellScript" \
             --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
             --region "${{ env.AWS_REGION }}" \
-            --parameters commands='["aws s3 cp s3://${{ env.S3_BUCKET }}/trading-bot /home/ec2-user/trading-bot --region ${{ env.AWS_REGION }}","chmod +x /home/ec2-user/trading-bot","mkdir -p /home/ec2-user/config /home/ec2-user/logs /home/ec2-user/models"]' \
-            --timeout-seconds 120 \
-            --comment "Download Rust binary from S3" \
+            --parameters commands='["source /home/ec2-user/.cargo/env","cd /home/ec2-user/trading-humming-bot && git pull origin main 2>&1","cd /home/ec2-user/trading-humming-bot/trading-engine-core && rustup target add x86_64-unknown-linux-musl 2>&1","cd /home/ec2-user/trading-humming-bot/trading-engine-core && cargo build --release --target x86_64-unknown-linux-musl 2>&1","ls -lh target/x86_64-unknown-linux-musl/release/trading-bot","cp target/x86_64-unknown-linux-musl/release/trading-bot /home/ec2-user/trading-bot","chmod +x /home/ec2-user/trading-bot","sudo systemctl restart trading-bot 2>/dev/null || true"]' \
+            --timeout-seconds 600 \
+            --comment "Build and deploy Rust bot" \
             --query "Command.CommandId" \
             --output text)
 
-          echo "Download command: $COMMAND_ID"
-          for i in $(seq 1 30); do
+          echo "Build command: $COMMAND_ID"
+
+          for i in $(seq 1 60); do
             STATUS=$(aws ssm get-command-invocation \
               --command-id "$COMMAND_ID" \
               --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
               --query "Status" --output text 2>/dev/null || echo "Pending")
             echo "Attempt $i: $STATUS"
-            if [ "$STATUS" = "Success" ]; then break; fi
-            if [ "$STATUS" = "Failed" ]; then
+            if [ "$STATUS" = "Success" ]; then
+              echo "=== Build Output ==="
+              aws ssm get-command-invocation --command-id "$COMMAND_ID" \
+                --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
+                --query "StandardOutputContent" --output text
+              break
+            elif [ "$STATUS" = "Failed" ]; then
+              echo "=== Build FAILED ==="
               aws ssm get-command-invocation --command-id "$COMMAND_ID" \
                 --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
                 --query "StandardErrorContent" --output text
               exit 1
             fi
-            sleep 5
+            sleep 10
           done
 
-      - name: Copy config to EC2
-        run: |
-          aws s3 cp config/strategy.yaml s3://${{ env.S3_BUCKET }}/config/strategy.yaml || true
-          COMMAND_ID=$(aws ssm send-command \
-            --document-name "AWS-RunShellScript" \
-            --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
-            --region "${{ env.AWS_REGION }}" \
-            --parameters commands='["cd /home/ec2-user/trading-humming-bot && git pull origin main 2>&1","cp -n /home/ec2-user/trading-humming-bot/config/strategy.yaml /home/ec2-user/config/strategy.yaml 2>/dev/null || true"]' \
-            --timeout-seconds 120 \
-            --comment "Pull latest config" \
-            --query "Command.CommandId" --output text)
-
-          for i in $(seq 1 20); do
-            STATUS=$(aws ssm get-command-invocation --command-id "$COMMAND_ID" \
-              --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
-              --query "Status" --output text 2>/dev/null || echo "Pending")
-            [ "$STATUS" = "Success" ] && break
-            [ "$STATUS" = "Failed" ] && exit 1
-            sleep 5
-          done
-
-      - name: Create systemd service on EC2
+      - name: Create systemd service (one-time)
         run: |
           COMMAND_ID=$(aws ssm send-command \
             --document-name "AWS-RunShellScript" \
             --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
             --region "${{ env.AWS_REGION }}" \
-            --parameters commands='["cat > /tmp/trading-bot.service << '\''SERVICE'\''\n[Unit]\nDescription=Trading Bot (Rust)\nAfter=network.target\n\n[Service]\nType=simple\nUser=ec2-user\nWorkingDirectory=/home/ec2-user\nExecStart=/home/ec2-user/trading-bot config/strategy.yaml\nRestart=on-failure\nRestartSec=10\nEnvironment=RUST_LOG=info\nEnvironment=ROCKET_PORT=8080\n\n[Install]\nWantedBy=multi-user.target\nSERVICE","sudo mv /tmp/trading-bot.service /etc/systemd/system/trading-bot.service","sudo systemctl daemon-reload","sudo systemctl enable trading-bot"]' \
+            --parameters commands='["grep -q trading-bot /etc/systemd/system/trading-bot.service 2>/dev/null && echo \"Service exists\" && exit 0","sudo tee /etc/systemd/system/trading-bot.service > /dev/null << '\''EOF'\''\n[Unit]\nDescription=Trading Bot (Rust)\nAfter=network.target\n\n[Service]\nType=simple\nUser=ec2-user\nWorkingDirectory=/home/ec2-user/trading-humming-bot\nExecStart=/home/ec2-user/trading-bot config/strategy.yaml\nRestart=on-failure\nRestartSec=10\nEnvironment=RUST_LOG=info\nEnvironment=ROCKET_PORT=8080\n\n[Install]\nWantedBy=multi-user.target\nEOF","sudo systemctl daemon-reload","sudo systemctl enable trading-bot","sudo systemctl start trading-bot"]' \
             --timeout-seconds 60 \
             --comment "Create systemd service" \
             --query "Command.CommandId" --output text)
 
-          for i in $(seq 1 20); do
+          for i in $(seq 1 12); do
             STATUS=$(aws ssm get-command-invocation --command-id "$COMMAND_ID" \
               --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
               --query "Status" --output text 2>/dev/null || echo "Pending")
             [ "$STATUS" = "Success" ] && break
-            [ "$STATUS" = "Failed" ] && exit 1
-            sleep 5
-          done
-
-      - name: Start Rust bot on EC2
-        run: |
-          COMMAND_ID=$(aws ssm send-command \
-            --document-name "AWS-RunShellScript" \
-            --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
-            --region "${{ env.AWS_REGION }}" \
-            --parameters commands='["sudo systemctl start trading-bot","sleep 3","sudo systemctl status trading-bot --no-pager"]' \
-            --timeout-seconds 60 \
-            --comment "Start Rust trading bot" \
-            --query "Command.CommandId" --output text)
-
-          for i in $(seq 1 20); do
-            STATUS=$(aws ssm get-command-invocation --command-id "$COMMAND_ID" \
-              --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
-              --query "Status" --output text 2>/dev/null || echo "Pending")
-            echo "Attempt $i: $STATUS"
-            if [ "$STATUS" = "Success" ]; then
-              OUTPUT=$(aws ssm get-command-invocation --command-id "$COMMAND_ID" \
-                --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
-                --query "StandardOutputContent" --output text)
-              echo "$OUTPUT"
-              break
-            fi
             [ "$STATUS" = "Failed" ] && exit 1
             sleep 5
           done
 
       - name: Verify bot is running
         run: |
-          sleep 5
+          sleep 3
           COMMAND_ID=$(aws ssm send-command \
             --document-name "AWS-RunShellScript" \
             --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
             --region "${{ env.AWS_REGION }}" \
-            --parameters commands='["ps aux | grep trading-bot | grep -v grep","free -h | head -2","ls -lh /home/ec2-user/trading-bot"]' \
+            --parameters commands='["sudo systemctl status trading-bot --no-pager -l","ps aux | grep trading-bot | grep -v grep","free -h | head -2"]' \
             --timeout-seconds 30 \
             --comment "Verify bot running" \
             --query "Command.CommandId" --output text)
@@ -181,23 +101,17 @@ jobs:
               OUTPUT=$(aws ssm get-command-invocation --command-id "$COMMAND_ID" \
                 --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
                 --query "StandardOutputContent" --output text)
-              echo "Bot status:"
               echo "$OUTPUT"
               if echo "$OUTPUT" | grep -q "trading-bot"; then
                 echo "✅ Bot is running"
                 exit 0
               fi
-              echo "❌ Bot not found in process list"
+              echo "❌ Bot not found"
               exit 1
             fi
             [ "$STATUS" = "Failed" ] && exit 1
             sleep 5
           done
-
-      - name: Cleanup S3
-        if: always()
-        run: |
-          aws s3 rm s3://${{ env.S3_BUCKET }}/trading-bot || true
 
       - name: Notify Telegram on success
         if: success()
