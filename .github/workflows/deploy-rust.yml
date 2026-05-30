@@ -25,20 +25,19 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Deploy via SSM (git pull + cargo build + restart)
+      - name: Build binary on EC2 via SSM
         run: |
           COMMAND_ID=$(aws ssm send-command \
             --document-name "AWS-RunShellScript" \
             --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
             --region "${{ env.AWS_REGION }}" \
-            --parameters commands='["export PATH=\"$PATH:/home/ec2-user/.cargo/bin\"","cd /home/ec2-user/trading-humming-bot && su - ec2-user -c \"git -C /home/ec2-user/trading-humming-bot pull origin main\" 2>&1","cd /home/ec2-user/trading-humming-bot/trading-engine-core && /home/ec2-user/.cargo/bin/rustup target add x86_64-unknown-linux-musl 2>&1","cd /home/ec2-user/trading-humming-bot/trading-engine-core && /home/ec2-user/.cargo/bin/cargo build --release --target x86_64-unknown-linux-musl 2>&1","ls -lh /home/ec2-user/trading-humming-bot/trading-engine-core/target/x86_64-unknown-linux-musl/release/trading-bot","cp /home/ec2-user/trading-humming-bot/trading-engine-core/target/x86_64-unknown-linux-musl/release/trading-bot /home/ec2-user/trading-bot","chmod +x /home/ec2-user/trading-bot","sudo systemctl restart trading-bot 2>/dev/null || true"]' \
+            --parameters commands='["export PATH=$PATH:/home/ec2-user/.cargo/bin","git config --global --add safe.directory /home/ec2-user/trading-humming-bot","cd /home/ec2-user/trading-humming-bot && git pull origin main 2>&1","cd /home/ec2-user/trading-humming-bot/trading-engine-core && /home/ec2-user/.cargo/bin/rustup target add x86_64-unknown-linux-musl 2>&1","cd /home/ec2-user/trading-humming-bot/trading-engine-core && /home/ec2-user/.cargo/bin/cargo build --release --target x86_64-unknown-linux-musl 2>&1","ls -lh /home/ec2-user/trading-humming-bot/trading-engine-core/target/x86_64-unknown-linux-musl/release/trading-bot","cp /home/ec2-user/trading-humming-bot/trading-engine-core/target/x86_64-unknown-linux-musl/release/trading-bot /home/ec2-user/trading-bot","chmod +x /home/ec2-user/trading-bot"]' \
             --timeout-seconds 600 \
-            --comment "Build and deploy Rust bot" \
+            --comment "Build Rust bot on EC2" \
             --query "Command.CommandId" \
             --output text)
 
           echo "Build command: $COMMAND_ID"
-
           for i in $(seq 1 60); do
             STATUS=$(aws ssm get-command-invocation \
               --command-id "$COMMAND_ID" \
@@ -61,34 +60,40 @@ jobs:
             sleep 10
           done
 
-      - name: Create systemd service (one-time)
+      - name: Install systemd service and start bot
         run: |
           COMMAND_ID=$(aws ssm send-command \
             --document-name "AWS-RunShellScript" \
             --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
             --region "${{ env.AWS_REGION }}" \
-            --parameters commands='["grep -q trading-bot /etc/systemd/system/trading-bot.service 2>/dev/null && echo \"Service exists\" && exit 0","sudo tee /etc/systemd/system/trading-bot.service > /dev/null << '\''EOF'\''\n[Unit]\nDescription=Trading Bot (Rust)\nAfter=network.target\n\n[Service]\nType=simple\nUser=ec2-user\nWorkingDirectory=/home/ec2-user/trading-humming-bot\nExecStart=/home/ec2-user/trading-bot config/strategy.yaml\nRestart=on-failure\nRestartSec=10\nEnvironment=RUST_LOG=info\nEnvironment=ROCKET_PORT=8080\n\n[Install]\nWantedBy=multi-user.target\nEOF","sudo systemctl daemon-reload","sudo systemctl enable trading-bot","sudo systemctl start trading-bot"]' \
+            --parameters commands='["test -f /etc/systemd/system/trading-bot.service && echo Service exists || echo \"[Unit]\" | sudo tee /etc/systemd/system/trading-bot.service","grep -q WorkingDirectory /etc/systemd/system/trading-bot.service 2>/dev/null || echo \"Description=Trading Bot (Rust)\" | sudo tee -a /etc/systemd/system/trading-bot.service","grep -q WorkingDirectory /etc/systemd/system/trading-bot.service 2>/dev/null || echo \"After=network.target\" | sudo tee -a /etc/systemd/system/trading-bot.service","grep -q WorkingDirectory /etc/systemd/system/trading-bot.service 2>/dev/null || echo \"\" | sudo tee -a /etc/systemd/system/trading-bot.service","grep -q WorkingDirectory /etc/systemd/system/trading-bot.service 2>/dev/null || echo \"[Service]\" | sudo tee -a /etc/systemd/system/trading-bot.service","grep -q WorkingDirectory /etc/systemd/system/trading-bot.service 2>/dev/null || echo \"Type=simple\" | sudo tee -a /etc/systemd/system/trading-bot.service","grep -q WorkingDirectory /etc/systemd/system/trading-bot.service 2>/dev/null || echo \"User=ec2-user\" | sudo tee -a /etc/systemd/system/trading-bot.service","grep -q WorkingDirectory /etc/systemd/system/trading-bot.service 2>/dev/null || echo \"WorkingDirectory=/home/ec2-user/trading-humming-bot\" | sudo tee -a /etc/systemd/system/trading-bot.service","grep -q WorkingDirectory /etc/systemd/system/trading-bot.service 2>/dev/null || echo \"ExecStart=/home/ec2-user/trading-bot config/strategy.yaml\" | sudo tee -a /etc/systemd/system/trading-bot.service","grep -q WorkingDirectory /etc/systemd/system/trading-bot.service 2>/dev/null || echo \"Restart=on-failure\" | sudo tee -a /etc/systemd/system/trading-bot.service","grep -q WorkingDirectory /etc/systemd/system/trading-bot.service 2>/dev/null || echo \"RestartSec=10\" | sudo tee -a /etc/systemd/system/trading-bot.service","grep -q WorkingDirectory /etc/systemd/system/trading-bot.service 2>/dev/null || echo \"Environment=RUST_LOG=info\" | sudo tee -a /etc/systemd/system/trading-bot.service","grep -q WorkingDirectory /etc/systemd/system/trading-bot.service 2>/dev/null || echo \"\" | sudo tee -a /etc/systemd/system/trading-bot.service","grep -q WorkingDirectory /etc/systemd/system/trading-bot.service 2>/dev/null || echo \"[Install]\" | sudo tee -a /etc/systemd/system/trading-bot.service","grep -q WorkingDirectory /etc/systemd/system/trading-bot.service 2>/dev/null || echo \"WantedBy=multi-user.target\" | sudo tee -a /etc/systemd/system/trading-bot.service","sudo systemctl daemon-reload","sudo systemctl enable trading-bot","sudo systemctl restart trading-bot"]' \
             --timeout-seconds 60 \
-            --comment "Create systemd service" \
+            --comment "Install systemd service and start bot" \
             --query "Command.CommandId" --output text)
 
-          for i in $(seq 1 12); do
+          for i in $(seq 1 20); do
             STATUS=$(aws ssm get-command-invocation --command-id "$COMMAND_ID" \
               --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
               --query "Status" --output text 2>/dev/null || echo "Pending")
-            [ "$STATUS" = "Success" ] && break
+            echo "Service attempt $i: $STATUS"
+            if [ "$STATUS" = "Success" ]; then
+              aws ssm get-command-invocation --command-id "$COMMAND_ID" \
+                --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
+                --query "StandardOutputContent" --output text
+              break
+            fi
             [ "$STATUS" = "Failed" ] && exit 1
             sleep 5
           done
 
       - name: Verify bot is running
         run: |
-          sleep 3
+          sleep 5
           COMMAND_ID=$(aws ssm send-command \
             --document-name "AWS-RunShellScript" \
             --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
             --region "${{ env.AWS_REGION }}" \
-            --parameters commands='["sudo systemctl status trading-bot --no-pager -l","ps aux | grep trading-bot | grep -v grep","free -h | head -2"]' \
+            --parameters commands='["sudo systemctl status trading-bot --no-pager -l 2>&1 || true","ps aux | grep trading-bot | grep -v grep || true","free -h | head -2"]' \
             --timeout-seconds 30 \
             --comment "Verify bot running" \
             --query "Command.CommandId" --output text)
