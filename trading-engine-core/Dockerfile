@@ -4,7 +4,7 @@
 # =============================================================
 
 # ---------- Stage 1: Build ----------
-FROM rust:1.87-slim-bookworm AS builder
+FROM rust:latest-slim-bookworm AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
