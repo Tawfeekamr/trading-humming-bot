@@ -1,3 +1,5 @@
+use serde::{Serialize, Deserialize};
+
 fn decimal_places(n: f64) -> u32 {
     if n == 0.0 { return 0; }
     let mut count = 0u32;
@@ -16,7 +18,7 @@ fn decimal_places(n: f64) -> u32 {
     count
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Instrument {
     pub symbol: String,
     pub tick_size: f64,

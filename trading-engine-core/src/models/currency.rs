@@ -1,7 +1,8 @@
+use serde::{Serialize, Deserialize};
 use std::fmt;
 use std::ops::{Add, Sub, Mul};
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Currency {
     code: String,
 }
@@ -16,7 +17,7 @@ impl fmt::Display for Currency {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "{}", self.code) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Price {
     value: f64,
     precision: u32,
@@ -45,7 +46,7 @@ impl Sub for Price {
     fn sub(self, rhs: Price) -> Self::Output { Price::new(self.value - rhs.value, self.precision.max(rhs.precision)) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Quantity { value: f64 }
 
 impl Quantity {
@@ -53,7 +54,7 @@ impl Quantity {
     pub fn value(&self) -> f64 { self.value }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Money { pub amount: f64, pub currency: Currency }
 
 impl Money {

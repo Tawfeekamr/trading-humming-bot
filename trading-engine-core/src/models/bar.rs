@@ -1,4 +1,6 @@
-#[derive(Debug, Clone)]
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Bar {
     pub open: f64,
     pub high: f64,
@@ -25,7 +27,7 @@ impl Bar {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Timeframe {
     OneMinute, FiveMinutes, FifteenMinutes, OneHour, FourHours, OneDay,
 }
