@@ -1,0 +1,25 @@
+# Docker Compose for the Rust trading bot
+# Usage: docker compose -f docker-compose.rust.yml up -d
+
+services:
+  rust-bot:
+    image: ghcr.io/tawfeekamr/trading-bot:latest
+    container_name: trading-bot-rust
+    restart: unless-stopped
+    env_file: .env.rust
+    volumes:
+      - ./config/strategy.yaml:/app/config/strategy.yaml:ro
+      - ./data:/app/data
+    environment:
+      - RUST_LOG=${RUST_LOG:-info}
+    healthcheck:
+      test: ["CMD", "test", "-f", "/proc/1/cmdline"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"

@@ -5,16 +5,60 @@ on:
     branches: [main]
     paths:
       - 'trading-engine-core/**'
-      - 'config/**'
+      - 'config/strategy.yaml'
       - '.github/workflows/deploy-rust.yml'
   workflow_dispatch:
 
 env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: trading-bot
   AWS_REGION: "ap-northeast-1"
 
 jobs:
+  build-and-push:
+    name: Build & Push Docker Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,format=short
+            type=raw,value=latest
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: ./trading-engine-core
+          file: ./trading-engine-core/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   deploy:
-    name: Build & Deploy on EC2
+    name: Deploy on EC2
+    needs: build-and-push
     runs-on: ubuntu-latest
 
     steps:
@@ -25,33 +69,37 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Build and install on EC2
+      - name: Pull and restart on EC2
         run: |
           COMMAND_ID=$(aws ssm send-command \
             --document-name "AWS-RunShellScript" \
             --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
             --region "${{ env.AWS_REGION }}" \
-            --parameters commands='["sudo systemctl stop trading-bot || true","cd /home/ec2-user/trading-humming-bot && git stash && git pull origin main 2>&1","export PATH=/root/.cargo/bin:$PATH && cd /home/ec2-user/trading-humming-bot/trading-engine-core && cargo build --release 2>&1 | tail -5","cp target/release/trading-bot /home/ec2-user/trading-bot-bin && chmod +x /home/ec2-user/trading-bot-bin && file /home/ec2-user/trading-bot-bin"]' \
-            --timeout-seconds 600 \
-            --comment "Build Rust binary on EC2" \
+            --parameters commands='[
+              "cd /home/ec2-user/trading-humming-bot",
+              "docker compose -f docker-compose.rust.yml pull rust-bot 2>&1",
+              "docker compose -f docker-compose.rust.yml up -d --force-recreate rust-bot 2>&1",
+              "docker image prune -af 2>&1 || true"
+            ]' \
+            --timeout-seconds 120 \
+            --comment "Pull and restart Rust trading bot" \
             --query "Command.CommandId" \
             --output text)
 
-          echo "Build command: $COMMAND_ID"
-          for i in $(seq 1 60); do
+          echo "Deploy command: $COMMAND_ID"
+          for i in $(seq 1 24); do
             STATUS=$(aws ssm get-command-invocation \
               --command-id "$COMMAND_ID" \
               --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
               --query "Status" --output text 2>/dev/null || echo "Pending")
             echo "Attempt $i: $STATUS"
             if [ "$STATUS" = "Success" ]; then
-              echo "=== Build Output ==="
               aws ssm get-command-invocation --command-id "$COMMAND_ID" \
                 --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
                 --query "StandardOutputContent" --output text
               break
             elif [ "$STATUS" = "Failed" ]; then
-              echo "=== Build FAILED ==="
+              echo "=== DEPLOY FAILED ==="
               aws ssm get-command-invocation --command-id "$COMMAND_ID" \
                 --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
                 --query "StandardErrorContent" --output text
@@ -60,37 +108,20 @@ jobs:
             sleep 10
           done
 
-      - name: Restart bot via systemd
-        run: |
-          COMMAND_ID=$(aws ssm send-command \
-            --document-name "AWS-RunShellScript" \
-            --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
-            --region "${{ env.AWS_REGION }}" \
-            --parameters commands='["sudo systemctl daemon-reload","sudo systemctl enable trading-bot","sudo systemctl restart trading-bot"]' \
-            --timeout-seconds 60 \
-            --comment "Restart trading bot" \
-            --query "Command.CommandId" --output text)
-
-          for i in $(seq 1 20); do
-            STATUS=$(aws ssm get-command-invocation --command-id "$COMMAND_ID" \
-              --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
-              --query "Status" --output text 2>/dev/null || echo "Pending")
-            echo "Service attempt $i: $STATUS"
-            [ "$STATUS" = "Success" ] && break
-            [ "$STATUS" = "Failed" ] && exit 1
-            sleep 5
-          done
-
       - name: Verify bot is running
         run: |
-          sleep 5
+          sleep 10
           COMMAND_ID=$(aws ssm send-command \
             --document-name "AWS-RunShellScript" \
             --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
             --region "${{ env.AWS_REGION }}" \
-            --parameters commands='["sudo systemctl status trading-bot --no-pager -l 2>&1 || true","ps aux | grep trading-bot-bin | grep -v grep || true","free -h | head -2"]' \
+            --parameters commands='[
+              "cd /home/ec2-user/trading-humming-bot",
+              "docker compose -f docker-compose.rust.yml ps 2>&1",
+              "docker logs trading-bot-rust --tail 20 2>&1 || true"
+            ]' \
             --timeout-seconds 30 \
-            --comment "Verify bot running" \
+            --comment "Verify Rust bot running" \
             --query "Command.CommandId" --output text)
 
           for i in $(seq 1 12); do
@@ -102,14 +133,16 @@ jobs:
                 --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
                 --query "StandardOutputContent" --output text)
               echo "$OUTPUT"
-              if echo "$OUTPUT" | grep -q "trading-bot"; then
+              if echo "$OUTPUT" | grep -q "running"; then
                 echo "✅ Bot is running"
                 exit 0
               fi
-              echo "❌ Bot not found"
+              echo "❌ Bot container not running"
+              exit 1
+            elif [ "$STATUS" = "Failed" ]; then
+              echo "❌ Verify failed"
               exit 1
             fi
-            [ "$STATUS" = "Failed" ] && exit 1
             sleep 5
           done
 
@@ -121,7 +154,7 @@ jobs:
             "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
             -d chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
             -d parse_mode=HTML \
-            -d text="🦀 <b>Rust Bot Deployed</b>%0A•••%0A📝 ${COMMIT_MSG}%0A🔗 ${{ github.sha }}%0A⏰ $(date -u +'%Y-%m-%d %H:%M UTC')"
+            -d text="🦀 <b>Rust Bot Deployed (Docker)</b>%0A•••%0A📝 ${COMMIT_MSG}%0A🔗 ${{ github.sha }}%0A⏰ $(date -u +'%Y-%m-%d %H:%M UTC')"
 
       - name: Notify Telegram on failure
         if: failure()
