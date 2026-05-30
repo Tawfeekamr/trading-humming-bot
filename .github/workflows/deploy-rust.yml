@@ -60,15 +60,15 @@ jobs:
             sleep 10
           done
 
-      - name: Update systemd and restart
+      - name: Restart bot via systemd
         run: |
           COMMAND_ID=$(aws ssm send-command \
             --document-name "AWS-RunShellScript" \
             --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
             --region "${{ env.AWS_REGION }}" \
-            --parameters commands='["grep -q trading-bot-bin /etc/systemd/system/trading-bot.service 2>/dev/null || (echo '[Unit]' > /tmp/trading-bot.service && echo 'Description=Trading Bot (Rust)' >> /tmp/trading-bot.service && echo 'After=network.target' >> /tmp/trading-bot.service && echo '' >> /tmp/trading-bot.service && echo '[Service]' >> /tmp/trading-bot.service && echo 'Type=simple' >> /tmp/trading-bot.service && echo 'User=ec2-user' >> /tmp/trading-bot.service && echo 'WorkingDirectory=/home/ec2-user/trading-humming-bot' >> /tmp/trading-bot.service && echo 'ExecStart=/home/ec2-user/trading-bot-bin config/strategy.yaml' >> /tmp/trading-bot.service && echo 'Restart=on-failure' >> /tmp/trading-bot.service && echo 'RestartSec=10' >> /tmp/trading-bot.service && echo 'Environment=RUST_LOG=info' >> /tmp/trading-bot.service && echo '' >> /tmp/trading-bot.service && echo '[Install]' >> /tmp/trading-bot.service && echo 'WantedBy=multi-user.target' >> /tmp/trading-bot.service && cp /tmp/trading-bot.service /etc/systemd/system/trading-bot.service)","sudo systemctl daemon-reload","sudo systemctl enable trading-bot","sudo systemctl restart trading-bot"]' \
+            --parameters commands='["sudo systemctl daemon-reload","sudo systemctl enable trading-bot","sudo systemctl restart trading-bot"]' \
             --timeout-seconds 60 \
-            --comment "Update systemd and restart bot" \
+            --comment "Restart trading bot" \
             --query "Command.CommandId" --output text)
 
           for i in $(seq 1 20); do
