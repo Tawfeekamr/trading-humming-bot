@@ -59,7 +59,7 @@ impl From<ExchangeRaw> for ExchangeConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct PairConfig {
     pub symbol: String,
     pub step_size: f64,
@@ -89,7 +89,7 @@ impl std::ops::Deref for PairList {
     fn deref(&self) -> &Self::Target { &self.0 }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct GridConfig {
     pub levels: u8,
     pub capital_usdt: f64,
@@ -101,7 +101,7 @@ pub struct GridConfig {
 
 fn default_1_5() -> f64 { 1.5 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct TrendConfig {
     #[serde(default)]
     pub ema_fast: u32,

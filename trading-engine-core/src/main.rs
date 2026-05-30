@@ -29,6 +29,15 @@ async fn async_main() -> Result<()> {
     let telegram_token = std::env::var(&config.telegram.token_env).unwrap_or_default();
     let telegram_chat_id = std::env::var(&config.telegram.chat_id_env).unwrap_or_default();
 
+    // Extract strategy config before moving config into engine
+    let pair_configs: Vec<(String, trading_engine_core::config::PairConfig)> = config.pairs
+        .iter()
+        .filter(|(_, pc)| pc.enabled)
+        .map(|(s, pc)| (s.clone(), pc.clone()))
+        .collect();
+    let grid_cfg = config.grid.clone();
+    let trend_cfg = config.trend.clone();
+
     let connector: Box<dyn trading_engine_core::connector::Connector> = if config.exchange.testnet {
         info!("Using PAPER TRADE engine");
         let mut balances = std::collections::HashMap::new();
@@ -56,6 +65,25 @@ async fn async_main() -> Result<()> {
     let telegram = trading_engine_core::notifications::TelegramBot::new(&telegram_token, &telegram_chat_id);
 
     let mut engine = trading_engine_core::engine::Engine::new(config, connector, risk, telegram);
+
+    // Add strategies for each enabled pair
+    for (symbol, pc) in &pair_configs {
+        // Grid strategy per pair
+        let grid = trading_engine_core::strategy::grid::GridStrategy::new(
+            symbol,
+            &grid_cfg,
+            pc.tick_size,
+            pc.step_size,
+        );
+        engine.add_strategy(Box::new(grid));
+
+        // Trend strategy per pair
+        let trend = trading_engine_core::strategy::trend::TrendStrategy::new(
+            symbol,
+            &trend_cfg,
+        );
+        engine.add_strategy(Box::new(trend));
+    }
 
     tokio::select! {
         result = engine.run() => {
