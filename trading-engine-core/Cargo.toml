@@ -1,20 +1,57 @@
 [package]
 name = "trading-engine-core"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
-description = "Shared trading engine core — grid, trend, and signal strategies with pluggable execution adapters"
+description = "Pure Rust trading engine — grid, trend strategies with Binance connector"
 license = "LGPL-3.0-or-later"
+
+[[bin]]
+name = "trading-bot"
+path = "src/main.rs"
 
 [lib]
 name = "trading_engine_core"
-crate-type = ["rlib", "cdylib"]
-
-[features]
-default = []
-python = ["pyo3"]
+path = "src/lib.rs"
 
 [dependencies]
-pyo3 = { version = "0.23", features = ["extension-module"], optional = true }
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+futures = "0.3"
+
+# HTTP + WebSocket
+reqwest = { version = "0.12", features = ["json"] }
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+
+# Serialization
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+
+# Cryptography (Binance signing)
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Error handling
+anyhow = "1"
+thiserror = "2"
+
+# System info (Telegram /system command)
+sysinfo = "0.33"
+
+# ML inference
+ort = { version = "2.0.0-rc.12", features = ["load-dynamic"] }
+
+# Collections
+rustc-hash = "2"
 
 [dev-dependencies]
+tokio-test = "0.4"
