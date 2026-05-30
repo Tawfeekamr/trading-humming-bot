@@ -11,4 +11,5 @@ pub mod strategy;
 pub mod risk;
 pub mod ml;
 pub mod notifications;
+pub mod signal;
 pub mod engine;

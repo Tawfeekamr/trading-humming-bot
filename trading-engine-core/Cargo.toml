@@ -50,6 +50,9 @@ sysinfo = "0.33"
 # ML inference
 ort = { version = "2.0.0-rc.12", features = ["load-dynamic"] }
 
+# Signal engine
+rusqlite = { version = "0.34", features = ["bundled"] }
+
 # Collections
 rustc-hash = "2"
 
