@@ -11,6 +11,7 @@ use crate::notifications::TelegramBot;
 use crate::strategy::{Strategy, TickContext};
 use crate::models::bar::Bar;
 use crate::models::order::OrderSide;
+use crate::signal::SignalEngine;
 
 pub struct Engine {
     config: AppConfig,
@@ -18,6 +19,7 @@ pub struct Engine {
     strategies: Vec<Box<dyn Strategy>>,
     risk: RiskManager,
     telegram: TelegramBot,
+    signal: Option<SignalEngine>,
     bar_buffers: HashMap<String, Vec<Bar>>,
     order_books: HashMap<String, OrderBook>,
     started_at: Instant,
@@ -31,17 +33,23 @@ impl Engine {
         risk: RiskManager,
         telegram: TelegramBot,
     ) -> Self {
-        Self {
+        let mut engine = Self {
             config,
             connector,
             strategies: Vec::new(),
             risk,
-            telegram,
+            telegram: telegram.clone_for_signal(),
+            signal: None, // initialized below
             bar_buffers: HashMap::new(),
             order_books: HashMap::new(),
             started_at: Instant::now(),
             last_update_id: 0,
-        }
+        };
+        // Init signal engine after self.config is set
+        engine.signal = engine.config.signal.as_ref().filter(|s| s.enabled).map(|sc| {
+            SignalEngine::new(sc, Some(telegram.clone_for_signal()))
+        });
+        engine
     }
 
     pub fn add_strategy(&mut self, strategy: Box<dyn Strategy>) {
@@ -112,6 +120,11 @@ impl Engine {
             // Poll and dispatch Telegram commands after each event batch
             if let Err(e) = self.handle_telegram_commands().await {
                 warn!("Telegram command polling error: {}", e);
+            }
+
+            // Signal engine: manage positions on every tick
+            if let Some(ref signal) = self.signal {
+                signal.manage_positions(&*self.connector).await;
             }
         }
 
@@ -192,8 +205,8 @@ impl Engine {
         let cmd = cmd.split_whitespace().next()?.to_lowercase();
 
         match cmd.as_str() {
-            "status" => Some(self.cmd_status()),
-            "system" | "server" => Some(self.cmd_system()),
+            "status" => Some(self.cmd_status().await),
+            "system" | "server" => Some(self.cmd_system().await),
             "help" => Some(self.cmd_help()),
             "price" => self.cmd_price().await,
             "balance" => self.cmd_balance().await,
@@ -203,13 +216,19 @@ impl Engine {
             "pause" => Some(self.cmd_pause()),
             "resume" => Some(self.cmd_resume()),
             "reset" => Some(self.cmd_reset()),
+            // Signal commands
+            "signal_status" => self.cmd_signal_status().await,
+            "signal_pnl" => self.cmd_signal_pnl().await,
+            "signal_pause" => self.cmd_signal_pause(),
+            "signal_resume" => self.cmd_signal_resume(),
+            "signal_close" => self.cmd_signal_close(text),
             _ => None,
         }
     }
 
     // ── System commands ──────────────────────────────────────────────
 
-    fn cmd_status(&self) -> String {
+    async fn cmd_status(&self) -> String {
         let uptime = self.started_at.elapsed();
         let hours = uptime.as_secs() / 3600;
         let minutes = (uptime.as_secs() % 3600) / 60;
@@ -240,6 +259,19 @@ impl Engine {
         let cb = if self.risk.circuit_breaker.is_halted() { "🛑 HALTED" } else { "✅ OK" };
         lines.push(format!("🛡️ CB: {}", cb));
 
+        // Signal engine
+        if let Some(ref signal) = self.signal {
+            let sig_status = signal.get_status().await;
+            let mode_tag = if sig_status.audit_mode { "AUDIT" } else { "LIVE" };
+            lines.push(format!(
+                "📡 <b>Signal ({}):</b> {} | Positions: {} | P&L: ${:.2} | Trades: {}/{}",
+                mode_tag, sig_status.state, sig_status.open_positions,
+                sig_status.daily_pnl, sig_status.trades_today, sig_status.max_trades
+            ));
+        } else {
+            lines.push("📡 <b>Signal:</b> Disabled".to_string());
+        }
+
         // System resources
         let sys = system_stats();
         lines.push("•••".to_string());
@@ -249,7 +281,7 @@ impl Engine {
         lines.join("\n")
     }
 
-    fn cmd_system(&self) -> String {
+    async fn cmd_system(&self) -> String {
         let mode = if self.config.exchange.testnet { "TESTNET" } else { "PRODUCTION" };
         let pairs: Vec<&String> = self.config.pairs.keys().collect();
         let sys = system_stats();
@@ -278,6 +310,21 @@ impl Engine {
         lines.push(format!("📉 Max Drawdown: {:.0}% | Daily Loss: {:.0}%",
             self.config.risk.max_drawdown_pct, self.config.risk.daily_loss_limit_pct));
 
+        // Signal engine
+        if let Some(ref signal) = self.signal {
+            let sig_status = signal.get_status().await;
+            let mode_tag = if sig_status.audit_mode { "AUDIT" } else { "LIVE" };
+            lines.push("•••".to_string());
+            lines.push(format!("📡 <b>Signal Copy Engine ({})</b>", mode_tag));
+            lines.push(format!("  State: <b>{}</b> | Positions: {}",
+                sig_status.state, sig_status.open_positions));
+            lines.push(format!("  Trades today: {}/{} | Daily P&L: ${:.2}",
+                sig_status.trades_today, sig_status.max_trades, sig_status.daily_pnl));
+            if sig_status.halted {
+                lines.push("  🚨 RISK HALTED".to_string());
+            }
+        }
+
         // Resources
         lines.push("•••".to_string());
         lines.push(format!("💻 CPU: {:.0}% | RAM: {:.0}% | Disk: {:.0}%",
@@ -295,7 +342,7 @@ impl Engine {
             "📖 <b>Available Commands</b>\n\
              •••\n\
              <b>System:</b>\n\
-             /status — Daily summary (strategies, CB, server)\n\
+             /status — Daily summary (strategies, CB, signal, server)\n\
              /system — Full engine details + resources\n\
              /price — Current {pair} price from order book\n\
              •••\n\
@@ -307,6 +354,13 @@ impl Engine {
              /pause — Pause all strategies\n\
              /resume — Resume all strategies\n\
              /reset — Reset circuit breaker\n\
+             •••\n\
+             <b>Signal:</b>\n\
+             /signal_status — Signal engine status & positions\n\
+             /signal_pnl — Signal trades P&L report\n\
+             /signal_pause — Pause signal execution\n\
+             /signal_resume — Resume signal execution\n\
+             /signal_close PAIR — Close a signal position\n\
              •••\n\
              /help — This message",
             pair = pair_display
@@ -495,6 +549,105 @@ impl Engine {
         self.risk.circuit_breaker.reset(equity);
         info!("Telegram /reset — circuit breaker reset, equity=${:.2}", equity);
         "🔄 Circuit breaker reset. Bot will resume on next tick.".to_string()
+    }
+
+    // ── Signal commands ────────────────────────────────────────────────
+
+    async fn cmd_signal_status(&self) -> Option<String> {
+        let signal = self.signal.as_ref()?;
+        let status = signal.get_status().await;
+        let mode_tag = if status.audit_mode { "AUDIT" } else { "LIVE" };
+
+        let mut lines = vec![
+            format!("📡 <b>SIGNAL ENGINE ({})</b>", mode_tag),
+            "•••".to_string(),
+            format!("State: <b>{}</b>", status.state),
+            format!("Open positions: {}", status.open_positions),
+            format!("Trades today: {}/{}", status.trades_today, status.max_trades),
+            format!("Daily P&L: ${:.2}", status.daily_pnl),
+        ];
+
+        if status.halted {
+            lines.push("🚨 Risk guard halted — use /signal_resume".to_string());
+        }
+
+        // Show open positions
+        let mgr = signal.position_mgr();
+        let positions = mgr.get_open_positions();
+        if !positions.is_empty() {
+            lines.push("•••".to_string());
+            lines.push("📈 <b>Open Positions:</b>".to_string());
+            for pos in positions {
+                let hold = pos.hold_minutes();
+                lines.push(format!(
+                    "  {}: ${:.2} ({}m) SL=${:.2} TPs={}{}{}{}",
+                    pos.symbol, pos.entry_price, hold, pos.stop_loss,
+                    if pos.tp1_hit { "✅" } else { "⬜" },
+                    if pos.tp2_hit { "✅" } else { "⬜" },
+                    if pos.tp3_hit { "✅" } else { "⬜" },
+                    ""
+                ));
+            }
+        }
+
+        Some(lines.join("\n"))
+    }
+
+    async fn cmd_signal_pnl(&self) -> Option<String> {
+        let signal = self.signal.as_ref()?;
+        let journal = signal.journal();
+
+        let today = journal.summary(0);
+        let week = journal.summary(7);
+        let month = journal.summary(30);
+        let all = journal.summary(-1);
+
+        Some(format!(
+            "📊 <b>SIGNAL P&L</b>\n\
+             •••\n\
+             📅 Today: {} trades, ${:.2} ({:.0}% win)\n\
+             📆 Week:  {} trades, ${:.2} ({:.0}% win)\n\
+             🗓 Month: {} trades, ${:.2} ({:.0}% win)\n\
+             🏦 All:   {} trades, ${:.2} ({:.0}% win)",
+            today.total_trades, today.total_pnl, today.win_rate,
+            week.total_trades, week.total_pnl, week.win_rate,
+            month.total_trades, month.total_pnl, month.win_rate,
+            all.total_trades, all.total_pnl, all.win_rate,
+        ))
+    }
+
+    fn cmd_signal_pause(&mut self) -> Option<String> {
+        let signal = self.signal.as_mut()?;
+        signal.pause();
+        Some("⏸ Signal engine paused.".to_string())
+    }
+
+    fn cmd_signal_resume(&mut self) -> Option<String> {
+        let signal = self.signal.as_mut()?;
+        signal.resume();
+        Some("▶️ Signal engine resumed.".to_string())
+    }
+
+    fn cmd_signal_close(&mut self, text: &str) -> Option<String> {
+        let signal = self.signal.as_mut()?;
+        let parts: Vec<&str> = text.split_whitespace().collect();
+        if parts.len() < 2 {
+            return Some("Usage: /signal_close BTC-USDT".to_string());
+        }
+        let pair = parts[1].to_uppercase().replace("/", "-");
+        if !pair.ends_with("-USDT") {
+            return Some(format!("Usage: /signal_close BTC-USDT"));
+        }
+
+        // This needs to be async but we're in sync context — use block_on via tokio
+        let closed = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(signal.manual_close(&pair))
+        });
+        if closed {
+            Some(format!("Closed signal position: {}", pair))
+        } else {
+            Some(format!("No open signal position for {}", pair))
+        }
     }
 
     /// Rough equity estimate from order book mid-price × USDT balance

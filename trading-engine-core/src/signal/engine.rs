@@ -64,6 +64,16 @@ impl SignalEngine {
         self.enabled
     }
 
+    /// Access position manager for Telegram commands
+    pub fn position_mgr(&self) -> tokio::sync::MutexGuard<'_, SignalPositionManager> {
+        self.position_mgr.blocking_lock()
+    }
+
+    /// Access journal for Telegram commands
+    pub fn journal(&self) -> &SignalJournal {
+        &self.journal
+    }
+
     pub fn pause(&mut self) {
         self.manual_pause = true;
         info!("Signal engine paused");

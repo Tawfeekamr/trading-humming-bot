@@ -23,6 +23,16 @@ impl TelegramBot {
         self.enabled
     }
 
+    /// Create a copy sharing the same HTTP client (cheap clone)
+    pub fn clone_for_signal(&self) -> Self {
+        Self {
+            token: self.token.clone(),
+            chat_id: self.chat_id.clone(),
+            client: self.client.clone(),
+            enabled: self.enabled,
+        }
+    }
+
     pub async fn send(&self, message: &str) -> Result<()> {
         if !self.enabled { return Ok(()); }
 
