@@ -31,7 +31,7 @@ jobs:
             --document-name "AWS-RunShellScript" \
             --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
             --region "${{ env.AWS_REGION }}" \
-            --parameters commands='["su - ec2-user -c \"git -C /home/ec2-user/trading-humming-bot pull origin main\" 2>&1","su - ec2-user -c \"cd /home/ec2-user/trading-humming-bot/trading-engine-core && rustup target add x86_64-unknown-linux-musl\" 2>&1","su - ec2-user -c \"cd /home/ec2-user/trading-humming-bot/trading-engine-core && cargo build --release --target x86_64-unknown-linux-musl\" 2>&1","su - ec2-user -c \"ls -lh /home/ec2-user/trading-humming-bot/trading-engine-core/target/x86_64-unknown-linux-musl/release/trading-bot\"","su - ec2-user -c \"cp /home/ec2-user/trading-humming-bot/trading-engine-core/target/x86_64-unknown-linux-musl/release/trading-bot /home/ec2-user/trading-bot-bin\"","chmod +x /home/ec2-user/trading-bot-bin","ls -lh /home/ec2-user/trading-bot-bin","file /home/ec2-user/trading-bot-bin"]' \
+            --parameters commands='["cd /home/ec2-user/trading-humming-bot && git pull origin main 2>&1","export PATH=/root/.cargo/bin:$PATH && cd /home/ec2-user/trading-humming-bot/trading-engine-core && cargo build --release 2>&1","ls -lh /home/ec2-user/trading-humming-bot/trading-engine-core/target/release/trading-bot","cp /home/ec2-user/trading-humming-bot/trading-engine-core/target/release/trading-bot /home/ec2-user/trading-bot-bin","chmod +x /home/ec2-user/trading-bot-bin","ls -lh /home/ec2-user/trading-bot-bin","file /home/ec2-user/trading-bot-bin"]' \
             --timeout-seconds 600 \
             --comment "Build Rust binary on EC2" \
             --query "Command.CommandId" \
