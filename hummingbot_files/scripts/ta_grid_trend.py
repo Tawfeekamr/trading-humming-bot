@@ -1848,7 +1848,11 @@ class TAGridTrendStrategy(StrategyV2Base):
             self._save_trend_state(engine)
             self.event_log.log("trend_entry", amount=round(amount, 2), price=self._last_price[engine.symbol],
                                sl=sl, tp=tp, score=score.total, pair=engine.symbol)
-            self._trend_breaker.set_peak_equity(pm._capital + pos.amount * self._last_price[engine.symbol])
+            # NOTE: Do NOT call set_peak_equity here. The breaker peak was initialized
+            # to trend_capital, and _estimate_trend_equity() returns capital + unrealized PnL.
+            # Setting peak to (capital + notional) would inflate it above the equity measure,
+            # causing an immediate false drawdown that triggers the breaker and force-closes
+            # the position on the very next tick.
 
     def _close_all_trend_positions(self, engine: PairEngine):
         logger.warning(f"Closing all trend positions for {engine.symbol}...")
