@@ -140,6 +140,87 @@ impl GridStrategy {
             sell_spacing,
         }
     }
+
+    pub fn state(&self) -> GridState {
+        self.state
+    }
+
+    /// Evaluate grid state based on indicators
+    pub fn evaluate_state(
+        &mut self,
+        price: f64,
+        rsi: f64,
+        ema_200: f64,
+        bb_lower: f64,
+        bb_upper: f64,
+    ) {
+        self.evaluate_state_with_ml(price, rsi, ema_200, bb_lower, bb_upper, 0, 0.0);
+    }
+
+    /// Evaluate with ML regime overlay
+    pub fn evaluate_state_with_ml(
+        &mut self,
+        price: f64,
+        rsi: f64,
+        ema_200: f64,
+        bb_lower: f64,
+        bb_upper: f64,
+        ml_regime: i32,
+        ml_confidence: f64,
+    ) {
+        // ML Danger check — immediate pause
+        if ml_regime == 2 && ml_confidence >= 0.55 {
+            self.state = GridState::Paused;
+            return;
+        }
+
+        match self.state {
+            GridState::Paused | GridState::Disabled => {
+                let price_above_ema = price > ema_200;
+                let rsi_neutral = rsi > 30.0 && rsi < 70.0;
+                let within_bb = price > bb_lower && price < bb_upper;
+
+                if price_above_ema && rsi_neutral && within_bb {
+                    self.state = GridState::Active;
+                }
+            }
+            GridState::Active => {
+                let rsi_extreme = rsi < 25.0 || rsi > 80.0;
+                let outside_bb = price < bb_lower * 0.98 || price > bb_upper * 1.02;
+                let below_ema = price < ema_200 * 0.97;
+
+                if rsi_extreme || outside_bb || below_ema {
+                    self.state = GridState::Paused;
+                }
+            }
+        }
+    }
+
+    pub fn set_grid_layout(&mut self, layout: GridLayout) {
+        self.grid_layout = Some(layout);
+    }
+
+    /// Record profit/loss from a fill — used for auto-compound
+    pub fn record_pnl(&mut self, pnl: f64) {
+        self.total_pnl += pnl;
+        self.current_capital += pnl;
+        if self.current_capital > self.peak_equity {
+            self.peak_equity = self.current_capital;
+        }
+    }
+
+    pub fn current_capital(&self) -> f64 {
+        self.current_capital
+    }
+
+    pub fn peak_equity(&self) -> f64 {
+        self.peak_equity
+    }
+
+    /// Calculate auto-compound growth ratio
+    pub fn growth_ratio(&self) -> f64 {
+        self.current_capital / self.initial_capital
+    }
 }
 
 fn round_down(value: f64, increment: f64) -> f64 {

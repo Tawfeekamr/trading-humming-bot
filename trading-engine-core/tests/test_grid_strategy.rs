@@ -56,3 +56,55 @@ fn test_sell_spacing_tighter_than_buy() {
     // Sell spacing should be 75% of buy spacing (asymmetric grid)
     assert!(layout.sell_spacing <= layout.buy_spacing);
 }
+
+#[test]
+fn test_grid_activates_when_indicators_align() {
+    let config = default_grid_config();
+    let mut strategy = GridStrategy::new("BTCUSDT", &config, 0.01, 0.00001);
+
+    assert_eq!(strategy.state(), trading_engine_core::strategy::grid::GridState::Paused);
+
+    // RSI neutral, price above EMA, within BB → should activate
+    strategy.evaluate_state(50000.0, 45.0, 48000.0, 48500.0, 51500.0);
+    assert_eq!(strategy.state(), trading_engine_core::strategy::grid::GridState::Active);
+}
+
+#[test]
+fn test_grid_pauses_in_danger_regime() {
+    let config = default_grid_config();
+    let mut strategy = GridStrategy::new("BTCUSDT", &config, 0.01, 0.00001);
+
+    strategy.evaluate_state(50000.0, 45.0, 48000.0, 48500.0, 51500.0);
+    assert_eq!(strategy.state(), trading_engine_core::strategy::grid::GridState::Active);
+
+    // ML regime = Danger (2) with high confidence → should pause
+    strategy.evaluate_state_with_ml(50000.0, 45.0, 48000.0, 48500.0, 51500.0, 2, 0.7);
+    assert_eq!(strategy.state(), trading_engine_core::strategy::grid::GridState::Paused);
+}
+
+#[test]
+fn test_auto_compound_increases_capital() {
+    let config = default_grid_config();
+    let mut strategy = GridStrategy::new("BTCUSDT", &config, 0.01, 0.00001);
+
+    let initial_capital = strategy.current_capital();
+
+    strategy.record_pnl(10.0);
+
+    assert!(strategy.current_capital() > initial_capital);
+    assert_eq!(strategy.current_capital(), initial_capital + 10.0);
+    assert!(strategy.growth_ratio() > 1.0);
+}
+
+#[test]
+fn test_peak_equity_tracks_high_water_mark() {
+    let config = default_grid_config();
+    let mut strategy = GridStrategy::new("BTCUSDT", &config, 0.01, 0.00001);
+
+    strategy.record_pnl(50.0);
+    assert_eq!(strategy.peak_equity(), config.capital_usdt + 50.0);
+
+    strategy.record_pnl(-20.0);
+    // Peak should NOT decrease
+    assert_eq!(strategy.peak_equity(), config.capital_usdt + 50.0);
+}
