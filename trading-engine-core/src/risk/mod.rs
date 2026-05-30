@@ -1,1 +1,1 @@
-// Risk management modules. Phase 3.
+// src/risk/mod.rs — Risk management

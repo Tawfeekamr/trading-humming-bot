@@ -1,1 +1,1 @@
-// Strategy trait and implementations. Phase 2.
+// src/strategy/mod.rs — Strategy trait and implementations
