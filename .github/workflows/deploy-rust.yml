@@ -31,7 +31,7 @@ jobs:
             --document-name "AWS-RunShellScript" \
             --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
             --region "${{ env.AWS_REGION }}" \
-            --parameters commands='["cd /home/ec2-user/trading-humming-bot && git stash && git pull origin main 2>&1","export PATH=/root/.cargo/bin:$PATH && cd /home/ec2-user/trading-humming-bot/trading-engine-core && cargo build --release 2>&1 | tail -5","cp target/release/trading-bot /home/ec2-user/trading-bot-bin && chmod +x /home/ec2-user/trading-bot-bin && file /home/ec2-user/trading-bot-bin"]' \
+            --parameters commands='["sudo systemctl stop trading-bot || true","cd /home/ec2-user/trading-humming-bot && git stash && git pull origin main 2>&1","export PATH=/root/.cargo/bin:$PATH && cd /home/ec2-user/trading-humming-bot/trading-engine-core && cargo build --release 2>&1 | tail -5","cp target/release/trading-bot /home/ec2-user/trading-bot-bin && chmod +x /home/ec2-user/trading-bot-bin && file /home/ec2-user/trading-bot-bin"]' \
             --timeout-seconds 600 \
             --comment "Build Rust binary on EC2" \
             --query "Command.CommandId" \
