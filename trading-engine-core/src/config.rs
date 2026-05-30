@@ -4,17 +4,22 @@ use std::collections::HashMap;
 
 #[derive(Debug, Deserialize)]
 pub struct AppConfig {
+    #[serde(default)]
     pub exchange: ExchangeConfig,
     pub pairs: PairList,
     pub grid: GridConfig,
+    #[serde(default)]
     pub trend: TrendConfig,
     pub risk: RiskConfig,
+    #[serde(default)]
     pub telegram: TelegramConfig,
     pub ml: Option<MlConfig>,
+    #[serde(default, alias = "signal_copy")]
     pub signal: Option<SignalConfig>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
+#[serde(from = "ExchangeRaw")]
 pub struct ExchangeConfig {
     pub name: String,
     pub api_key_env: String,
@@ -22,13 +27,44 @@ pub struct ExchangeConfig {
     pub testnet: bool,
 }
 
+/// Accept both string ("binance") and full struct formats
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ExchangeRaw {
+    Full { name: String, api_key_env: String, api_secret_env: String, testnet: bool },
+    NameOnly(String),
+}
+
+impl Default for ExchangeRaw {
+    fn default() -> Self { Self::NameOnly("binance".to_string()) }
+}
+
+impl From<ExchangeRaw> for ExchangeConfig {
+    fn from(raw: ExchangeRaw) -> Self {
+        match raw {
+            ExchangeRaw::Full { name, api_key_env, api_secret_env, testnet } => Self {
+                name, api_key_env, api_secret_env, testnet,
+            },
+            ExchangeRaw::NameOnly(name) => Self {
+                name,
+                api_key_env: "BINANCE_API_KEY".to_string(),
+                api_secret_env: "BINANCE_API_SECRET".to_string(),
+                testnet: false,
+            },
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct PairConfig {
     pub symbol: String,
     pub step_size: f64,
     pub tick_size: f64,
+    #[serde(default = "default_true")]
     pub enabled: bool,
 }
+
+fn default_true() -> bool { true }
 
 /// Parses YAML pairs list into a HashMap keyed by symbol
 #[derive(Debug, Deserialize)]
@@ -53,18 +89,29 @@ impl std::ops::Deref for PairList {
 pub struct GridConfig {
     pub levels: u8,
     pub capital_usdt: f64,
+    #[serde(default, alias = "min_usdt_reserve")]
     pub min_reserve: f64,
+    #[serde(default = "default_1_5")]
     pub spacing_multiplier: f64,
 }
 
-#[derive(Debug, Deserialize)]
+fn default_1_5() -> f64 { 1.5 }
+
+#[derive(Debug, Default, Deserialize)]
 pub struct TrendConfig {
+    #[serde(default)]
     pub ema_fast: u32,
+    #[serde(default)]
     pub ema_slow: u32,
+    #[serde(default)]
     pub ema_trend: u32,
+    #[serde(default)]
     pub rsi_period: u32,
+    #[serde(default)]
     pub min_signal_score: u8,
+    #[serde(default)]
     pub confirmation_ticks: u8,
+    #[serde(default)]
     pub risk_reward_ratio: f64,
 }
 
@@ -75,10 +122,13 @@ pub struct RiskConfig {
     pub max_exposure_pct: f64,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct TelegramConfig {
+    #[serde(default)]
     pub token_env: String,
+    #[serde(default)]
     pub chat_id_env: String,
+    #[serde(default)]
     pub enabled: bool,
 }
 
