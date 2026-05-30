@@ -2,6 +2,10 @@ use crate::config::TrendConfig;
 use crate::indicators::{Ema, Rsi, Atr, SupportResistance, CandlestickPatterns};
 use crate::models::bar::Bar;
 use crate::models::order::OrderSide;
+use crate::strategy::{Strategy, TickContext, StrategyStatus};
+use crate::connector::types::{OrderRequest, Fill, OrderTypeReq, TimeInForceReq};
+use async_trait::async_trait;
+use anyhow::Result;
 
 #[derive(Debug, Clone)]
 pub struct SignalScore {
@@ -182,5 +186,167 @@ impl TrendStrategy {
 
     pub fn set_paused(&mut self, _paused: bool) {
         // Trend strategy doesn't have a pause state — no-op
+    }
+}
+
+#[async_trait]
+impl Strategy for TrendStrategy {
+    fn name(&self) -> &str {
+        "trend"
+    }
+
+    fn trading_pair(&self) -> &str {
+        &self.pair
+    }
+
+    async fn on_tick(&mut self, ctx: &TickContext) -> Result<Vec<OrderRequest>> {
+        let mut orders = Vec::new();
+
+        // Update indicators from recent bars
+        for bar in &ctx.recent_bars {
+            self.update_indicators(bar);
+        }
+
+        // Only generate orders if indicators are ready
+        if !self.indicators_ready() {
+            return Ok(orders);
+        }
+
+        let current_price = ctx.order_book.mid_price().unwrap_or_else(|| {
+            ctx.recent_bars
+                .last()
+                .map(|b| b.close)
+                .unwrap_or(0.0)
+        });
+
+        let score = self.evaluate_signals(current_price);
+
+        if self.position.is_none() {
+            // No position — check if we should enter
+            if self.should_enter(&score) {
+                let stop_loss = self.calculate_stop_loss(current_price);
+                let _take_profit = self.calculate_take_profit(current_price, stop_loss);
+
+                // Calculate quantity: fixed 100 USDT worth
+                let quantity = 100.0 / current_price;
+
+                orders.push(OrderRequest {
+                    symbol: self.pair.clone(),
+                    side: OrderSide::Buy,
+                    order_type: OrderTypeReq::Limit,
+                    price: Some(current_price),
+                    quantity,
+                    time_in_force: Some(TimeInForceReq::Gtc),
+                    client_order_id: None,
+                });
+            }
+        } else {
+            // Have position — check if we should exit
+            if self.should_exit(&score) {
+                if let Some(pos) = &self.position {
+                    orders.push(OrderRequest {
+                        symbol: self.pair.clone(),
+                        side: OrderSide::Sell,
+                        order_type: OrderTypeReq::Limit,
+                        price: Some(current_price),
+                        quantity: pos.quantity,
+                        time_in_force: Some(TimeInForceReq::Gtc),
+                        client_order_id: None,
+                    });
+                }
+            }
+        }
+
+        Ok(orders)
+    }
+
+    async fn on_fill(&mut self, fill: &Fill) -> Result<Vec<OrderRequest>> {
+        let mut orders = Vec::new();
+
+        match fill.side {
+            OrderSide::Buy => {
+                // Buy fill — set position
+                let stop_loss = self.calculate_stop_loss(fill.price);
+                let take_profit = self.calculate_take_profit(fill.price, stop_loss);
+
+                let pos = TrendPosition {
+                    side: OrderSide::Buy,
+                    entry_price: fill.price,
+                    stop_loss,
+                    take_profit,
+                    quantity: fill.quantity,
+                    trailing_stop: None,
+                };
+                self.set_position(Some(pos));
+            }
+            OrderSide::Sell => {
+                // Sell fill — clear position
+                self.set_position(None);
+            }
+        }
+
+        Ok(orders)
+    }
+
+    async fn on_start(&mut self) -> Result<Vec<OrderRequest>> {
+        Ok(Vec::new())
+    }
+
+    async fn on_stop(&mut self) -> Result<()> {
+        Ok(())
+    }
+
+    fn status(&self) -> StrategyStatus {
+        let (state, details, pnl) = if let Some(pos) = &self.position {
+            let unrealized_pnl = if let Some(current_price) = self.ema_fast.value().into() {
+                match pos.side {
+                    OrderSide::Buy => (current_price - pos.entry_price) * pos.quantity,
+                    OrderSide::Sell => (pos.entry_price - current_price) * pos.quantity,
+                }
+            } else {
+                0.0
+            };
+
+            let side_str = match pos.side {
+                OrderSide::Buy => "LONG",
+                OrderSide::Sell => "SHORT",
+            };
+
+            (
+                "POSITION".to_string(),
+                format!(
+                    "{} pos @ ${:.2} | SL: ${:.2} | TP: ${:.2}",
+                    side_str, pos.entry_price, pos.stop_loss, pos.take_profit
+                ),
+                unrealized_pnl,
+            )
+        } else {
+            (
+                "WAITING".to_string(),
+                "No position — waiting for signal".to_string(),
+                0.0,
+            )
+        };
+
+        StrategyStatus {
+            name: self.name().to_string(),
+            pair: self.pair.clone(),
+            state,
+            pnl,
+            open_orders: 0,
+            details,
+        }
+    }
+
+    fn set_paused(&mut self, _paused: bool) {
+        // No-op — trend strategy doesn't have pause state
+    }
+
+    fn current_capital(&self) -> f64 {
+        0.0 // Trend strategy uses shared capital pool
+    }
+
+    fn initial_capital(&self) -> f64 {
+        0.0 // Trend strategy uses shared capital pool
     }
 }

@@ -96,15 +96,6 @@ impl SupportResistance {
             });
         }
 
-        if is_support {
-            self.add_or_merge_level(Level {
-                price: pivot_low,
-                kind: LevelKind::Support,
-                strength: 1,
-                last_touch: timestamp,
-            });
-        }
-
         // Trim old history (keep last 200 bars)
         let max_history = 200;
         if self.high_history.len() > max_history {

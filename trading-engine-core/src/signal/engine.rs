@@ -65,8 +65,8 @@ impl SignalEngine {
     }
 
     /// Access position manager for Telegram commands
-    pub fn position_mgr(&self) -> tokio::sync::MutexGuard<'_, SignalPositionManager> {
-        self.position_mgr.blocking_lock()
+    pub async fn position_mgr(&self) -> tokio::sync::MutexGuard<'_, SignalPositionManager> {
+        self.position_mgr.lock().await
     }
 
     /// Access journal for Telegram commands

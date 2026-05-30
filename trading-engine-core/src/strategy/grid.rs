@@ -239,3 +239,121 @@ fn round_down(value: f64, increment: f64) -> f64 {
     if increment <= 0.0 { return value; }
     (value / increment).floor() * increment
 }
+
+use crate::strategy::{Strategy, TickContext, StrategyStatus, MarketRegime};
+use crate::connector::types::{OrderRequest, Fill};
+use async_trait::async_trait;
+use anyhow::Result;
+
+#[async_trait]
+impl Strategy for GridStrategy {
+    fn name(&self) -> &str {
+        "grid"
+    }
+
+    fn trading_pair(&self) -> &str {
+        &self.pair
+    }
+
+    async fn on_tick(&mut self, ctx: &TickContext) -> Result<Vec<OrderRequest>> {
+        // If not active, return empty orders
+        if self.state != GridState::Active {
+            return Ok(Vec::new());
+        }
+
+        // Get mid price from order book
+        let mid_price = match ctx.order_book.mid_price() {
+            Some(price) => price,
+            None => return Ok(Vec::new()),
+        };
+
+        // If no grid layout yet, calculate it using simple defaults
+        if self.grid_layout.is_none() {
+            // Use mid_price as center with ATR estimate
+            // In a full implementation, we'd extract ATR from recent_bars
+            let atr_estimate = mid_price * 0.01; // 1% of price as rough ATR estimate
+            let bb_lower = mid_price * 0.98;
+            let bb_upper = mid_price * 1.02;
+
+            let layout = self.calculate_levels(mid_price, atr_estimate, bb_lower, bb_upper);
+            self.grid_layout = Some(layout);
+        }
+
+        // For now, grid orders are managed separately
+        // Just update state if we have ML regime info
+        if let Some(regime) = ctx.regime {
+            match regime {
+                MarketRegime::Danger => {
+                    self.state = GridState::Paused;
+                }
+                _ => {
+                    // Keep current state or reactivate if paused
+                    if self.state == GridState::Paused {
+                        self.state = GridState::Active;
+                    }
+                }
+            }
+        }
+
+        Ok(Vec::new())
+    }
+
+    async fn on_fill(&mut self, fill: &Fill) -> Result<Vec<OrderRequest>> {
+        // Calculate rough PnL estimate from fill
+        // For buys: negative value (capital outflow)
+        // For sells: positive value (capital inflow) - fee
+        let pnl = match fill.side {
+            OrderSide::Buy => -(fill.price * fill.quantity + fill.fee),
+            OrderSide::Sell => fill.price * fill.quantity - fill.fee,
+        };
+
+        self.record_pnl(pnl);
+
+        // Grid orders are managed separately, so no new orders here
+        Ok(Vec::new())
+    }
+
+    async fn on_start(&mut self) -> Result<Vec<OrderRequest>> {
+        // Grid orders are managed separately
+        Ok(Vec::new())
+    }
+
+    async fn on_stop(&mut self) -> Result<()> {
+        // Clean up any state if needed
+        Ok(())
+    }
+
+    fn status(&self) -> StrategyStatus {
+        let state_str = match self.state {
+            GridState::Active => "Active",
+            GridState::Paused => "Paused",
+            GridState::Disabled => "Disabled",
+        };
+
+        StrategyStatus {
+            name: self.name().to_string(),
+            pair: self.pair.clone(),
+            state: state_str.to_string(),
+            pnl: self.total_pnl,
+            open_orders: self.orders.len(),
+            details: format!(
+                "Capital: ${:.2} / ${:.2} (Growth: {:.2}%)",
+                self.current_capital,
+                self.initial_capital,
+                (self.growth_ratio() - 1.0) * 100.0
+            ),
+        }
+    }
+
+    fn set_paused(&mut self, paused: bool) {
+        self.set_paused(paused);
+    }
+
+    fn current_capital(&self) -> f64 {
+        self.current_capital()
+    }
+
+    fn initial_capital(&self) -> f64 {
+        self.initial_capital()
+    }
+}

@@ -16,7 +16,11 @@ pub struct AppConfig {
     pub ml: Option<MlConfig>,
     #[serde(default, alias = "signal_copy")]
     pub signal: Option<SignalConfig>,
+    #[serde(default = "default_timeframe")]
+    pub timeframe: String,
 }
+
+fn default_timeframe() -> String { "1m".to_string() }
 
 #[derive(Debug, Deserialize, Default)]
 #[serde(from = "ExchangeRaw")]

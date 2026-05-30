@@ -74,4 +74,10 @@ impl CircuitBreaker {
         self.halted_at = None;
         self.peak_equity = equity;
     }
+
+    /// Record a PnL event and check circuit breaker thresholds
+    pub fn record_pnl(&mut self, pnl: f64, current_equity: f64) -> bool {
+        self.update_peak(current_equity);
+        self.check(current_equity) || self.check_daily(current_equity)
+    }
 }

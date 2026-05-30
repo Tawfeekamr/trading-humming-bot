@@ -24,6 +24,7 @@ pub struct Engine {
     order_books: HashMap<String, OrderBook>,
     started_at: Instant,
     last_update_id: i64,
+    last_telegram_poll: Instant,
 }
 
 impl Engine {
@@ -44,6 +45,7 @@ impl Engine {
             order_books: HashMap::new(),
             started_at: Instant::now(),
             last_update_id: 0,
+            last_telegram_poll: Instant::now(),
         };
         // Init signal engine after self.config is set
         engine.signal = engine.config.signal.as_ref().filter(|s| s.enabled).map(|sc| {
@@ -79,15 +81,12 @@ impl Engine {
         }
         self.submit_orders(all_orders).await?;
 
-        // Connect to WebSocket
-        let pair = self.strategies.first()
-            .map(|s| s.trading_pair().to_string())
-            .unwrap_or("BTCUSDT".to_string());
-
+        // Connect to WebSocket (multi-pair)
+        let pairs: Vec<String> = self.config.pairs.keys().cloned().collect();
         let ws = BinanceWs::new(self.config.exchange.testnet);
-        let mut ws_rx = ws.subscribe(&pair, "1m").await?;
+        let mut ws_rx = ws.subscribe_multi(&pairs, &self.config.timeframe).await?;
 
-        info!("Engine running — processing events for {}", pair);
+        info!("Engine running — processing events for {} pairs", pairs.len());
 
         // Main event loop
         while let Some(event) = ws_rx.recv().await {
@@ -117,9 +116,12 @@ impl Engine {
                 _ => {}
             }
 
-            // Poll and dispatch Telegram commands after each event batch
-            if let Err(e) = self.handle_telegram_commands().await {
-                warn!("Telegram command polling error: {}", e);
+            // Poll and dispatch Telegram commands (throttled to every 3 seconds)
+            if self.last_telegram_poll.elapsed() >= std::time::Duration::from_secs(3) {
+                self.last_telegram_poll = std::time::Instant::now();
+                if let Err(e) = self.handle_telegram_commands().await {
+                    warn!("Telegram command polling error: {}", e);
+                }
             }
 
             // Signal engine: manage positions on every tick
@@ -221,7 +223,7 @@ impl Engine {
             "signal_pnl" => self.cmd_signal_pnl().await,
             "signal_pause" => self.cmd_signal_pause(),
             "signal_resume" => self.cmd_signal_resume(),
-            "signal_close" => self.cmd_signal_close(text),
+            "signal_close" => self.cmd_signal_close(text).await,
             _ => None,
         }
     }
@@ -572,7 +574,7 @@ impl Engine {
         }
 
         // Show open positions
-        let mgr = signal.position_mgr();
+        let mgr = signal.position_mgr().await;
         let positions = mgr.get_open_positions();
         if !positions.is_empty() {
             lines.push("•••".to_string());
@@ -628,7 +630,7 @@ impl Engine {
         Some("▶️ Signal engine resumed.".to_string())
     }
 
-    fn cmd_signal_close(&mut self, text: &str) -> Option<String> {
+    async fn cmd_signal_close(&mut self, text: &str) -> Option<String> {
         let signal = self.signal.as_mut()?;
         let parts: Vec<&str> = text.split_whitespace().collect();
         if parts.len() < 2 {
@@ -639,10 +641,7 @@ impl Engine {
             return Some(format!("Usage: /signal_close BTC-USDT"));
         }
 
-        // This needs to be async but we're in sync context — use block_on via tokio
-        let closed = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(signal.manual_close(&pair))
-        });
+        let closed = signal.manual_close(&pair).await;
         if closed {
             Some(format!("Closed signal position: {}", pair))
         } else {
@@ -652,10 +651,15 @@ impl Engine {
 
     /// Rough equity estimate from order book mid-price × USDT balance
     fn estimate_equity(&self) -> f64 {
-        let ob = self.order_books.values().next();
-        let price = ob.and_then(|o| o.mid_price()).unwrap_or(0.0);
-        // Default to configured capital if we can't estimate
-        if price > 0.0 { self.config.grid.capital_usdt } else { self.config.grid.capital_usdt }
+        // Sum of configured capital per pair as baseline equity estimate
+        // Each pair gets an equal share of the total grid capital
+        let pair_count = self.config.pairs.0.len().max(1) as f64;
+        let per_pair_capital = self.config.grid.capital_usdt / pair_count;
+        let mut total = 0.0;
+        for _ in self.config.pairs.0.iter() {
+            total += per_pair_capital;
+        }
+        if total > 0.0 { total } else { self.config.grid.capital_usdt }
     }
 }
 

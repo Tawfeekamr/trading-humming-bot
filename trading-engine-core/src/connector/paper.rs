@@ -81,9 +81,25 @@ impl PaperTradeEngine {
                 let fill_qty = order.quantity;
                 let fee = fill_price * fill_qty * FEE_RATE;
 
-                // Extract base/quote from symbol (e.g., "BTCUSDT" → "BTC", "USDT")
-                let base = &order.symbol[..order.symbol.len() - 4];
-                let quote = &order.symbol[order.symbol.len() - 4..];
+                // Extract base/quote from symbol (handles "BTCUSDT" and "BTC-USDT" formats)
+                let (base, quote) = if let Some(pos) = order.symbol.find('-') {
+                    (&order.symbol[..pos], &order.symbol[pos+1..])
+                } else if order.symbol.ends_with("USDT") {
+                    let pos = order.symbol.len() - 4;
+                    (&order.symbol[..pos], &order.symbol[pos..])
+                } else if order.symbol.ends_with("BUSD") {
+                    let pos = order.symbol.len() - 4;
+                    (&order.symbol[..pos], &order.symbol[pos..])
+                } else if order.symbol.ends_with("BTC") {
+                    let pos = order.symbol.len() - 3;
+                    (&order.symbol[..pos], &order.symbol[pos..])
+                } else if order.symbol.ends_with("ETH") {
+                    let pos = order.symbol.len() - 3;
+                    (&order.symbol[..pos], &order.symbol[pos..])
+                } else {
+                    let pos = order.symbol.len().saturating_sub(4);
+                    (&order.symbol[..pos], &order.symbol[pos..])
+                };
 
                 match order.side {
                     OrderSide::Buy => {

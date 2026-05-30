@@ -27,37 +27,49 @@ pub enum TimeInForceReq {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OrderResponse {
+    #[serde(rename = "orderId")]
     pub order_id: String,
+    #[serde(rename = "clientOrderId")]
     pub client_order_id: Option<String>,
     pub symbol: String,
     pub side: OrderSide,
     pub price: f64,
+    #[serde(rename = "origQty")]
     pub quantity: f64,
     pub status: OrderStatus,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub enum OrderStatus {
+    #[serde(rename = "NEW")]
     New,
+    #[serde(rename = "PARTIALLY_FILLED")]
     PartiallyFilled,
+    #[serde(rename = "FILLED")]
     Filled,
+    #[serde(rename = "CANCELED")]
     Canceled,
+    #[serde(rename = "REJECTED")]
     Rejected,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CancelResult {
+    #[serde(rename = "orderId")]
     pub order_id: String,
     pub symbol: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OpenOrder {
+    #[serde(rename = "orderId")]
     pub order_id: String,
     pub symbol: String,
     pub side: OrderSide,
     pub price: f64,
+    #[serde(rename = "origQty")]
     pub quantity: f64,
+    #[serde(rename = "executedQty")]
     pub filled_quantity: f64,
     pub status: OrderStatus,
 }

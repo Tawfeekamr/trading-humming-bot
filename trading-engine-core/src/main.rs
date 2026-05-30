@@ -1,5 +1,5 @@
 use anyhow::Result;
-use tracing::info;
+use tracing::{info, error};
 use tracing_subscriber::EnvFilter;
 
 fn main() -> Result<()> {
@@ -56,5 +56,17 @@ async fn async_main() -> Result<()> {
     let telegram = trading_engine_core::notifications::TelegramBot::new(&telegram_token, &telegram_chat_id);
 
     let mut engine = trading_engine_core::engine::Engine::new(config, connector, risk, telegram);
-    engine.run().await
+
+    tokio::select! {
+        result = engine.run() => {
+            if let Err(e) = result {
+                error!("Engine error: {}", e);
+            }
+        }
+        _ = tokio::signal::ctrl_c() => {
+            info!("Shutdown signal received, stopping...");
+        }
+    }
+    info!("Trading engine stopped.");
+    Ok(())
 }

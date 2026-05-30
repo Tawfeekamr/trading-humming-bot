@@ -61,10 +61,14 @@ impl BinanceWs {
 
         let url_clone = url.clone();
         tokio::spawn(async move {
+            let mut retry_delay = std::time::Duration::from_secs(5);
+            let max_delay = std::time::Duration::from_secs(60);
+
             loop {
                 match tokio_tungstenite::connect_async(&url_clone).await {
                     Ok((ws_stream, _)) => {
                         info!("Binance WebSocket connected");
+                        retry_delay = std::time::Duration::from_secs(5); // reset on success
                         let (_, mut read) = ws_stream.split();
 
                         while let Some(msg) = read.next().await {
@@ -94,8 +98,78 @@ impl BinanceWs {
                     }
                 }
 
-                warn!("Reconnecting in 5 seconds...");
-                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                warn!("Reconnecting in {} seconds...", retry_delay.as_secs());
+                tokio::time::sleep(retry_delay).await;
+                retry_delay = (retry_delay * 2).min(max_delay);
+            }
+        });
+
+        Ok(rx)
+    }
+
+    /// Subscribe to combined streams for multiple trading pairs
+    pub async fn subscribe_multi(
+        &self,
+        symbols: &[String],
+        kline_interval: &str,
+    ) -> Result<tokio::sync::mpsc::Receiver<WsEvent>> {
+        let streams: Vec<String> = symbols.iter().flat_map(|symbol| {
+            let sym = symbol.to_lowercase().replace('-', "");
+            vec![
+                format!("{}/@depth20@100ms", sym),
+                format!("{}@kline_{}", sym, kline_interval),
+                format!("{}@trade", sym),
+            ]
+        }).collect();
+
+        let streams_path = streams.join("/");
+        let url = format!("{}/stream?streams={}", self.base_url, streams_path);
+        let (tx, rx) = tokio::sync::mpsc::channel(1000);
+
+        info!("Connecting to Binance WS ({} pairs): {}", symbols.len(), url);
+
+        let url_clone = url.clone();
+        tokio::spawn(async move {
+            let mut retry_delay = std::time::Duration::from_secs(5);
+            let max_delay = std::time::Duration::from_secs(60);
+
+            loop {
+                match tokio_tungstenite::connect_async(&url_clone).await {
+                    Ok((ws_stream, _)) => {
+                        info!("Binance WebSocket connected (multi-pair)");
+                        retry_delay = std::time::Duration::from_secs(5); // reset on success
+                        let (_, mut read) = ws_stream.split();
+
+                        while let Some(msg) = read.next().await {
+                            match msg {
+                                Ok(tokio_tungstenite::tungstenite::Message::Text(text)) => {
+                                    if let Some(event) = parse_ws_message(&text) {
+                                        if tx.send(event).await.is_err() {
+                                            info!("WebSocket receiver dropped, closing connection");
+                                            return;
+                                        }
+                                    }
+                                }
+                                Ok(tokio_tungstenite::tungstenite::Message::Close(_)) => {
+                                    warn!("WebSocket closed by server");
+                                    break;
+                                }
+                                Err(e) => {
+                                    error!("WebSocket read error: {}", e);
+                                    break;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        error!("WebSocket connect failed: {}", e);
+                    }
+                }
+
+                warn!("Reconnecting in {} seconds...", retry_delay.as_secs());
+                tokio::time::sleep(retry_delay).await;
+                retry_delay = (retry_delay * 2).min(max_delay);
             }
         });
 
