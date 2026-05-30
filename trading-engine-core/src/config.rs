@@ -5,7 +5,7 @@ use std::collections::HashMap;
 #[derive(Debug, Deserialize)]
 pub struct AppConfig {
     pub exchange: ExchangeConfig,
-    pub pairs: HashMap<String, PairConfig>,
+    pub pairs: PairList,
     pub grid: GridConfig,
     pub trend: TrendConfig,
     pub risk: RiskConfig,
@@ -24,9 +24,29 @@ pub struct ExchangeConfig {
 
 #[derive(Debug, Deserialize)]
 pub struct PairConfig {
+    pub symbol: String,
     pub step_size: f64,
     pub tick_size: f64,
     pub enabled: bool,
+}
+
+/// Parses YAML pairs list into a HashMap keyed by symbol
+#[derive(Debug, Deserialize)]
+#[serde(from = "Vec<PairConfig>")]
+pub struct PairList(pub HashMap<String, PairConfig>);
+
+impl From<Vec<PairConfig>> for PairList {
+    fn from(list: Vec<PairConfig>) -> Self {
+        let map = list.into_iter()
+            .map(|p| (p.symbol.clone(), p))
+            .collect();
+        Self(map)
+    }
+}
+
+impl std::ops::Deref for PairList {
+    type Target = HashMap<String, PairConfig>;
+    fn deref(&self) -> &Self::Target { &self.0 }
 }
 
 #[derive(Debug, Deserialize)]
