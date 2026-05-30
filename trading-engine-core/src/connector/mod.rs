@@ -1,6 +1,7 @@
 pub mod types;
 pub mod binance_rest;
 pub mod binance_ws;
+pub mod paper;
 
 use async_trait::async_trait;
 use anyhow::Result;

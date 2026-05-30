@@ -1,0 +1,131 @@
+use anyhow::{Result, anyhow};
+use std::collections::HashMap;
+use crate::connector::types::*;
+use crate::models::order::OrderSide;
+
+const FEE_RATE: f64 = 0.001; // 0.1% per side
+
+struct PaperOrder {
+    id: String,
+    symbol: String,
+    side: OrderSide,
+    order_type: OrderTypeReq,
+    price: Option<f64>,
+    quantity: f64,
+}
+
+pub struct PaperTradeEngine {
+    balances: HashMap<String, f64>,
+    open_orders: Vec<PaperOrder>,
+    trade_history: Vec<Fill>,
+    next_order_id: u64,
+}
+
+impl PaperTradeEngine {
+    pub fn new(balances: HashMap<String, f64>) -> Self {
+        Self {
+            balances,
+            open_orders: Vec::new(),
+            trade_history: Vec::new(),
+            next_order_id: 1,
+        }
+    }
+
+    pub fn place_order(&mut self, req: &OrderRequest) -> Result<OrderResponse> {
+        let id = format!("paper_{}", self.next_order_id);
+        self.next_order_id += 1;
+
+        self.open_orders.push(PaperOrder {
+            id: id.clone(),
+            symbol: req.symbol.clone(),
+            side: req.side,
+            order_type: req.order_type,
+            price: req.price,
+            quantity: req.quantity,
+        });
+
+        Ok(OrderResponse {
+            order_id: id,
+            client_order_id: req.client_order_id.clone(),
+            symbol: req.symbol.clone(),
+            side: req.side,
+            price: req.price.unwrap_or(0.0),
+            quantity: req.quantity,
+            status: OrderStatus::New,
+        })
+    }
+
+    pub fn cancel_order(&mut self, order_id: &str) -> Result<()> {
+        let before = self.open_orders.len();
+        self.open_orders.retain(|o| o.id != order_id);
+        if self.open_orders.len() == before {
+            return Err(anyhow!("Order {} not found", order_id));
+        }
+        Ok(())
+    }
+
+    /// Try to fill open orders at the given market price
+    pub fn try_fill_at_price(&mut self, market_price: f64) -> Vec<Fill> {
+        let mut fills = Vec::new();
+        let mut remaining = Vec::new();
+
+        for order in self.open_orders.drain(..) {
+            let should_fill = match (order.side, order.price) {
+                (OrderSide::Buy, Some(limit_price)) => market_price <= limit_price,
+                (OrderSide::Sell, Some(limit_price)) => market_price >= limit_price,
+                (_, None) => true, // Market orders always fill
+            };
+
+            if should_fill {
+                let fill_price = order.price.unwrap_or(market_price);
+                let fill_qty = order.quantity;
+                let fee = fill_price * fill_qty * FEE_RATE;
+
+                // Extract base/quote from symbol (e.g., "BTCUSDT" → "BTC", "USDT")
+                let base = &order.symbol[..order.symbol.len() - 4];
+                let quote = &order.symbol[order.symbol.len() - 4..];
+
+                match order.side {
+                    OrderSide::Buy => {
+                        *self.balances.entry(base.to_string()).or_insert(0.0) += fill_qty;
+                        *self.balances.entry(quote.to_string()).or_insert(0.0) -= fill_price * fill_qty + fee;
+                    }
+                    OrderSide::Sell => {
+                        *self.balances.entry(base.to_string()).or_insert(0.0) -= fill_qty;
+                        *self.balances.entry(quote.to_string()).or_insert(0.0) += fill_price * fill_qty - fee;
+                    }
+                }
+
+                let fill = Fill {
+                    fill_id: format!("fill_{}", self.trade_history.len()),
+                    order_id: order.id,
+                    symbol: order.symbol,
+                    side: order.side,
+                    price: fill_price,
+                    quantity: fill_qty,
+                    fee,
+                    timestamp: chrono::Utc::now().timestamp_millis(),
+                };
+                fills.push(fill.clone());
+                self.trade_history.push(fill);
+            } else {
+                remaining.push(order);
+            }
+        }
+
+        self.open_orders = remaining;
+        fills
+    }
+
+    pub fn balances(&self) -> &HashMap<String, f64> {
+        &self.balances
+    }
+
+    pub fn open_order_count(&self) -> usize {
+        self.open_orders.len()
+    }
+
+    pub fn trade_history(&self) -> &[Fill] {
+        &self.trade_history
+    }
+}
