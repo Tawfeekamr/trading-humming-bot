@@ -1,5 +1,7 @@
 # Environment
 .env
+.env.docker
+.claude/
 keys/
 
 # Python
