@@ -256,38 +256,68 @@ impl Strategy for GridStrategy {
     }
 
     async fn on_tick(&mut self, ctx: &TickContext) -> Result<Vec<OrderRequest>> {
-        // If not active, return empty orders
-        if self.state != GridState::Active {
-            return Ok(Vec::new());
-        }
-
         // Get mid price from order book
         let mid_price = match ctx.order_book.mid_price() {
             Some(price) => price,
             None => return Ok(Vec::new()),
         };
 
-        // Calculate or update grid layout
-        // Use BB-like estimates from recent bars if available, else simple defaults
-        let (bb_lower, bb_upper, atr_estimate) = if ctx.recent_bars.len() >= 20 {
-            // Compute simple estimates from bars
+        // Evaluate grid state using indicators from recent bars
+        if ctx.recent_bars.len() >= 20 {
             let closes: Vec<f64> = ctx.recent_bars.iter().map(|b| b.close).collect();
             let mean = closes.iter().sum::<f64>() / closes.len() as f64;
             let stddev = {
                 let variance = closes.iter().map(|c| (c - mean).powi(2)).sum::<f64>() / closes.len() as f64;
                 variance.sqrt()
             };
-            let bb_center = mean;
-            let bb_low = bb_center - 2.0 * stddev;
-            let bb_high = bb_center + 2.0 * stddev;
-            // ATR estimate: average of (high - low) over recent bars
+            let bb_lower = mean - 2.0 * stddev;
+            let bb_upper = mean + 2.0 * stddev;
+
+            // Simple RSI estimate from recent bars
+            let mut gains = 0.0;
+            let mut losses = 0.0;
+            for i in 1..closes.len() {
+                let diff = closes[i] - closes[i - 1];
+                if diff > 0.0 { gains += diff; } else { losses += diff.abs(); }
+            }
+            let avg_gain = gains / (closes.len() - 1) as f64;
+            let avg_loss = losses / (closes.len() - 1) as f64;
+            let rsi = if avg_loss == 0.0 { 100.0 } else {
+                100.0 - (100.0 / (1.0 + avg_gain / avg_loss))
+            };
+
+            // Simple EMA-200 estimate (use mean as proxy until we have 200 bars)
+            let ema_200 = mean;
+
+            // Get ML regime from context or default to 0 (Ranging)
+            let (ml_regime, ml_confidence) = match ctx.regime {
+                Some(MarketRegime::Danger) => (2, 0.8),
+                Some(MarketRegime::Trending) => (1, 0.6),
+                _ => (0, 0.0),
+            };
+
+            self.evaluate_state_with_ml(mid_price, rsi, ema_200, bb_lower, bb_upper, ml_regime, ml_confidence);
+        }
+
+        // If not active after evaluation, return empty orders
+        if self.state != GridState::Active {
+            return Ok(Vec::new());
+        }
+
+        // Calculate grid layout using indicator estimates
+        let (bb_lower, bb_upper, atr_estimate) = if ctx.recent_bars.len() >= 20 {
+            let closes: Vec<f64> = ctx.recent_bars.iter().map(|b| b.close).collect();
+            let mean = closes.iter().sum::<f64>() / closes.len() as f64;
+            let stddev = {
+                let variance = closes.iter().map(|c| (c - mean).powi(2)).sum::<f64>() / closes.len() as f64;
+                variance.sqrt()
+            };
             let avg_range: f64 = ctx.recent_bars.iter().map(|b| b.high - b.low).sum::<f64>()
                 / ctx.recent_bars.len() as f64;
-            (bb_low, bb_high, avg_range)
+            (mean - 2.0 * stddev, mean + 2.0 * stddev, avg_range)
         } else {
             // Fallback: simple percentages
-            let atr = mid_price * 0.01;
-            (mid_price * 0.98, mid_price * 0.02, atr)
+            (mid_price * 0.98, mid_price * 1.02, mid_price * 0.01)
         };
 
         let layout = self.calculate_levels(mid_price, atr_estimate, bb_lower, bb_upper);
