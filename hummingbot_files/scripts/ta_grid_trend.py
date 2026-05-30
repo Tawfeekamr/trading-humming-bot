@@ -1835,7 +1835,6 @@ class TAGridTrendStrategy(StrategyV2Base):
         pos = pm.open_position(
             entry_order_id=str(order_id), entry_price=self._last_price[engine.symbol],
             amount=amount, stop_loss=sl, take_profit=tp, entry_time=entry_time,
-            signal_score=score.total,
         )
 
         if pos:
