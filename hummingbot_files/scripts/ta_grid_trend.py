@@ -1826,7 +1826,10 @@ class TAGridTrendStrategy(StrategyV2Base):
 
         amount_dec = Decimal(str(amount)).quantize(Decimal("0.01"))
         try:
-            order_id = self.buy(self.exchange, engine.symbol, amount_dec, OrderType.LIMIT_MAKER)
+            # Use LIMIT (not LIMIT_MAKER) so paper trading fills the entry immediately.
+            # LIMIT_MAKER orders sit unfilled on paper trade connectors, causing
+            # decimal.InvalidOperation crashes when subsequent sell orders cross them.
+            order_id = self.buy(self.exchange, engine.symbol, amount_dec, OrderType.LIMIT)
         except Exception as e:
             logger.error(f"Trend buy failed for {engine.symbol}: {e}")
             return
