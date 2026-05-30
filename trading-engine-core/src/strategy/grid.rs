@@ -241,7 +241,7 @@ fn round_down(value: f64, increment: f64) -> f64 {
 }
 
 use crate::strategy::{Strategy, TickContext, StrategyStatus, MarketRegime};
-use crate::connector::types::{OrderRequest, Fill};
+use crate::connector::types::{OrderRequest, Fill, OrderTypeReq, TimeInForceReq};
 use async_trait::async_trait;
 use anyhow::Result;
 
@@ -267,35 +267,75 @@ impl Strategy for GridStrategy {
             None => return Ok(Vec::new()),
         };
 
-        // If no grid layout yet, calculate it using simple defaults
-        if self.grid_layout.is_none() {
-            // Use mid_price as center with ATR estimate
-            // In a full implementation, we'd extract ATR from recent_bars
-            let atr_estimate = mid_price * 0.01; // 1% of price as rough ATR estimate
-            let bb_lower = mid_price * 0.98;
-            let bb_upper = mid_price * 1.02;
+        // Calculate or update grid layout
+        // Use BB-like estimates from recent bars if available, else simple defaults
+        let (bb_lower, bb_upper, atr_estimate) = if ctx.recent_bars.len() >= 20 {
+            // Compute simple estimates from bars
+            let closes: Vec<f64> = ctx.recent_bars.iter().map(|b| b.close).collect();
+            let mean = closes.iter().sum::<f64>() / closes.len() as f64;
+            let stddev = {
+                let variance = closes.iter().map(|c| (c - mean).powi(2)).sum::<f64>() / closes.len() as f64;
+                variance.sqrt()
+            };
+            let bb_center = mean;
+            let bb_low = bb_center - 2.0 * stddev;
+            let bb_high = bb_center + 2.0 * stddev;
+            // ATR estimate: average of (high - low) over recent bars
+            let avg_range: f64 = ctx.recent_bars.iter().map(|b| b.high - b.low).sum::<f64>()
+                / ctx.recent_bars.len() as f64;
+            (bb_low, bb_high, avg_range)
+        } else {
+            // Fallback: simple percentages
+            let atr = mid_price * 0.01;
+            (mid_price * 0.98, mid_price * 0.02, atr)
+        };
 
-            let layout = self.calculate_levels(mid_price, atr_estimate, bb_lower, bb_upper);
-            self.grid_layout = Some(layout);
+        let layout = self.calculate_levels(mid_price, atr_estimate, bb_lower, bb_upper);
+        self.grid_layout = Some(layout.clone());
+
+        // Generate orders only if we don't already have pending orders
+        if !self.orders.is_empty() {
+            return Ok(Vec::new());
         }
 
-        // For now, grid orders are managed separately
-        // Just update state if we have ML regime info
+        let mut orders = Vec::new();
+
+        // Place buy limit orders
+        for (i, level) in layout.buy_levels.iter().enumerate() {
+            let req = OrderRequest {
+                symbol: self.pair.replace("-", ""),
+                side: OrderSide::Buy,
+                order_type: OrderTypeReq::Limit,
+                price: Some(level.price),
+                quantity: level.quantity,
+                time_in_force: Some(TimeInForceReq::Gtc),
+                client_order_id: Some(format!("grid_{}_buy_{}", self.pair, i)),
+            };
+            orders.push(req);
+        }
+
+        // Place sell limit orders
+        for (i, level) in layout.sell_levels.iter().enumerate() {
+            let req = OrderRequest {
+                symbol: self.pair.replace("-", ""),
+                side: OrderSide::Sell,
+                order_type: OrderTypeReq::Limit,
+                price: Some(level.price),
+                quantity: level.quantity,
+                time_in_force: Some(TimeInForceReq::Gtc),
+                client_order_id: Some(format!("grid_{}_sell_{}", self.pair, i)),
+            };
+            orders.push(req);
+        }
+
+        // Update state based on ML regime
         if let Some(regime) = ctx.regime {
-            match regime {
-                MarketRegime::Danger => {
-                    self.state = GridState::Paused;
-                }
-                _ => {
-                    // Keep current state or reactivate if paused
-                    if self.state == GridState::Paused {
-                        self.state = GridState::Active;
-                    }
-                }
+            if regime == MarketRegime::Danger {
+                self.state = GridState::Paused;
             }
         }
 
-        Ok(Vec::new())
+        Ok(orders)
     }
 
     async fn on_fill(&mut self, fill: &Fill) -> Result<Vec<OrderRequest>> {
