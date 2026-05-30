@@ -1,1 +1,3 @@
-// src/ml/mod.rs — ML inference module
+pub mod regime;
+pub use regime::{RegimeClassifier, MarketRegime, RegimePrediction};
+
