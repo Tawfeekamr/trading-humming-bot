@@ -14,7 +14,10 @@ import json
 import traceback as traceback_mod
 import urllib.request
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, getcontext
+# Widen decimal precision to prevent InvalidOperation in Hummingbot's paper trade
+# matching engine when comparing LIMIT_MAKER order prices with order book prices.
+getcontext().prec = 50
 from dotenv import load_dotenv
 from pathlib import Path
 from typing import Dict, Optional, List
