@@ -1003,6 +1003,18 @@ class TAGridTrendStrategy(StrategyV2Base):
                     logger.debug(f"BNB rebalancer check skipped: {e}")
 
             ml_regime, ml_confidence, _ = self._ml_predictions.get(engine.symbol, (None, 0.0, 0.0))
+
+            # Keep inline state machine in sync (used for event logging + health endpoint)
+            # even when trading engine handles actual grid decisions.
+            self.state_machines[engine.symbol].evaluate(
+                price=current_price, rsi=rsi_value, ema_200=ema_value,
+                bb_lower=bb_result.lower, bb_upper=bb_result.upper,
+                rsi_overbought=self.rsi_overbought, rsi_oversold=self.rsi_oversold,
+                ml_regime=ml_regime if ml_regime is not None else 0,
+                ml_confidence=ml_confidence,
+            )
+
+
             self.event_log.log("indicators_updated",
                 rsi=round(rsi_value, 2), bb_upper=round(bb_result.upper, 2),
                 bb_mid=round(bb_result.mid, 2), bb_lower=round(bb_result.lower, 2),
@@ -1017,7 +1029,7 @@ class TAGridTrendStrategy(StrategyV2Base):
             if self._trading_host is not None:
                 from src.trading_engine.adapter.hummingbot_integration import tick_trading_engine
                 # Warm up Rust indicators from full candle history on first fetch
-                if not self._trading_engine_warmed_up.get(engine.symbol, True):
+                if not self._trading_engine_warmed_up.get(engine.symbol, False):
                     for strategy in self._trading_host.strategies:
                         if hasattr(strategy, 'ema') and strategy.instrument_id == engine.symbol:
                             for i in range(len(df)):
