@@ -188,6 +188,128 @@ class TestGridStateMachine:
         for result in results:
             assert isinstance(result, GridState)
 
+    def test_ml_danger_blocks_when_confident(self):
+        """ML DANGER regime with high confidence should block grid."""
+        sm = GridStateMachine()
+        sm.state = GridState.ACTIVE
+
+        result = sm.evaluate(
+            price=101_000,
+            rsi=50,
+            ema_200=100_000,
+            bb_lower=95_000,
+            bb_upper=105_000,
+            ml_regime=2,
+            ml_confidence=0.80
+        )
+
+        assert result == GridState.DANGER
+
+    def test_ml_danger_ignored_when_low_confidence(self):
+        """ML DANGER regime with low confidence should NOT block grid.
+        The model outputs 0.35-0.55 confidence; DANGER below 0.55 is unreliable."""
+        sm = GridStateMachine()
+        sm.state = GridState.ACTIVE
+
+        result = sm.evaluate(
+            price=101_000,
+            rsi=50,
+            ema_200=100_000,
+            bb_lower=95_000,
+            bb_upper=105_000,
+            ml_regime=2,
+            ml_confidence=0.43  # Low confidence DANGER
+        )
+
+        # Should NOT be DANGER — falls through to normal technical evaluation
+        assert result == GridState.ACTIVE
+
+    def test_ml_trending_relaxes_rsi_at_lower_threshold(self):
+        """ML TRENDING regime should relax RSI threshold at 0.55 confidence (was 0.85)."""
+        sm = GridStateMachine()
+        sm.state = GridState.ACTIVE
+
+        # RSI=72 would normally be PAUSED (>70), but ML trending at 0.60 conf
+        # relaxes overbought to 75, so grid stays ACTIVE
+        result = sm.evaluate(
+            price=101_000,
+            rsi=72,
+            ema_200=100_000,
+            bb_lower=95_000,
+            bb_upper=105_000,
+            ml_regime=1,
+            ml_confidence=0.60
+        )
+
+        assert result == GridState.ACTIVE
+
+    def test_ml_trending_no_relax_below_threshold(self):
+        """ML TRENDING regime below threshold should NOT relax RSI."""
+        sm = GridStateMachine()
+        sm.state = GridState.ACTIVE
+
+        # RSI=72 > 70, ML confidence 0.50 < 0.55 threshold — no relaxation
+        result = sm.evaluate(
+            price=101_000,
+            rsi=72,
+            ema_200=100_000,
+            bb_lower=95_000,
+            bb_upper=105_000,
+            ml_regime=1,
+            ml_confidence=0.50
+        )
+
+        assert result == GridState.PAUSED
+
+    def test_ml_ranging_widens_bb_at_lower_threshold(self):
+        """ML RANGING regime should widen BB threshold at 0.55 confidence (was 0.85).
+        REACTIVATING requires price > ema_200 (PAUSED check runs first)."""
+        sm = GridStateMachine()
+        sm.state = GridState.PAUSED
+
+        # price=96_000 > ema_200=95_000, rsi=30 oversold
+        # bb_lower=91_500, threshold 1.05 → 96_075
+        # 96_000 < 96_075 so REACTIVATING triggers
+        result = sm.evaluate(
+            price=96_000,
+            rsi=30,  # oversold
+            ema_200=95_000,  # price > ema_200 required for reactivation
+            bb_lower=91_500,
+            bb_upper=100_000,
+            ml_regime=0,
+            ml_confidence=0.60
+        )
+
+        assert result == GridState.REACTIVATING
+
+    def test_danger_confidence_boundary_exact(self):
+        """DANGER at exactly 0.55 confidence should trigger DANGER."""
+        sm = GridStateMachine()
+        result = sm.evaluate(
+            price=101_000,
+            rsi=50,
+            ema_200=100_000,
+            bb_lower=95_000,
+            bb_upper=105_000,
+            ml_regime=2,
+            ml_confidence=0.55
+        )
+        assert result == GridState.DANGER
+
+    def test_danger_confidence_just_below_boundary(self):
+        """DANGER at 0.54 confidence should NOT trigger DANGER."""
+        sm = GridStateMachine()
+        result = sm.evaluate(
+            price=101_000,
+            rsi=50,
+            ema_200=100_000,
+            bb_lower=95_000,
+            bb_upper=105_000,
+            ml_regime=2,
+            ml_confidence=0.54
+        )
+        assert result != GridState.DANGER
+
     def test_thread_safety_state_read_write(self):
         """Concurrent state reads and writes should be safe."""
         sm = GridStateMachine()
