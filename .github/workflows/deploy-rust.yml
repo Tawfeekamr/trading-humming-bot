@@ -77,6 +77,7 @@ jobs:
             --region "${{ env.AWS_REGION }}" \
             --parameters commands='[
               "cd /home/ec2-user/trading-humming-bot && git stash && git pull origin main 2>&1",
+              "sed -i '\''s|^DEEPSEEK_API_KEY=.*|DEEPSEEK_API_KEY=${{ secrets.DEEPSEEK_API_KEY }}|'\'' .env.rust",
               "docker compose -f docker-compose.rust.yml pull rust-bot 2>&1",
               "docker compose -f docker-compose.rust.yml up -d --force-recreate rust-bot 2>&1",
               "docker image prune -af 2>&1 || true"
