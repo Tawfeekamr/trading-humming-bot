@@ -645,8 +645,8 @@ class TAGridTrendStrategy(StrategyV2Base):
                 config=signal_cfg,
                 btc_regime_fn=_signal_btc_regime,
                 telegram_send_fn=lambda msg: asyncio.get_event_loop().create_task(self.telegram.send(msg)) if self.telegram else None,
-                buy_fn=lambda symbol, amount, price: self.buy(self.signal_exchange, symbol, amount, OrderType.LIMIT, price=price),
-                sell_fn=lambda symbol, amount, price: self.sell(self.signal_exchange, symbol, amount, OrderType.LIMIT, price=price),
+                buy_fn=lambda symbol, amount, price: self.buy(self.signal_exchange, symbol, amount, OrderType.LIMIT_MAKER, price=price),
+                sell_fn=lambda symbol, amount, price: self.sell(self.signal_exchange, symbol, amount, OrderType.LIMIT_MAKER, price=price),
                 get_price_fn=lambda symbol: self._get_signal_price(symbol),
             )
             self._signal_engine.start_listener()
@@ -1949,7 +1949,7 @@ class TAGridTrendStrategy(StrategyV2Base):
             buys_placed += 1
             client_order_id = self.buy(
                 connector_name=self.exchange, trading_pair=engine.symbol,
-                amount=Decimal(str(level["quantity"])), order_type=OrderType.LIMIT,
+                amount=Decimal(str(level["quantity"])), order_type=OrderType.LIMIT_MAKER,
                 price=Decimal(str(level["price"])),
             )
             if client_order_id:
@@ -1979,7 +1979,7 @@ class TAGridTrendStrategy(StrategyV2Base):
             sells_placed += 1
             client_order_id = self.sell(
                 connector_name=self.exchange, trading_pair=engine.symbol,
-                amount=Decimal(str(buy.quantity)), order_type=OrderType.LIMIT,
+                amount=Decimal(str(buy.quantity)), order_type=OrderType.LIMIT_MAKER,
                 price=Decimal(str(sell_price)),
             )
             if client_order_id:
