@@ -323,15 +323,17 @@ impl Strategy for GridStrategy {
         let layout = self.calculate_levels(mid_price, atr_estimate, bb_lower, bb_upper);
         self.grid_layout = Some(layout.clone());
 
-        // Generate orders only if we don't already have pending orders
-        if !self.orders.is_empty() {
+        // Generate orders only if we don't already have pending grid orders
+        let pending_count = self.orders.len();
+        if pending_count > 0 {
             return Ok(Vec::new());
         }
 
         let mut orders = Vec::new();
 
-        // Place buy limit orders
+        // Place buy limit orders and track them
         for (i, level) in layout.buy_levels.iter().enumerate() {
+            let id = format!("grid_{}_buy_{}", self.pair, i);
             let req = OrderRequest {
                 symbol: self.pair.replace("-", ""),
                 side: OrderSide::Buy,
@@ -339,13 +341,21 @@ impl Strategy for GridStrategy {
                 price: Some(level.price),
                 quantity: level.quantity,
                 time_in_force: Some(TimeInForceReq::Gtc),
-                client_order_id: Some(format!("grid_{}_buy_{}", self.pair, i)),
+                client_order_id: Some(id.clone()),
             };
+            self.orders.insert(id.clone(), GridOrder {
+                order_id: id,
+                level_index: i,
+                side: OrderSide::Buy,
+                price: level.price,
+                quantity: level.quantity,
+            });
             orders.push(req);
         }
 
-        // Place sell limit orders
+        // Place sell limit orders and track them
         for (i, level) in layout.sell_levels.iter().enumerate() {
+            let id = format!("grid_{}_sell_{}", self.pair, i);
             let req = OrderRequest {
                 symbol: self.pair.replace("-", ""),
                 side: OrderSide::Sell,
@@ -353,8 +363,15 @@ impl Strategy for GridStrategy {
                 price: Some(level.price),
                 quantity: level.quantity,
                 time_in_force: Some(TimeInForceReq::Gtc),
-                client_order_id: Some(format!("grid_{}_sell_{}", self.pair, i)),
+                client_order_id: Some(id.clone()),
             };
+            self.orders.insert(id.clone(), GridOrder {
+                order_id: id,
+                level_index: i,
+                side: OrderSide::Sell,
+                price: level.price,
+                quantity: level.quantity,
+            });
             orders.push(req);
         }
 
@@ -369,17 +386,16 @@ impl Strategy for GridStrategy {
     }
 
     async fn on_fill(&mut self, fill: &Fill) -> Result<Vec<OrderRequest>> {
+        // Remove the filled order from tracking
+        self.orders.retain(|_, o| o.order_id != fill.order_id);
+
         // Calculate rough PnL estimate from fill
-        // For buys: negative value (capital outflow)
-        // For sells: positive value (capital inflow) - fee
         let pnl = match fill.side {
             OrderSide::Buy => -(fill.price * fill.quantity + fill.fee),
             OrderSide::Sell => fill.price * fill.quantity - fill.fee,
         };
 
         self.record_pnl(pnl);
-
-        // Grid orders are managed separately, so no new orders here
         Ok(Vec::new())
     }
 
@@ -405,7 +421,9 @@ impl Strategy for GridStrategy {
             pair: self.pair.clone(),
             state: state_str.to_string(),
             pnl: self.total_pnl,
-            open_orders: self.orders.len(),
+            open_orders: self.orders.len().max(
+                self.grid_layout.as_ref().map(|l| l.buy_levels.len() + l.sell_levels.len()).unwrap_or(0)
+            ),
             details: format!(
                 "Capital: ${:.2} / ${:.2} (Growth: {:.2}%)",
                 self.current_capital,
