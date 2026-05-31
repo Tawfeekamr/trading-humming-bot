@@ -11,11 +11,16 @@ pub struct TelegramBot {
 
 impl TelegramBot {
     pub fn new(token: &str, chat_id: &str) -> Self {
+        let enabled = !token.is_empty() && !chat_id.is_empty();
+        info!(
+            "Telegram bot initialized — enabled: {}, token_len: {}, chat_id: {}",
+            enabled, token.len(), chat_id
+        );
         Self {
             token: token.to_string(),
             chat_id: chat_id.to_string(),
             client: Client::new(),
-            enabled: !token.is_empty() && !chat_id.is_empty(),
+            enabled,
         }
     }
 
@@ -34,9 +39,13 @@ impl TelegramBot {
     }
 
     pub async fn send(&self, message: &str) -> Result<()> {
-        if !self.enabled { return Ok(()); }
+        if !self.enabled {
+            warn!("Telegram send skipped — bot is DISABLED (token or chat_id empty)");
+            return Ok(());
+        }
 
         let url = format!("https://api.telegram.org/bot{}/sendMessage", self.token);
+        info!("Telegram send → api.telegram.org ({} chars)", message.len());
 
         for attempt in 0..3 {
             match self.client
@@ -49,7 +58,20 @@ impl TelegramBot {
                 .send()
                 .await
             {
-                Ok(_) => return Ok(()),
+                Ok(resp) => {
+                    let status = resp.status();
+                    if status.is_success() {
+                        info!("Telegram send OK (status {})", status);
+                        return Ok(());
+                    } else {
+                        let body = resp.text().await.unwrap_or_default();
+                        warn!("Telegram send failed — HTTP {}: {}", status, body);
+                        if attempt >= 2 {
+                            return Err(anyhow::anyhow!("Telegram API error HTTP {}: {}", status, body));
+                        }
+                        tokio::time::sleep(tokio::time::Duration::from_millis(500 * (attempt + 1) as u64)).await;
+                    }
+                }
                 Err(e) => {
                     if attempt < 2 {
                         warn!("Telegram send failed (attempt {}): {}", attempt + 1, e);
@@ -117,23 +139,34 @@ impl TelegramBot {
         if !self.enabled { return Ok(Vec::new()); }
 
         let url = format!("https://api.telegram.org/bot{}/getUpdates", self.token);
-        let resp: serde_json::Value = self.client
+        let resp = self.client
             .get(&url)
             .query(&[("offset", (*last_update_id + 1).to_string())])
             .send()
-            .await?
-            .json()
             .await?;
 
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            warn!("Telegram getUpdates failed — HTTP {}: {}", status, body);
+            return Ok(Vec::new());
+        }
+
+        let resp_json: serde_json::Value = resp.json().await?;
         let mut commands = Vec::new();
-        if let Some(updates) = resp["result"].as_array() {
+        if let Some(updates) = resp_json["result"].as_array() {
+            let count = updates.len();
             for update in updates {
                 if let Some(update_id) = update["update_id"].as_i64() {
                     *last_update_id = update_id;
                 }
                 if let Some(text) = update["message"]["text"].as_str() {
+                    info!("Telegram command received: {}", text);
                     commands.push(text.to_string());
                 }
+            }
+            if count > 0 {
+                info!("Telegram polled {} update(s), last_update_id={}", count, last_update_id);
             }
         }
         Ok(commands)
