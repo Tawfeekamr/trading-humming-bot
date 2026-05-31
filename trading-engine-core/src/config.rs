@@ -129,13 +129,16 @@ pub struct RiskConfig {
 
 #[derive(Debug, Default, Deserialize)]
 pub struct TelegramConfig {
-    #[serde(default)]
+    #[serde(default = "default_telegram_token_env")]
     pub token_env: String,
-    #[serde(default)]
+    #[serde(default = "default_telegram_chat_id_env")]
     pub chat_id_env: String,
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub enabled: bool,
 }
+
+fn default_telegram_token_env() -> String { "TELEGRAM_BOT_TOKEN".to_string() }
+fn default_telegram_chat_id_env() -> String { "TELEGRAM_CHAT_ID".to_string() }
 
 #[derive(Debug, Deserialize)]
 pub struct MlConfig {
