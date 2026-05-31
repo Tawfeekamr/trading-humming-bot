@@ -113,19 +113,47 @@ def run_sweep(df: pd.DataFrame):
     results_df = pd.DataFrame(results)
     if results_df.empty:
         print("No results generated.")
-        return results_df
+        return results_df, 0.0
     results_df = results_df.sort_values("sharpe_ratio", ascending=False)
     print("\n=== TOP 10 PARAMETER COMBINATIONS ===")
     print(results_df.head(10).to_string(index=False))
 
+    # Adaptive criteria based on market regime (HODL return)
+    hodl_pct = benchmark.iloc[-1]
+    if hodl_pct < -30:
+        regime = "BEAR"
+        criteria = {"sharpe": 0.0, "max_dd": 35, "min_trades": 50, "min_win_rate": 40}
+    elif hodl_pct < -10:
+        regime = "WEAK"
+        criteria = {"sharpe": 0.3, "max_dd": 25, "min_trades": 80, "min_win_rate": 42}
+    elif hodl_pct < 20:
+        regime = "NEUTRAL"
+        criteria = {"sharpe": 0.6, "max_dd": 15, "min_trades": 100, "min_win_rate": 45}
+    else:
+        regime = "BULL"
+        criteria = {"sharpe": 1.2, "max_dd": 8, "min_trades": 200, "min_win_rate": 48}
+
+    print(f"\n=== MARKET REGIME: {regime} (HODL: {hodl_pct:.1f}%) ===")
+    print(f"  Criteria: Sharpe>{criteria['sharpe']}, DD<{criteria['max_dd']}%, "
+          f"Trades>{criteria['min_trades']}, WinRate>{criteria['min_win_rate']}%")
+
     passing = results_df[
-        (results_df["sharpe_ratio"] > 1.2) &
-        (results_df["total_trades"] > 200) &
-        (results_df["max_drawdown_pct"] < 8)
+        (results_df["sharpe_ratio"] > criteria["sharpe"]) &
+        (results_df["total_trades"] > criteria["min_trades"]) &
+        (results_df["max_drawdown_pct"] < criteria["max_dd"]) &
+        (results_df["win_rate"] > criteria["min_win_rate"])
     ]
+
+    # Also highlight strategies that beat HODL (most useful in bear markets)
+    results_df["beat_hodl_pct"] = results_df["total_return_pct"] - hodl_pct
+    beat_hodl = results_df[results_df["beat_hodl_pct"] > 0].sort_values("beat_hodl_pct", ascending=False)
+
     print(f"\n=== PASSING CRITERIA: {len(passing)} / {len(results_df)} ===")
     if not passing.empty:
-        print(passing.to_string(index=False))
+        print(passing.head(10).to_string(index=False))
+    print(f"\n=== BEAT HODL: {len(beat_hodl)} / {len(results_df)} strategies ===")
+    if not beat_hodl.empty:
+        print(beat_hodl.head(5).to_string(index=False))
 
     # Monte Carlo on best parameters
     if not results_df.empty:
@@ -139,7 +167,7 @@ def run_sweep(df: pd.DataFrame):
         print(f"  50th percentile: {mc['p50'].iloc[-1]:.2f}%")
         print(f"  95th percentile: {mc['p95'].iloc[-1]:.2f}%")
 
-    return results_df
+    return results_df, hodl_pct
 
 
 if __name__ == "__main__":
@@ -156,17 +184,22 @@ if __name__ == "__main__":
         print(f"No data for {args.pair}")
         exit(1)
 
-    results = run_sweep(df)
+    results, hodl = run_sweep(df)
 
     # Find best result by Sharpe ratio
     best = None
+    passing_count = 0
+    beat_hodl_count = 0
     if results is not None and not results.empty:
         best = results.loc[results['sharpe_ratio'].idxmax()]
+        beat_hodl_count = int((results["total_return_pct"] > hodl).sum())
 
     output = {
         "pair": args.pair,
         "best_sharpe": float(best['sharpe_ratio']) if best is not None else None,
         "total_combinations": len(results) if results is not None else 0,
+        "beat_hodl_count": beat_hodl_count,
+        "hodl_return_pct": round(hodl, 2),
     }
 
     output_path = args.output or f"backtest/results/{args.pair}_sweep.json"
