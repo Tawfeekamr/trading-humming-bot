@@ -39,12 +39,12 @@ grid:
 # ── Indicator Settings ────────────────────────────────────────────
 indicators:
   bollinger:
-    period: 15                # Sweep: 20→15 improved ETH Sharpe +0.27
+    period: 15  # Sweep: 20→15 improved ETH Sharpe +0.27
     std_dev: 2.0
 
   rsi:
     period: 14
-    oversold: 30              # Sweep: 35→30 improved DOGE Sharpe +0.24
+    oversold: 30  # Sweep: 35→30 improved DOGE Sharpe +0.24
     overbought: 70            # Grid pauses above this
 
   ema:
@@ -80,12 +80,12 @@ dashboard:
 trend:
   enabled: true
   capital: 5000                 # Trend engine capital pool ($0 = disabled)
-  ema_fast: 12                # Sweep: 20→12 improved BNB Sharpe +0.49
-  ema_slow: 50
+  ema_fast: 12  # Sweep: 20→12 improved BNB Sharpe +0.49
+  ema_slow: 40
   ema_trend: 200
   rsi_period: 14
-  rsi_min: 50                 # Sweep: 40→50 improved XRP Sharpe +0.25
-  rsi_max: 70
+  rsi_min: 50  # Sweep: 40→50 improved XRP Sharpe +0.25
+  rsi_max: 80
   min_signal_score: 3
   confirmation_ticks: 1
   risk_per_trade_pct: 2.0
