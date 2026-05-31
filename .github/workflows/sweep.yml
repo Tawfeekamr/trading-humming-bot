@@ -149,11 +149,58 @@ jobs:
       - name: Notify Telegram on success
         if: success()
         run: |
+          # Read results from EC2 and build Telegram summary
+          RESULTS_CMD=$(aws ssm send-command \
+            --document-name "AWS-RunShellScript" \
+            --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
+            --region "${{ env.AWS_REGION }}" \
+            --parameters commands='["cat /home/ec2-user/trading-humming-bot/backtest/results/*_sweep.json"]' \
+            --timeout-seconds 30 \
+            --query "Command.CommandId" --output text)
+
+          for i in $(seq 1 6); do
+            STATUS=$(aws ssm get-command-invocation --command-id "$RESULTS_CMD" \
+              --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
+              --query "Status" --output text 2>/dev/null || echo "Pending")
+            [ "$STATUS" = "Success" ] && break
+            [ "$STATUS" = "Failed" ] && break
+            sleep 5
+          done
+
+          RAW=$(aws ssm get-command-invocation --command-id "$RESULTS_CMD" \
+            --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
+            --query "StandardOutputContent" --output text 2>/dev/null || echo "")
+
+          # Parse results into Telegram message
+          MSG="📊 <b>Weekly Sweep Results</b>%0A•••"
+          echo "$RAW" | python3 -c "
+          import sys, json
+          lines = sys.stdin.read().strip().split('}{')
+          for i, chunk in enumerate(lines):
+              if i > 0: chunk = '{' + chunk
+              if i < len(lines) - 1: chunk = chunk + '}'
+              try:
+                  d = json.loads(chunk)
+                  pair = d['pair'].replace('USDT','/USDT')
+                  hodl = d.get('hodl_return_pct', 0)
+                  beat = d.get('beat_hodl_count', 0)
+                  total = d.get('total_combinations', 0)
+                  sharpe = d.get('best_sharpe', 0) or 0
+                  recs = d.get('recommendations', {})
+                  changes = [k for k,v in recs.items() if v.get('suggest_change')]
+                  emoji = '✅' if beat > total//2 else '⚠️'
+                  line = f'%0A{emoji} <b>{pair}</b>: Sharpe={sharpe:.1f} | HODL={hodl:.0f}% | Beat HODL: {beat}/{total}'
+                  if changes:
+                      line += f'%0A  🔧 Suggest: {', '.join(changes)}'
+                  print(line)
+              except: pass
+          " 2>/dev/null | while read -r line; do MSG="${MSG}${line}"; done
+
           curl -s -X POST \
             "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
             -d chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
             -d parse_mode=HTML \
-            -d text="📊 <b>Weekly Sweep Complete</b>%0A•••%0A🦀 4 pairs swept on EC2 (Tokyo)%0A⏰ $(date -u +'%Y-%m-%d %H:%M UTC')"
+            -d text="${MSG}"
 
       - name: Notify Telegram on failure
         if: failure()

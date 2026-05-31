@@ -1,14 +1,16 @@
 """
-Phase 1 Backtest: VectorBT Parameter Sweep
-Optimize BB period, RSI thresholds, and ATR multiplier.
+Weekly Parameter Sweep — Actionable Recommendations
+Optimizes BB period, RSI thresholds, and ATR multiplier.
+Compares best params against live config and outputs recommendations.
 
-Run: python backtest/vectorbt_sweep.py
-Target: Sharpe > 1.2, Max Drawdown < 8%, 200+ trades
+Run: python backtest/vectorbt_sweep.py --pair ETHUSDT
 """
 
 import os
 import sys
+import json
 from pathlib import Path
+from datetime import datetime, timedelta
 import pandas as pd
 import numpy as np
 from itertools import product
@@ -17,18 +19,43 @@ from itertools import product
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from backtest.reporting import compute_benchmark, monte_carlo_simulation, BacktestResult, format_report
 
+# Cache directory for downloaded data
+DATA_CACHE_DIR = Path(__file__).parent / "data_cache"
 
-def fetch_data(symbol: str = "SOLUSDT", start: str = "2025-01-01",
-               end: str = "2026-04-30") -> pd.DataFrame:
+# Current live strategy params (from config/strategy.yaml)
+LIVE_PARAMS = {
+    "bb_period": 20,
+    "rsi_oversold": 35,
+    "rsi_overbought": 70,
+    "atr_multiplier": 1.5,
+}
+
+
+def fetch_data(symbol: str = "ETHUSDT", start: str = "2025-01-01",
+               end: str = "2026-05-31") -> pd.DataFrame:
+    """Fetch data with local Parquet cache — skips download if cached today."""
+    DATA_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    cache_file = DATA_CACHE_DIR / f"{symbol}_{start}_{end}.parquet"
+
+    # Use cache if less than 24h old
+    if cache_file.exists():
+        age_hours = (datetime.now().timestamp() - cache_file.stat().st_mtime) / 3600
+        if age_hours < 24:
+            print(f"Loading cached data for {symbol} ({age_hours:.1f}h old)")
+            return pd.read_parquet(cache_file)
+
     try:
         import vectorbt as vbt
+        print(f"Downloading {symbol} {start} → {end} (1h)...")
         df = vbt.BinanceData.download(
             symbol, start=start, end=end, interval="1h"
         ).get()
+        if not df.empty:
+            df.to_parquet(cache_file)
+            print(f"Cached {len(df)} bars → {cache_file.name}")
         return df
     except Exception as e:
         print(f"Error fetching data: {e}")
-        print("Ensure vectorbt is installed: pip install vectorbt")
         return pd.DataFrame()
 
 
@@ -36,23 +63,21 @@ def run_sweep(df: pd.DataFrame):
     bb_periods = [15, 20, 25]
     rsi_oversold = [30, 35, 40]
     rsi_overbought = [65, 70, 75]
-    atr_multipliers = [0.5, 0.8, 1.0]
+    atr_multipliers = [0.5, 0.8, 1.0, 1.5]
 
     results = []
 
     # Compute HODL benchmark
     close = df["Close"]
     benchmark = compute_benchmark(close)
-    print(f"\n=== HODL BENCHMARK: {benchmark.iloc[-1]:.2f}% ===")
+    hodl_pct = benchmark.iloc[-1]
+    print(f"\n=== HODL BENCHMARK: {hodl_pct:.2f}% ===")
 
     for bb_p, rsi_low, rsi_high, atr_m in product(
         bb_periods, rsi_oversold, rsi_overbought, atr_multipliers
     ):
-
         sma = close.rolling(bb_p).mean()
         std = close.rolling(bb_p).std()
-        upper = sma + 2 * std
-        lower = sma - 2 * std
 
         delta = close.diff()
         gain = delta.where(delta > 0, 0).rolling(14).mean()
@@ -87,13 +112,11 @@ def run_sweep(df: pd.DataFrame):
 
         try:
             import vectorbt as vbt
-            # Realistic fees: 0.1% maker fee (standard, not BNB discount tier)
-            # Slippage: 5 basis points (0.05%) typical for SOL/USDT
             pf = vbt.Portfolio.from_signals(
                 close=close, entries=entries, exits=exits,
                 freq="1h", init_cash=200,
-                fees=0.001,  # 0.1% maker fee
-                slippage=0.0005,  # 5 bps slippage
+                fees=0.001,
+                slippage=0.0005,
             )
             stats = pf.stats()
             results.append({
@@ -101,11 +124,11 @@ def run_sweep(df: pd.DataFrame):
                 "rsi_oversold": rsi_low,
                 "rsi_overbought": rsi_high,
                 "atr_multiplier": atr_m,
-                "total_trades": stats.get("Total Trades", 0),
-                "total_return_pct": stats.get("Total Return [%]", 0),
-                "sharpe_ratio": stats.get("Sharpe Ratio", 0),
-                "max_drawdown_pct": stats.get("Max Drawdown [%]", 0),
-                "win_rate": stats.get("Win Rate [%]", 0),
+                "total_trades": int(stats.get("Total Trades", 0)),
+                "total_return_pct": float(stats.get("Total Return [%]", 0)),
+                "sharpe_ratio": float(stats.get("Sharpe Ratio", 0)),
+                "max_drawdown_pct": float(stats.get("Max Drawdown [%]", 0)),
+                "win_rate": float(stats.get("Win Rate [%]", 0)),
             })
         except Exception:
             continue
@@ -113,13 +136,13 @@ def run_sweep(df: pd.DataFrame):
     results_df = pd.DataFrame(results)
     if results_df.empty:
         print("No results generated.")
-        return results_df, 0.0
-    results_df = results_df.sort_values("sharpe_ratio", ascending=False)
-    print("\n=== TOP 10 PARAMETER COMBINATIONS ===")
-    print(results_df.head(10).to_string(index=False))
+        return results_df, hodl_pct, {}
 
-    # Adaptive criteria based on market regime (HODL return)
-    hodl_pct = benchmark.iloc[-1]
+    results_df = results_df.sort_values("sharpe_ratio", ascending=False)
+    print("\n=== TOP 5 PARAMETER COMBINATIONS ===")
+    print(results_df.head(5).to_string(index=False))
+
+    # Adaptive criteria based on market regime
     if hodl_pct < -30:
         regime = "BEAR"
         criteria = {"sharpe": 0.0, "max_dd": 35, "min_trades": 50, "min_win_rate": 40}
@@ -133,10 +156,6 @@ def run_sweep(df: pd.DataFrame):
         regime = "BULL"
         criteria = {"sharpe": 1.2, "max_dd": 8, "min_trades": 200, "min_win_rate": 48}
 
-    print(f"\n=== MARKET REGIME: {regime} (HODL: {hodl_pct:.1f}%) ===")
-    print(f"  Criteria: Sharpe>{criteria['sharpe']}, DD<{criteria['max_dd']}%, "
-          f"Trades>{criteria['min_trades']}, WinRate>{criteria['min_win_rate']}%")
-
     passing = results_df[
         (results_df["sharpe_ratio"] > criteria["sharpe"]) &
         (results_df["total_trades"] > criteria["min_trades"]) &
@@ -144,38 +163,54 @@ def run_sweep(df: pd.DataFrame):
         (results_df["win_rate"] > criteria["min_win_rate"])
     ]
 
-    # Also highlight strategies that beat HODL (most useful in bear markets)
     results_df["beat_hodl_pct"] = results_df["total_return_pct"] - hodl_pct
-    beat_hodl = results_df[results_df["beat_hodl_pct"] > 0].sort_values("beat_hodl_pct", ascending=False)
+    beat_hodl_count = int((results_df["beat_hodl_pct"] > 0).sum())
 
-    print(f"\n=== PASSING CRITERIA: {len(passing)} / {len(results_df)} ===")
-    if not passing.empty:
-        print(passing.head(10).to_string(index=False))
-    print(f"\n=== BEAT HODL: {len(beat_hodl)} / {len(results_df)} strategies ===")
-    if not beat_hodl.empty:
-        print(beat_hodl.head(5).to_string(index=False))
+    print(f"\n=== {regime} MARKET (HODL: {hodl_pct:.1f}%) — {len(passing)}/{len(results_df)} pass, {beat_hodl_count}/{len(results_df)} beat HODL ===")
 
-    # Monte Carlo on best parameters
-    if not results_df.empty:
-        best = results_df.iloc[0]
-        print(f"\n=== MONTE CARLO SIMULATION (best params, 90-day projection) ===")
-        print(f"Best params: BB={int(best['bb_period'])}, RSI<{best['rsi_oversold']}/{best['rsi_overbought']}, ATR×{best['atr_multiplier']}")
-        # Use daily return approximation for MC
-        daily_ret = close.resample('D').last().pct_change().dropna()
-        mc = monte_carlo_simulation(daily_ret, n_sims=500, n_days=90)
-        print(f"  5th percentile:  {mc['p5'].iloc[-1]:.2f}%")
-        print(f"  50th percentile: {mc['p50'].iloc[-1]:.2f}%")
-        print(f"  95th percentile: {mc['p95'].iloc[-1]:.2f}%")
+    # ── Compare against live params ──────────────────────────────
+    best = results_df.iloc[0]
+    recommendation = {}
 
-    return results_df, hodl_pct
+    for param, live_val in LIVE_PARAMS.items():
+        sweep_vals = results_df[param].unique()
+        best_val = best[param]
+
+        # Find how live params rank among all combos
+        if param in ("bb_period", "rsi_oversold", "rsi_overbought", "atr_multiplier"):
+            # Compare: how does the live value perform vs the best?
+            live_rows = results_df[results_df[param] == live_val]
+            if len(live_rows) > 0:
+                live_best_sharpe = live_rows["sharpe_ratio"].max()
+                delta_sharpe = best["sharpe_ratio"] - live_best_sharpe
+                recommendation[param] = {
+                    "live": live_val,
+                    "best": float(best_val),
+                    "delta_sharpe": round(delta_sharpe, 3),
+                    "suggest_change": abs(delta_sharpe) > 0.2 and best_val != live_val,
+                }
+
+    # Build suggestion text
+    suggestions = []
+    for param, info in recommendation.items():
+        if info["suggest_change"]:
+            suggestions.append(f"  {param}: {info['live']} → {int(info['best'])} (Δ Sharpe +{info['delta_sharpe']:.2f})")
+
+    if suggestions:
+        print(f"\n=== RECOMMENDED PARAM CHANGES vs LIVE CONFIG ===")
+        for s in suggestions:
+            print(s)
+    else:
+        print(f"\n=== LIVE PARAMS ARE OPTIMAL (no changes recommended) ===")
+
+    return results_df, hodl_pct, recommendation
 
 
 if __name__ == "__main__":
     import argparse
-    import json
 
     parser = argparse.ArgumentParser(description="VectorBT Parameter Sweep")
-    parser.add_argument("--pair", type=str, default="ETHUSDT", help="Trading pair symbol (e.g. ETHUSDT)")
+    parser.add_argument("--pair", type=str, default="ETHUSDT", help="Trading pair")
     parser.add_argument("--output", type=str, default=None, help="Output JSON path")
     args = parser.parse_args()
 
@@ -184,22 +219,41 @@ if __name__ == "__main__":
         print(f"No data for {args.pair}")
         exit(1)
 
-    results, hodl = run_sweep(df)
+    results, hodl, recommendations = run_sweep(df)
 
-    # Find best result by Sharpe ratio
+    # Build output
     best = None
-    passing_count = 0
     beat_hodl_count = 0
+    passing_count = 0
     if results is not None and not results.empty:
         best = results.loc[results['sharpe_ratio'].idxmax()]
         beat_hodl_count = int((results["total_return_pct"] > hodl).sum())
 
+        # Regime-based passing
+        if hodl < -30:
+            passing_count = int(((results["sharpe_ratio"] > 0) & (results["max_drawdown_pct"] < 35) & (results["total_trades"] > 50)).sum())
+        elif hodl < -10:
+            passing_count = int(((results["sharpe_ratio"] > 0.3) & (results["max_drawdown_pct"] < 25) & (results["total_trades"] > 80)).sum())
+        elif hodl < 20:
+            passing_count = int(((results["sharpe_ratio"] > 0.6) & (results["max_drawdown_pct"] < 15) & (results["total_trades"] > 100)).sum())
+        else:
+            passing_count = int(((results["sharpe_ratio"] > 1.2) & (results["max_drawdown_pct"] < 8) & (results["total_trades"] > 200)).sum())
+
     output = {
         "pair": args.pair,
-        "best_sharpe": float(best['sharpe_ratio']) if best is not None else None,
+        "best_sharpe": round(float(best['sharpe_ratio']), 3) if best is not None else None,
+        "best_return_pct": round(float(best['total_return_pct']), 2) if best is not None else None,
+        "best_params": {
+            "bb_period": int(best['bb_period']),
+            "rsi_oversold": int(best['rsi_oversold']),
+            "rsi_overbought": int(best['rsi_overbought']),
+            "atr_multiplier": float(best['atr_multiplier']),
+        } if best is not None else None,
         "total_combinations": len(results) if results is not None else 0,
+        "passing_count": passing_count,
         "beat_hodl_count": beat_hodl_count,
         "hodl_return_pct": round(hodl, 2),
+        "recommendations": recommendations,
     }
 
     output_path = args.output or f"backtest/results/{args.pair}_sweep.json"
@@ -207,5 +261,5 @@ if __name__ == "__main__":
     with open(output_path, "w") as f:
         json.dump(output, f, indent=2)
 
-    print(f"Best result for {args.pair}: Sharpe={output['best_sharpe']}")
+    print(f"\nBest for {args.pair}: Sharpe={output['best_sharpe']}, Return={output['best_return_pct']}%")
     print(f"Results saved to {output_path}")
