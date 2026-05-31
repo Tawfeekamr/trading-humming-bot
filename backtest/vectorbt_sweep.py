@@ -187,7 +187,7 @@ def run_sweep(df: pd.DataFrame):
                     "live": live_val,
                     "best": float(best_val),
                     "delta_sharpe": round(delta_sharpe, 3),
-                    "suggest_change": abs(delta_sharpe) > 0.2 and best_val != live_val,
+                    "suggest_change": bool(abs(delta_sharpe) > 0.2 and best_val != live_val),
                 }
 
     # Build suggestion text
