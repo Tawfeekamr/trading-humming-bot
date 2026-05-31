@@ -226,6 +226,7 @@ impl Engine {
             "price" => self.cmd_price().await,
             "balance" => self.cmd_balance().await,
             "grid_status" => Some(self.cmd_grid_status()),
+            "trend_status" => Some(self.cmd_trend_status()),
             "pnl" => Some(self.cmd_pnl()),
             "pending" => self.cmd_pending().await,
             "pause" => Some(self.cmd_pause()),
@@ -363,12 +364,15 @@ impl Engine {
              •••\n\
              <b>Grid:</b>\n\
              /grid_status — Grid state, pending orders, capital, growth\n\
-             /pnl — Grid P&L summary\n\
+             /pnl — P&L summary (grid + trend)\n\
              /balance — Account balances (USDT, base asset)\n\
              /pending — Open orders from exchange\n\
              /pause — Pause all strategies\n\
              /resume — Resume all strategies\n\
              /reset — Reset circuit breaker\n\
+             •••\n\
+             <b>Trend:</b>\n\
+             /trend_status — Trend positions, signals, P&L per pair\n\
              •••\n\
              <b>Signal:</b>\n\
              /signal_status — Signal engine status & positions\n\
@@ -433,6 +437,49 @@ impl Engine {
             lines.push(format!("📐 <b>{}:</b> {}", st.pair, st.state));
             lines.push(format!("  Levels: {} | Pending: {}", self.config.grid.levels, st.open_orders));
             lines.push(format!("  💰 Base: ${:.0} | Comp: ${:.2} ({:+.1}%)", init, cur, growth_pct));
+        }
+
+        lines.join("\n")
+    }
+
+    // ── Trend commands ─────────────────────────────────────────────
+
+    fn cmd_trend_status(&self) -> String {
+        let mode = if self.config.exchange.testnet { "TESTNET" } else { "PRODUCTION" };
+        let cb = if self.risk.circuit_breaker.is_halted() { "🛑 HALTED" } else { "✅ OK" };
+
+        let mut lines = vec![
+            "📈 <b>Trend Status</b>".to_string(),
+            "•••".to_string(),
+            format!("Mode: {} | CB: {}", mode, cb),
+            "•••".to_string(),
+        ];
+
+        let mut found = false;
+        for s in &self.strategies {
+            if s.name() != "trend" { continue; }
+            found = true;
+            let st = s.status();
+            let cur = s.current_capital();
+            let init = s.initial_capital();
+            let growth_pct = if init > 0.0 { (cur - init) / init * 100.0 } else { 0.0 };
+
+            lines.push(format!("📈 <b>{}:</b> {}", st.pair, st.state));
+
+            // Show position details from the strategy status details field
+            if !st.details.is_empty() {
+                for detail_line in st.details.split('\n') {
+                    if !detail_line.is_empty() {
+                        lines.push(format!("  {}", detail_line));
+                    }
+                }
+            }
+
+            lines.push(format!("  💰 P&L: ${:.2} | Growth: {:+.1}%", st.pnl, growth_pct));
+        }
+
+        if !found {
+            lines.push("No trend strategies active.".to_string());
         }
 
         lines.join("\n")
