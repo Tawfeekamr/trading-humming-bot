@@ -142,10 +142,10 @@ def run_grid_sweep(df: pd.DataFrame):
 
 def run_trend_sweep(df: pd.DataFrame):
     """Sweep trend strategy parameters: EMA fast/slow + RSI bounds."""
-    ema_fast_vals = [10, 15, 20, 25]
-    ema_slow_vals = [30, 40, 50, 60]
-    rsi_min_vals = [30, 35, 40, 45]
-    rsi_max_vals = [60, 65, 70, 75]
+    ema_fast_vals = [12, 20, 30]
+    ema_slow_vals = [40, 50, 60]
+    rsi_min_vals = [30, 40, 50]
+    rsi_max_vals = [60, 70, 80]
 
     close = df["Close"]
 
