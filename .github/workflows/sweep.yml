@@ -6,33 +6,119 @@ on:
   workflow_dispatch:  # Allow manual trigger
 
 env:
-  PYTHON_VERSION: "3.12"
+  REGISTRY: ghcr.io
+  IMAGE_NAME: backtest-sweep
+  AWS_REGION: "ap-northeast-1"
 
 jobs:
-  sweep:
-    name: Parameter Sweep
+  # ── Job 1: Build & push sweep image to GHCR ───────────────────
+  build:
+    name: Build Sweep Image
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        pair: [ETHUSDT, BNBUSDT, DOGEUSDT, XRPUSDT]
+    permissions:
+      contents: read
+      packages: write
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: pip
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Run sweep for ${{ matrix.pair }}
-        run: python backtest/vectorbt_sweep.py --pair ${{ matrix.pair }} --output backtest/results/${{ matrix.pair }}_sweep.json
-
-      - name: Upload sweep results
-        uses: actions/upload-artifact@v4
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
         with:
-          name: sweep-${{ matrix.pair }}
-          path: backtest/results/${{ matrix.pair }}_sweep.json
-          retention-days: 30
+          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,format=short
+            type=raw,value=latest
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: backtest/Dockerfile.sweep
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ── Job 2: Run sweep on EC2 via SSM ───────────────────────────
+  run-sweep:
+    name: Run Sweep on EC2
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Run sweep via SSM
+        run: |
+          COMMAND_ID=$(aws ssm send-command \
+            --document-name "AWS-RunShellScript" \
+            --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
+            --region "${{ env.AWS_REGION }}" \
+            --parameters commands='[
+              "cd /home/ec2-user/trading-humming-bot && git pull origin main 2>&1",
+              "docker pull ghcr.io/tawfeekamr/backtest-sweep:latest 2>&1",
+              "mkdir -p backtest/results",
+              "for PAIR in ETHUSDT BNBUSDT DOGEUSDT XRPUSDT; do echo \"=== Sweeping ${PAIR} ===\" ; docker run --rm -v /home/ec2-user/trading-humming-bot/backtest/results:/sweep/backtest/results ghcr.io/tawfeekamr/backtest-sweep:latest --pair ${PAIR} --output backtest/results/${PAIR}_sweep.json 2>&1 ; echo \"=== ${PAIR} done ===\" ; done",
+              "curl -s -X POST \"https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage\" -d chat_id=${{ secrets.TELEGRAM_CHAT_ID }} -d parse_mode=HTML -d text=\"📊 <b>Weekly Sweep Complete</b>%0A•••%0A$(cat /home/ec2-user/trading-humming-bot/backtest/results/*_sweep.json 2>/dev/null | tr '\\n' ' ')\""
+            ]' \
+            --timeout-seconds 600 \
+            --comment "Weekly parameter sweep" \
+            --query "Command.CommandId" \
+            --output text)
+
+          echo "Sweep command: $COMMAND_ID"
+          for i in $(seq 1 36); do
+            STATUS=$(aws ssm get-command-invocation \
+              --command-id "$COMMAND_ID" \
+              --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
+              --query "Status" --output text 2>/dev/null || echo "Pending")
+            echo "Attempt $i: $STATUS"
+            if [ "$STATUS" = "Success" ]; then
+              echo "=== SWEEP OUTPUT ==="
+              aws ssm get-command-invocation --command-id "$COMMAND_ID" \
+                --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
+                --query "StandardOutputContent" --output text
+              exit 0
+            elif [ "$STATUS" = "Failed" ]; then
+              echo "=== SWEEP FAILED ==="
+              aws ssm get-command-invocation --command-id "$COMMAND_ID" \
+                --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
+                --query "StandardErrorContent" --output text
+              echo "--- stdout ---"
+              aws ssm get-command-invocation --command-id "$COMMAND_ID" \
+                --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
+                --query "StandardOutputContent" --output text
+              exit 1
+            fi
+            sleep 15
+          done
+          echo "Timed out waiting for sweep to complete"
+          exit 1
+
+      - name: Notify Telegram on failure
+        if: failure()
+        run: |
+          curl -s -X POST \
+            "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
+            -d parse_mode=HTML \
+            -d text="❌ <b>Weekly Sweep FAILED</b>%0A•••%0A🔗 https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"

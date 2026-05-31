@@ -1,0 +1,20 @@
+# =============================================================
+# Lightweight Dockerfile for VectorBT Parameter Sweep
+# Built in CI (7GB RAM) — EC2 only pulls and runs
+# =============================================================
+FROM python:3.12-slim
+
+WORKDIR /sweep
+
+# Install only backtest dependencies
+COPY backtest/requirements-sweep.txt /tmp/req.txt
+RUN pip install --no-cache-dir -r /tmp/req.txt && rm /tmp/req.txt
+
+# Copy only what the sweep needs
+COPY backtest/vectorbt_sweep.py /sweep/backtest/
+COPY backtest/reporting.py /sweep/backtest/
+COPY backtest/__init__.py /sweep/backtest/
+
+RUN mkdir -p /sweep/backtest/results
+
+ENTRYPOINT ["python", "backtest/vectorbt_sweep.py"]
