@@ -16,4 +16,5 @@ pub trait Connector: Send + Sync {
     async fn get_balances(&self) -> Result<HashMap<String, f64>>;
     async fn get_open_orders(&self, symbol: &str) -> Result<Vec<OpenOrder>>;
     async fn get_order_book(&self, symbol: &str, limit: u16) -> Result<OrderBook>;
+    async fn get_klines(&self, symbol: &str, interval: &str, limit: u16) -> Result<Vec<crate::models::bar::Bar>>;
 }

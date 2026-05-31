@@ -321,6 +321,10 @@ impl Connector for BinanceConnector {
     async fn get_order_book(&self, symbol: &str, limit: u16) -> Result<OrderBook> {
         self.rest.get_order_book(symbol, limit).await
     }
+
+    async fn get_klines(&self, symbol: &str, interval: &str, limit: u16) -> Result<Vec<crate::models::bar::Bar>> {
+        self.rest.get_klines(symbol, interval, limit).await
+    }
 }
 
 fn parse_order_status(s: &str) -> OrderStatus {

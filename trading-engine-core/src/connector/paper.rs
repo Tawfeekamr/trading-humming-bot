@@ -192,4 +192,9 @@ impl crate::connector::Connector for PaperTradeConnector {
             timestamp: 0,
         })
     }
+
+    async fn get_klines(&self, _symbol: &str, _interval: &str, _limit: u16) -> anyhow::Result<Vec<crate::models::bar::Bar>> {
+        // Paper trade has no real kline data — return empty
+        Ok(Vec::new())
+    }
 }

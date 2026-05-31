@@ -88,6 +88,19 @@ impl Engine {
 
         info!("Engine running — processing events for {} pairs", pairs.len());
 
+        // Preload historical bars so strategies can evaluate state immediately
+        for pair in &pairs {
+            let symbol = pair.replace("-", "");
+            match self.connector.get_klines(&symbol, &self.config.timeframe, 100).await {
+                Ok(bars) => {
+                    let count = bars.len();
+                    self.bar_buffers.insert(pair.clone(), bars);
+                    info!("Preloaded {} historical bars for {}", count, pair);
+                }
+                Err(e) => warn!("Failed to preload bars for {}: {}", pair, e),
+            }
+        }
+
         // Main event loop
         while let Some(event) = ws_rx.recv().await {
             match event {
