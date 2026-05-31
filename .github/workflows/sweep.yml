@@ -67,26 +67,58 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Run sweep via SSM
+      - name: Write sweep script to EC2
+        run: |
+          SCRIPT_COMMAND_ID=$(aws ssm send-command \
+            --document-name "AWS-RunShellScript" \
+            --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
+            --region "${{ env.AWS_REGION }}" \
+            --parameters commands='[
+              "cat > /tmp/sweep.sh << '\''SCRIPT'\''",
+              "#!/bin/bash",
+              "set -e",
+              "cd /home/ec2-user/trading-humming-bot",
+              "git pull origin main 2>&1",
+              "docker pull ghcr.io/tawfeekamr/backtest-sweep:latest 2>&1",
+              "mkdir -p backtest/results",
+              "for PAIR in ETHUSDT BNBUSDT DOGEUSDT XRPUSDT; do",
+              "  echo \"=== Sweeping ${PAIR} ===\"",
+              "  docker run --rm -v /home/ec2-user/trading-humming-bot/backtest/results:/sweep/backtest/results ghcr.io/tawfeekamr/backtest-sweep:latest --pair ${PAIR} --output backtest/results/${PAIR}_sweep.json 2>&1",
+              "  echo \"=== ${PAIR} done ===\"",
+              "done",
+              "echo SWEEP_COMPLETE",
+              "SCRIPT",
+              "chmod +x /tmp/sweep.sh"
+            ]' \
+            --timeout-seconds 30 \
+            --comment "Write sweep script" \
+            --query "Command.CommandId" \
+            --output text)
+
+          for i in $(seq 1 6); do
+            STATUS=$(aws ssm get-command-invocation --command-id "$SCRIPT_COMMAND_ID" \
+              --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
+              --query "Status" --output text 2>/dev/null || echo "Pending")
+            [ "$STATUS" = "Success" ] && break
+            [ "$STATUS" = "Failed" ] && exit 1
+            sleep 5
+          done
+
+      - name: Run sweep on EC2
+        id: sweep
         run: |
           COMMAND_ID=$(aws ssm send-command \
             --document-name "AWS-RunShellScript" \
             --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
             --region "${{ env.AWS_REGION }}" \
-            --parameters commands='[
-              "cd /home/ec2-user/trading-humming-bot && git pull origin main 2>&1",
-              "docker pull ghcr.io/tawfeekamr/backtest-sweep:latest 2>&1",
-              "mkdir -p backtest/results",
-              "for PAIR in ETHUSDT BNBUSDT DOGEUSDT XRPUSDT; do echo \"=== Sweeping ${PAIR} ===\" ; docker run --rm -v /home/ec2-user/trading-humming-bot/backtest/results:/sweep/backtest/results ghcr.io/tawfeekamr/backtest-sweep:latest --pair ${PAIR} --output backtest/results/${PAIR}_sweep.json 2>&1 ; echo \"=== ${PAIR} done ===\" ; done",
-              "curl -s -X POST \"https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage\" -d chat_id=${{ secrets.TELEGRAM_CHAT_ID }} -d parse_mode=HTML -d text=\"📊 <b>Weekly Sweep Complete</b>%0A•••%0A$(cat /home/ec2-user/trading-humming-bot/backtest/results/*_sweep.json 2>/dev/null | tr '\\n' ' ')\""
-            ]' \
+            --parameters commands='["bash /tmp/sweep.sh"]' \
             --timeout-seconds 600 \
             --comment "Weekly parameter sweep" \
             --query "Command.CommandId" \
             --output text)
 
           echo "Sweep command: $COMMAND_ID"
-          for i in $(seq 1 36); do
+          for i in $(seq 1 40); do
             STATUS=$(aws ssm get-command-invocation \
               --command-id "$COMMAND_ID" \
               --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
@@ -113,6 +145,15 @@ jobs:
           done
           echo "Timed out waiting for sweep to complete"
           exit 1
+
+      - name: Notify Telegram on success
+        if: success()
+        run: |
+          curl -s -X POST \
+            "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
+            -d parse_mode=HTML \
+            -d text="📊 <b>Weekly Sweep Complete</b>%0A•••%0A🦀 4 pairs swept on EC2 (Tokyo)%0A⏰ $(date -u +'%Y-%m-%d %H:%M UTC')"
 
       - name: Notify Telegram on failure
         if: failure()
