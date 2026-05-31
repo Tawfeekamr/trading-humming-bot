@@ -127,7 +127,7 @@ pub struct RiskConfig {
     pub max_exposure_pct: f64,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Deserialize)]
 pub struct TelegramConfig {
     #[serde(default = "default_telegram_token_env")]
     pub token_env: String,
@@ -135,6 +135,16 @@ pub struct TelegramConfig {
     pub chat_id_env: String,
     #[serde(default = "default_true")]
     pub enabled: bool,
+}
+
+impl Default for TelegramConfig {
+    fn default() -> Self {
+        Self {
+            token_env: default_telegram_token_env(),
+            chat_id_env: default_telegram_chat_id_env(),
+            enabled: true,
+        }
+    }
 }
 
 fn default_telegram_token_env() -> String { "TELEGRAM_BOT_TOKEN".to_string() }
