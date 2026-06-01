@@ -1,0 +1,9 @@
+📊 <b>Sweep: ETH/USDT</b>
+🐻 HODL: -39%
+•••
+🤖 <b>Grid:</b> Sharpe=-0.86 | Return=-20.5% | Beat HODL: 90/108
+  🔧 bb_period: 20 → 15 (Δ +0.27)
+📈 <b>Trend:</b> Sharpe=0.39 | Return=+2.3% | Beat HODL: 67/81
+  🔧 ema_fast: 12 → 30 (Δ +1.02)
+  🔧 rsi_min: 40 → 50 (Δ +1.29)
+  🔧 rsi_max: 80 → 60 (Δ +1.09)

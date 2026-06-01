@@ -1,0 +1,7 @@
+📊 <b>Sweep: DOGE/USDT</b>
+🐻 HODL: -68%
+•••
+🤖 <b>Grid:</b> Sharpe=-0.51 | Return=-12.6% | Beat HODL: 108/108
+📈 <b>Trend:</b> Sharpe=1.13 | Return=+5.5% | Beat HODL: 81/81
+  🔧 ema_fast: 12 → 20 (Δ +0.39)
+  🔧 rsi_max: 80 → 60 (Δ +0.73)

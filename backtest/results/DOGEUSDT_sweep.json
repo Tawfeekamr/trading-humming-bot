@@ -1,0 +1,80 @@
+{
+  "pair": "DOGEUSDT",
+  "hodl_return_pct": -67.99,
+  "grid": {
+    "best_sharpe": -0.507,
+    "best_return_pct": -12.57,
+    "best_params": {
+      "bb_period": 25,
+      "rsi_oversold": 30,
+      "rsi_overbought": 65,
+      "atr_multiplier": 0.8
+    },
+    "total_combinations": 108,
+    "beat_hodl_count": 108,
+    "recommendations": {
+      "bb_period": {
+        "live": 20,
+        "best": 25.0,
+        "delta_sharpe": 0.028,
+        "suggest_change": false
+      },
+      "rsi_oversold": {
+        "live": 30,
+        "best": 30.0,
+        "delta_sharpe": 0.0,
+        "suggest_change": false
+      },
+      "rsi_overbought": {
+        "live": 70,
+        "best": 65.0,
+        "delta_sharpe": 0.093,
+        "suggest_change": false
+      },
+      "atr_multiplier": {
+        "live": 1.5,
+        "best": 0.8,
+        "delta_sharpe": 0.078,
+        "suggest_change": false
+      }
+    }
+  },
+  "trend": {
+    "best_sharpe": 1.134,
+    "best_return_pct": 5.47,
+    "best_params": {
+      "ema_fast": 20,
+      "ema_slow": 50,
+      "rsi_min": 50,
+      "rsi_max": 60
+    },
+    "total_combinations": 81,
+    "beat_hodl_count": 81,
+    "recommendations": {
+      "ema_fast": {
+        "live": 12,
+        "best": 20.0,
+        "delta_sharpe": 0.391,
+        "suggest_change": true
+      },
+      "ema_slow": {
+        "live": 40,
+        "best": 50.0,
+        "delta_sharpe": 0.072,
+        "suggest_change": false
+      },
+      "rsi_min": {
+        "live": 40,
+        "best": 50.0,
+        "delta_sharpe": 0.117,
+        "suggest_change": false
+      },
+      "rsi_max": {
+        "live": 80,
+        "best": 60.0,
+        "delta_sharpe": 0.73,
+        "suggest_change": true
+      }
+    }
+  }
+}

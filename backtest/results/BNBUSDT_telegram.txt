@@ -1,0 +1,6 @@
+📊 <b>Sweep: BNB/USDT</b>
+↔️ HODL: +3%
+•••
+🤖 <b>Grid:</b> Sharpe=-0.31 | Return=-7.1% | Beat HODL: 0/108
+  🔧 rsi_oversold: 30 → 35 (Δ +0.52)
+📈 <b>Trend:</b> Sharpe=0.72 | Return=+21.1% | Beat HODL: 7/81

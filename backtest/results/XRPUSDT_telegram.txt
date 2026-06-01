@@ -1,0 +1,6 @@
+📊 <b>Sweep: XRP/USDT</b>
+🐻 HODL: -36%
+•••
+🤖 <b>Grid:</b> Sharpe=-1.56 | Return=-37.2% | Beat HODL: 2/108
+📈 <b>Trend:</b> Sharpe=0.37 | Return=+10.2% | Beat HODL: 70/81
+  🔧 rsi_min: 40 → 50 (Δ +0.25)

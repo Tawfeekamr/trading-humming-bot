@@ -1,0 +1,80 @@
+{
+  "pair": "BNBUSDT",
+  "hodl_return_pct": 2.65,
+  "grid": {
+    "best_sharpe": -0.314,
+    "best_return_pct": -7.14,
+    "best_params": {
+      "bb_period": 15,
+      "rsi_oversold": 35,
+      "rsi_overbought": 70,
+      "atr_multiplier": 1.5
+    },
+    "total_combinations": 108,
+    "beat_hodl_count": 0,
+    "recommendations": {
+      "bb_period": {
+        "live": 20,
+        "best": 15.0,
+        "delta_sharpe": 0.196,
+        "suggest_change": false
+      },
+      "rsi_oversold": {
+        "live": 30,
+        "best": 35.0,
+        "delta_sharpe": 0.522,
+        "suggest_change": true
+      },
+      "rsi_overbought": {
+        "live": 70,
+        "best": 70.0,
+        "delta_sharpe": 0.0,
+        "suggest_change": false
+      },
+      "atr_multiplier": {
+        "live": 1.5,
+        "best": 1.5,
+        "delta_sharpe": 0.0,
+        "suggest_change": false
+      }
+    }
+  },
+  "trend": {
+    "best_sharpe": 0.722,
+    "best_return_pct": 21.13,
+    "best_params": {
+      "ema_fast": 12,
+      "ema_slow": 40,
+      "rsi_min": 50,
+      "rsi_max": 80
+    },
+    "total_combinations": 81,
+    "beat_hodl_count": 7,
+    "recommendations": {
+      "ema_fast": {
+        "live": 12,
+        "best": 12.0,
+        "delta_sharpe": 0.0,
+        "suggest_change": false
+      },
+      "ema_slow": {
+        "live": 40,
+        "best": 40.0,
+        "delta_sharpe": 0.0,
+        "suggest_change": false
+      },
+      "rsi_min": {
+        "live": 40,
+        "best": 50.0,
+        "delta_sharpe": 0.031,
+        "suggest_change": false
+      },
+      "rsi_max": {
+        "live": 80,
+        "best": 80.0,
+        "delta_sharpe": 0.0,
+        "suggest_change": false
+      }
+    }
+  }
+}

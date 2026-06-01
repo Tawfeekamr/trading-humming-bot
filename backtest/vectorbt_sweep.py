@@ -20,18 +20,18 @@ from backtest.reporting import compute_benchmark, monte_carlo_simulation, Backte
 
 DATA_CACHE_DIR = Path(__file__).parent / "data_cache"
 
-# Current live strategy params (from config/strategy.yaml)
+# Current live strategy params (from config/strategy.yaml) — de-overfitted, ATR-normalized
 LIVE_GRID_PARAMS = {
-    "bb_period": 20,
-    "rsi_oversold": 35,
+    "bb_period": 20,         # Standard 20 (reverted from 15 — was swept on ETH only)
+    "rsi_oversold": 30,      # Standard 30
     "rsi_overbought": 70,
     "atr_multiplier": 1.5,
 }
 LIVE_TREND_PARAMS = {
-    "ema_fast": 20,
-    "ema_slow": 50,
-    "rsi_min": 40,
-    "rsi_max": 70,
+    "ema_fast": 12,          # Kept 12 — reasonable for 1h
+    "ema_slow": 40,
+    "rsi_min": 40,           # Reverted from 50 — was swept on XRP only
+    "rsi_max": 80,
 }
 
 

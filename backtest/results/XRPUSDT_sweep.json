@@ -1,0 +1,80 @@
+{
+  "pair": "XRPUSDT",
+  "hodl_return_pct": -35.83,
+  "grid": {
+    "best_sharpe": -1.555,
+    "best_return_pct": -37.18,
+    "best_params": {
+      "bb_period": 15,
+      "rsi_oversold": 40,
+      "rsi_overbought": 65,
+      "atr_multiplier": 1.5
+    },
+    "total_combinations": 108,
+    "beat_hodl_count": 2,
+    "recommendations": {
+      "bb_period": {
+        "live": 20,
+        "best": 15.0,
+        "delta_sharpe": 0.017,
+        "suggest_change": false
+      },
+      "rsi_oversold": {
+        "live": 30,
+        "best": 40.0,
+        "delta_sharpe": 0.164,
+        "suggest_change": false
+      },
+      "rsi_overbought": {
+        "live": 70,
+        "best": 65.0,
+        "delta_sharpe": 0.161,
+        "suggest_change": false
+      },
+      "atr_multiplier": {
+        "live": 1.5,
+        "best": 1.5,
+        "delta_sharpe": 0.0,
+        "suggest_change": false
+      }
+    }
+  },
+  "trend": {
+    "best_sharpe": 0.373,
+    "best_return_pct": 10.16,
+    "best_params": {
+      "ema_fast": 12,
+      "ema_slow": 60,
+      "rsi_min": 50,
+      "rsi_max": 80
+    },
+    "total_combinations": 81,
+    "beat_hodl_count": 70,
+    "recommendations": {
+      "ema_fast": {
+        "live": 12,
+        "best": 12.0,
+        "delta_sharpe": 0.0,
+        "suggest_change": false
+      },
+      "ema_slow": {
+        "live": 40,
+        "best": 60.0,
+        "delta_sharpe": 0.192,
+        "suggest_change": false
+      },
+      "rsi_min": {
+        "live": 40,
+        "best": 50.0,
+        "delta_sharpe": 0.249,
+        "suggest_change": true
+      },
+      "rsi_max": {
+        "live": 80,
+        "best": 80.0,
+        "delta_sharpe": 0.0,
+        "suggest_change": false
+      }
+    }
+  }
+}
