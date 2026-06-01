@@ -77,8 +77,10 @@ jobs:
             --region "${{ env.AWS_REGION }}" \
             --parameters commands='[
               "cd /home/ec2-user/trading-humming-bot && git stash && git pull origin main 2>&1",
+              "docker compose -f docker-compose.hybrid.yml down 2>&1 || true",
+              "docker compose down 2>&1 || true",
               "sed -i '\''s|^DEEPSEEK_API_KEY=.*|DEEPSEEK_API_KEY=${{ secrets.DEEPSEEK_API_KEY }}|'\'' .env.rust",
-              "echo \"DEEPSEEK_API_KEY=${{ secrets.DEEPSEEK_API_KEY }}\" >> .env.docker || true",
+              "grep -q DEEPSEEK_API_KEY .env.docker && sed -i '\''s|^DEEPSEEK_API_KEY=.*|DEEPSEEK_API_KEY=${{ secrets.DEEPSEEK_API_KEY }}|'\'' .env.docker || echo \"DEEPSEEK_API_KEY=${{ secrets.DEEPSEEK_API_KEY }}\" >> .env.docker",
               "sed -i '\''s|^BINANCE_API_KEY=.*|BINANCE_API_KEY=${{ secrets.BINANCE_API_KEY }}|'\'' .env.rust",
               "sed -i '\''s|^BINANCE_API_SECRET=.*|BINANCE_API_SECRET=${{ secrets.BINANCE_API_SECRET }}|'\'' .env.rust",
               "sed -i '\''s|^TELEGRAM_BOT_TOKEN=.*|TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}|'\'' .env.rust",
@@ -124,7 +126,8 @@ jobs:
             --parameters commands='[
               "cd /home/ec2-user/trading-humming-bot",
               "docker compose -f docker-compose.rust.yml ps 2>&1",
-              "docker logs trading-bot-rust --tail 20 2>&1 || true"
+              "docker logs trading-bot-rust --tail 10 2>&1 || true",
+              "docker logs trading-signal-listener --tail 10 2>&1 || true"
             ]' \
             --timeout-seconds 30 \
             --comment "Verify Rust bot running" \
@@ -139,7 +142,7 @@ jobs:
                 --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
                 --query "StandardOutputContent" --output text)
               echo "$OUTPUT"
-              if echo "$OUTPUT" | grep -q "running"; then
+              if echo "$OUTPUT" | grep -qE "(Up|running)"; then
                 echo "✅ Bot is running"
                 exit 0
               fi
