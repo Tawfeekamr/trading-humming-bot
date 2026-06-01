@@ -48,7 +48,7 @@ impl BinanceWs {
         kline_interval: &str,
     ) -> Result<tokio::sync::mpsc::Receiver<WsEvent>> {
         let streams = format!(
-            "{}/@depth20@100ms/{}@kline_{}/{}@trade",
+            "{}@depth20@100ms/{}@kline_{}/{}@trade",
             symbol.to_lowercase(),
             symbol.to_lowercase(),
             kline_interval,
@@ -116,7 +116,7 @@ impl BinanceWs {
         let streams: Vec<String> = symbols.iter().flat_map(|symbol| {
             let sym = symbol.to_lowercase().replace('-', "");
             vec![
-                format!("{}/@depth20@100ms", sym),
+                format!("{}@depth20@100ms", sym),
                 format!("{}@kline_{}", sym, kline_interval),
                 format!("{}@trade", sym),
             ]
