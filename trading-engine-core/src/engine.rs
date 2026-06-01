@@ -642,13 +642,23 @@ impl Engine {
         let updated = status.get("updated_at").and_then(|v| v.as_str()).unwrap_or("?");
         let mode_tag = if audit { "AUDIT" } else { "LIVE" };
 
+        let trades_today = status.get("trades_today").and_then(|v| v.as_i64()).unwrap_or(0);
+        let max_trades = status.get("max_trades").and_then(|v| v.as_i64()).unwrap_or(10);
+        let daily_pnl = status.get("daily_pnl").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let halted = status.get("halted").and_then(|v| v.as_bool()).unwrap_or(false);
+
         let mut lines = vec![
             format!("📡 <b>SIGNAL ENGINE ({})</b>", mode_tag),
             "•••".to_string(),
             format!("State: <b>{}</b>", state),
             format!("Open positions: {}", open),
-            format!("Synced: {}", updated),
+            format!("Trades today: {}/{}", trades_today, max_trades),
+            format!("Daily P&L: ${:.2}", daily_pnl),
         ];
+
+        if halted {
+            lines.push("🚨 Risk guard halted — use /signal_resume".to_string());
+        }
 
         // Show positions from Python engine
         if let Some(positions) = status.get("positions").and_then(|v| v.as_array()) {

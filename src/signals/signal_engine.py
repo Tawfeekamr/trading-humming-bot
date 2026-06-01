@@ -130,6 +130,7 @@ class SignalEngine:
         """Write current status to shared JSON file for Rust engine to read."""
         try:
             positions = self._position_mgr.get_open_positions()
+            risk_status = self._risk.get_status()
             pos_list = []
             for p in positions:
                 pos_list.append({
@@ -149,7 +150,10 @@ class SignalEngine:
                 "audit_mode": self._audit_mode,
                 "open_positions": len(positions),
                 "positions": pos_list,
-                "risk": self._risk.get_status(),
+                "trades_today": risk_status.get("trades_today", 0),
+                "max_trades": risk_status.get("max_trades", 10),
+                "daily_pnl": risk_status.get("daily_pnl", 0.0),
+                "halted": risk_status.get("halted", False),
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }
             with open("data/signal_status.json", "w") as f:
