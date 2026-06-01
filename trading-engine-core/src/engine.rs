@@ -67,7 +67,7 @@ impl Engine {
             &self.telegram.format_startup_message(
                 if self.config.exchange.testnet { "testnet" } else { "production" },
                 self.config.grid.capital_usdt,
-                &self.config.pairs.keys().cloned().collect::<Vec<_>>().join(", "),
+                &self.config.pairs.iter().filter(|(_, pc)| pc.enabled).map(|(s, _)| s.clone()).collect::<Vec<_>>().join(", "),
                 self.config.grid.levels as usize,
             )
         ).await?;
@@ -82,8 +82,11 @@ impl Engine {
         }
         self.submit_orders(all_orders).await?;
 
-        // Connect to WebSocket (multi-pair)
-        let pairs: Vec<String> = self.config.pairs.keys().cloned().collect();
+        // Connect to WebSocket (multi-pair) — only enabled pairs
+        let pairs: Vec<String> = self.config.pairs.iter()
+            .filter(|(_, pc)| pc.enabled)
+            .map(|(s, _)| s.clone())
+            .collect();
         let ws = BinanceWs::new(self.config.exchange.testnet);
         let mut ws_rx = ws.subscribe_multi(&pairs, &self.config.timeframe).await?;
 

@@ -83,8 +83,8 @@ jobs:
               "grep -q DEEPSEEK_API_KEY .env.docker && sed -i '\''s|^DEEPSEEK_API_KEY=.*|DEEPSEEK_API_KEY=${{ secrets.DEEPSEEK_API_KEY }}|'\'' .env.docker || echo \"DEEPSEEK_API_KEY=${{ secrets.DEEPSEEK_API_KEY }}\" >> .env.docker",
               "sed -i '\''s|^BINANCE_API_KEY=.*|BINANCE_API_KEY=${{ secrets.BINANCE_API_KEY }}|'\'' .env.rust",
               "sed -i '\''s|^BINANCE_API_SECRET=.*|BINANCE_API_SECRET=${{ secrets.BINANCE_API_SECRET }}|'\'' .env.rust",
-              "sed -i '\''s|^TELEGRAM_BOT_TOKEN=.*|TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}|'\'' .env.rust",
-              "sed -i '\''s|^TELEGRAM_CHAT_ID=.*|TELEGRAM_CHAT_ID=${{ secrets.TELEGRAM_CHAT_ID }}|'\'' .env.rust",
+              "grep -q TELEGRAM_BOT_TOKEN .env.rust && sed -i '\''s|^TELEGRAM_BOT_TOKEN=.*|TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}|'\'' .env.rust || echo \"TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}\" >> .env.rust",
+              "grep -q TELEGRAM_CHAT_ID .env.rust && sed -i '\''s|^TELEGRAM_CHAT_ID=.*|TELEGRAM_CHAT_ID=${{ secrets.TELEGRAM_CHAT_ID }}|'\'' .env.rust || echo \"TELEGRAM_CHAT_ID=${{ secrets.TELEGRAM_CHAT_ID }}\" >> .env.rust",
               "docker compose -f docker-compose.rust.yml pull rust-bot 2>&1",
               "docker compose -f docker-compose.rust.yml up -d --build --force-recreate 2>&1",
               "docker image prune -af 2>&1 || true"
