@@ -119,12 +119,35 @@ pub struct TrendConfig {
     #[serde(default)]
     pub rsi_period: u32,
     #[serde(default)]
+    pub rsi_min: f64,
+    #[serde(default)]
+    pub rsi_max: f64,
+    #[serde(default)]
     pub min_signal_score: u8,
     #[serde(default)]
     pub confirmation_ticks: u8,
     #[serde(default)]
     pub risk_reward_ratio: f64,
+    #[serde(default = "default_10k")]
+    pub capital: f64,
+    #[serde(default = "default_2")]
+    pub risk_per_trade_pct: f64,
+    #[serde(default = "default_25")]
+    pub max_position_pct: f64,
+    #[serde(default = "default_1_5")]
+    pub trailing_stop_pct: f64,
+    #[serde(default = "default_1_5")]
+    pub trailing_activation_pct: f64,
+    #[serde(default = "default_2_u8")]
+    pub exit_signal_threshold: u8,
+    #[serde(default = "default_0_2")]
+    pub sl_buffer_pct: f64,
 }
+
+fn default_10k() -> f64 { 10000.0 }
+fn default_25() -> f64 { 25.0 }
+fn default_2_u8() -> u8 { 2 }
+fn default_0_2() -> f64 { 0.2 }
 
 #[derive(Debug, Deserialize)]
 pub struct RiskConfig {

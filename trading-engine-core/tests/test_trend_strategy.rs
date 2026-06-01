@@ -1,4 +1,4 @@
-use trading_engine_core::strategy::trend::TrendStrategy;
+use trading_engine_core::strategy::trend::{TrendStrategy, TrendPosition};
 use trading_engine_core::config::TrendConfig;
 use trading_engine_core::models::bar::Bar;
 
@@ -8,9 +8,18 @@ fn default_trend_config() -> TrendConfig {
         ema_slow: 50,
         ema_trend: 200,
         rsi_period: 14,
+        rsi_min: 50.0,
+        rsi_max: 80.0,
         min_signal_score: 3,
         confirmation_ticks: 2,
         risk_reward_ratio: 2.0,
+        capital: 10000.0,
+        risk_per_trade_pct: 2.0,
+        max_position_pct: 25.0,
+        trailing_stop_pct: 1.5,
+        trailing_activation_pct: 1.5,
+        exit_signal_threshold: 2,
+        sl_buffer_pct: 0.2,
     }
 }
 
@@ -78,12 +87,17 @@ fn test_stop_loss_and_take_profit_calculation() {
     let sl = strategy.calculate_stop_loss(50000.0);
     assert!(sl < 50000.0, "Stop loss should be below entry");
 
-    let tp = strategy.calculate_take_profit(50000.0, sl);
-    assert!(tp > 50000.0, "Take profit should be above entry");
+    // TP levels are now in TrendPosition
+    let tp_levels = TrendPosition::calculate_tp_levels(50000.0, sl, 2.0);
+    assert_eq!(tp_levels.len(), 3, "Should have 3 TP levels");
+    assert!(tp_levels[0].price > 50000.0, "TP1 should be above entry");
+    assert!(tp_levels[2].price > tp_levels[1].price, "TPs should be ascending");
 
     let risk = 50000.0 - sl;
-    let reward = tp - 50000.0;
-    assert!((reward / risk - 2.0).abs() < 0.01, "Risk:reward should be 2:1, got {}:1", reward / risk);
+    // TP3 should be at entry + risk * risk_reward_ratio
+    let expected_tp3 = 50000.0 + risk * 2.0;
+    assert!((tp_levels[2].price - expected_tp3).abs() < 0.01,
+        "TP3 should match 2:1 R:R, got {}", tp_levels[2].price);
 }
 
 #[test]

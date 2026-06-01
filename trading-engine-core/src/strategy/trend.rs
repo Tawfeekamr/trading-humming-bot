@@ -27,14 +27,51 @@ pub enum TrendDirection {
     Neutral,
 }
 
+/// Take-profit level with close percentage
+#[derive(Debug, Clone)]
+pub struct TpLevel {
+    pub price: f64,
+    pub close_pct: f64, // fraction of remaining position to close
+    pub filled: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct TrendPosition {
     pub side: OrderSide,
     pub entry_price: f64,
     pub stop_loss: f64,
-    pub take_profit: f64,
     pub quantity: f64,
+    pub remaining_qty: f64,
     pub trailing_stop: Option<f64>,
+    pub trailing_activated: bool,
+    pub tp_levels: Vec<TpLevel>,
+}
+
+impl TrendPosition {
+    /// Calculate 3 TP levels based on risk:
+    /// TP1: entry + 1× risk → close 33%
+    /// TP2: entry + 1.5× risk → close 50% of remaining
+    /// TP3: entry + 2× risk → close all remaining
+    pub fn calculate_tp_levels(entry_price: f64, stop_loss: f64, risk_reward_ratio: f64) -> Vec<TpLevel> {
+        let risk = entry_price - stop_loss;
+        vec![
+            TpLevel {
+                price: entry_price + risk * 1.0,
+                close_pct: 0.33,
+                filled: false,
+            },
+            TpLevel {
+                price: entry_price + risk * 1.5,
+                close_pct: 0.50,
+                filled: false,
+            },
+            TpLevel {
+                price: entry_price + risk * risk_reward_ratio,
+                close_pct: 1.0,
+                filled: false,
+            },
+        ]
+    }
 }
 
 pub struct TrendStrategy {
@@ -54,10 +91,15 @@ pub struct TrendStrategy {
     confirm_count: u8,
     last_signal: Option<TrendDirection>,
     position: Option<TrendPosition>,
+
+    // Capital tracking
+    initial_capital: f64,
+    realized_pnl: f64,
 }
 
 impl TrendStrategy {
     pub fn new(pair: &str, config: &TrendConfig) -> Self {
+        let capital = config.capital;
         Self {
             pair: pair.to_string(),
             config: TrendConfig {
@@ -65,9 +107,18 @@ impl TrendStrategy {
                 ema_slow: config.ema_slow,
                 ema_trend: config.ema_trend,
                 rsi_period: config.rsi_period,
+                rsi_min: config.rsi_min,
+                rsi_max: config.rsi_max,
                 min_signal_score: config.min_signal_score,
                 confirmation_ticks: config.confirmation_ticks,
                 risk_reward_ratio: config.risk_reward_ratio,
+                capital: config.capital,
+                risk_per_trade_pct: config.risk_per_trade_pct,
+                max_position_pct: config.max_position_pct,
+                trailing_stop_pct: config.trailing_stop_pct,
+                trailing_activation_pct: config.trailing_activation_pct,
+                exit_signal_threshold: config.exit_signal_threshold,
+                sl_buffer_pct: config.sl_buffer_pct,
             },
             ema_fast: Ema::new(config.ema_fast),
             ema_slow: Ema::new(config.ema_slow),
@@ -79,6 +130,8 @@ impl TrendStrategy {
             confirm_count: 0,
             last_signal: None,
             position: None,
+            initial_capital: capital,
+            realized_pnl: 0.0,
         }
     }
 
@@ -106,6 +159,8 @@ impl TrendStrategy {
         let ema_slow_val = self.ema_slow.value();
         let ema_trend_val = self.ema_trend.value();
         let rsi_val = self.rsi.value();
+        let rsi_min = if self.config.rsi_min > 0.0 { self.config.rsi_min } else { 40.0 };
+        let rsi_max = if self.config.rsi_max > 0.0 { self.config.rsi_max } else { 70.0 };
 
         // Signal 1: EMA cross (+1)
         if ema_fast_val > ema_slow_val {
@@ -128,7 +183,7 @@ impl TrendStrategy {
         }
 
         // Signal 3: RSI confirmation (+1) — not overbought
-        if rsi_val > 40.0 && rsi_val < 70.0 {
+        if rsi_val > rsi_min && rsi_val < rsi_max {
             score.total += 1;
             score.details.push(SignalDetail {
                 name: "rsi_confirm".into(),
@@ -155,17 +210,39 @@ impl TrendStrategy {
     }
 
     pub fn should_exit(&self, score: &SignalScore) -> bool {
-        score.total <= 2
+        let threshold = if self.config.exit_signal_threshold > 0 {
+            self.config.exit_signal_threshold
+        } else {
+            2
+        };
+        score.total <= threshold
     }
 
     pub fn calculate_stop_loss(&self, entry_price: f64) -> f64 {
         let atr_sl = entry_price - 2.0 * self.atr.value();
-        atr_sl
+        // Apply buffer: slightly wider than ATR-based SL
+        let buffered = atr_sl * (1.0 - self.config.sl_buffer_pct / 100.0);
+        buffered
     }
 
-    pub fn calculate_take_profit(&self, entry_price: f64, stop_loss: f64) -> f64 {
-        let risk = entry_price - stop_loss;
-        entry_price + risk * self.config.risk_reward_ratio
+    /// Dynamic position sizing based on risk percentage and SL distance
+    pub fn calculate_quantity(&self, entry_price: f64, stop_loss: f64) -> f64 {
+        let sl_distance = entry_price - stop_loss;
+        if sl_distance <= 0.0 {
+            return 0.0;
+        }
+
+        let current_capital = self.config.capital + self.realized_pnl;
+        let risk_amount = current_capital * (self.config.risk_per_trade_pct / 100.0);
+        let max_position_value = current_capital * (self.config.max_position_pct / 100.0);
+
+        // Quantity based on how much we're willing to lose
+        let qty_by_risk = risk_amount / sl_distance;
+
+        // Clamp: position value must not exceed max_position_pct of capital
+        let max_qty = max_position_value / entry_price;
+
+        qty_by_risk.min(max_qty)
     }
 
     fn indicators_ready(&self) -> bool {
@@ -219,41 +296,145 @@ impl Strategy for TrendStrategy {
                 .unwrap_or(0.0)
         });
 
+        if current_price <= 0.0 {
+            return Ok(orders);
+        }
+
+        // ── Priority 1: SL / Trailing Stop / TP hit detection ──
+        if let Some(pos) = &mut self.position {
+            // Stop-loss hit
+            if current_price <= pos.stop_loss {
+                let sell_qty = pos.remaining_qty;
+                let entry = pos.entry_price;
+                self.realized_pnl += (current_price - entry) * sell_qty;
+                self.position = None;
+                orders.push(OrderRequest {
+                    symbol: self.pair.clone(),
+                    side: OrderSide::Sell,
+                    order_type: OrderTypeReq::Limit,
+                    price: Some(current_price),
+                    quantity: sell_qty,
+                    time_in_force: Some(TimeInForceReq::Gtc),
+                    client_order_id: None,
+                });
+                return Ok(orders);
+            }
+
+            // Trailing stop hit
+            if pos.trailing_activated {
+                if let Some(ts) = pos.trailing_stop {
+                    if current_price <= ts {
+                        let sell_qty = pos.remaining_qty;
+                        let entry = pos.entry_price;
+                        self.realized_pnl += (current_price - entry) * sell_qty;
+                        self.position = None;
+                        orders.push(OrderRequest {
+                            symbol: self.pair.clone(),
+                            side: OrderSide::Sell,
+                            order_type: OrderTypeReq::Limit,
+                            price: Some(current_price),
+                            quantity: sell_qty,
+                            time_in_force: Some(TimeInForceReq::Gtc),
+                            client_order_id: None,
+                        });
+                        return Ok(orders);
+                    }
+                }
+            }
+
+            // TP level hits — partial exits
+            for tp in &mut pos.tp_levels {
+                if tp.filled {
+                    continue;
+                }
+                if current_price >= tp.price {
+                    let sell_qty = pos.remaining_qty * tp.close_pct;
+                    if sell_qty > 0.0 {
+                        tp.filled = true;
+                        pos.remaining_qty -= sell_qty;
+                        let entry = pos.entry_price;
+                        self.realized_pnl += (current_price - entry) * sell_qty;
+
+                        orders.push(OrderRequest {
+                            symbol: self.pair.clone(),
+                            side: OrderSide::Sell,
+                            order_type: OrderTypeReq::Limit,
+                            price: Some(current_price),
+                            quantity: sell_qty,
+                            time_in_force: Some(TimeInForceReq::Gtc),
+                            client_order_id: None,
+                        });
+
+                        // If all remaining closed, clear position
+                        if pos.remaining_qty <= 0.0001 {
+                            self.position = None;
+                            return Ok(orders);
+                        }
+                    }
+                }
+            }
+
+            // ── Update trailing stop if position still open ──
+            if let Some(pos) = &mut self.position {
+                let activation_pct = self.config.trailing_activation_pct / 100.0;
+                let trail_pct = self.config.trailing_stop_pct / 100.0;
+
+                // Activate trailing once price moves activation_pct above entry
+                if !pos.trailing_activated {
+                    let gain = (current_price - pos.entry_price) / pos.entry_price;
+                    if gain >= activation_pct {
+                        pos.trailing_activated = true;
+                    }
+                }
+
+                // Update trailing stop level on each tick
+                if pos.trailing_activated {
+                    let new_trail = current_price * (1.0 - trail_pct);
+                    pos.trailing_stop = Some(match pos.trailing_stop {
+                        Some(prev) => new_trail.max(prev), // only move up, never down
+                        None => new_trail,
+                    });
+                }
+            }
+        }
+
+        // ── Priority 2: Signal-based entry/exit ──
         let score = self.evaluate_signals(current_price);
 
         if self.position.is_none() {
             // No position — check if we should enter
             if self.should_enter(&score) {
                 let stop_loss = self.calculate_stop_loss(current_price);
-                let _take_profit = self.calculate_take_profit(current_price, stop_loss);
+                let quantity = self.calculate_quantity(current_price, stop_loss);
 
-                // Calculate quantity: fixed 100 USDT worth
-                let quantity = 100.0 / current_price;
-
-                orders.push(OrderRequest {
-                    symbol: self.pair.clone(),
-                    side: OrderSide::Buy,
-                    order_type: OrderTypeReq::Limit,
-                    price: Some(current_price),
-                    quantity,
-                    time_in_force: Some(TimeInForceReq::Gtc),
-                    client_order_id: None,
-                });
-            }
-        } else {
-            // Have position — check if we should exit
-            if self.should_exit(&score) {
-                if let Some(pos) = &self.position {
+                if quantity > 0.0 {
                     orders.push(OrderRequest {
                         symbol: self.pair.clone(),
-                        side: OrderSide::Sell,
+                        side: OrderSide::Buy,
                         order_type: OrderTypeReq::Limit,
                         price: Some(current_price),
-                        quantity: pos.quantity,
+                        quantity,
                         time_in_force: Some(TimeInForceReq::Gtc),
                         client_order_id: None,
                     });
                 }
+            }
+        } else if let Some(pos) = &self.position {
+            // Have position — check if signal degrades
+            if self.should_exit(&score) {
+                let sell_qty = pos.remaining_qty;
+                let entry = pos.entry_price;
+                self.realized_pnl += (current_price - entry) * sell_qty;
+                self.position = None;
+                orders.push(OrderRequest {
+                    symbol: self.pair.clone(),
+                    side: OrderSide::Sell,
+                    order_type: OrderTypeReq::Limit,
+                    price: Some(current_price),
+                    quantity: sell_qty,
+                    time_in_force: Some(TimeInForceReq::Gtc),
+                    client_order_id: None,
+                });
             }
         }
 
@@ -261,31 +442,41 @@ impl Strategy for TrendStrategy {
     }
 
     async fn on_fill(&mut self, fill: &Fill) -> Result<Vec<OrderRequest>> {
-        let mut orders = Vec::new();
-
         match fill.side {
             OrderSide::Buy => {
-                // Buy fill — set position
+                // Buy fill — open position with SL + multi-TP
                 let stop_loss = self.calculate_stop_loss(fill.price);
-                let take_profit = self.calculate_take_profit(fill.price, stop_loss);
+                let tp_levels = TrendPosition::calculate_tp_levels(
+                    fill.price, stop_loss, self.config.risk_reward_ratio,
+                );
 
                 let pos = TrendPosition {
                     side: OrderSide::Buy,
                     entry_price: fill.price,
                     stop_loss,
-                    take_profit,
                     quantity: fill.quantity,
+                    remaining_qty: fill.quantity,
                     trailing_stop: None,
+                    trailing_activated: false,
+                    tp_levels,
                 };
                 self.set_position(Some(pos));
             }
             OrderSide::Sell => {
-                // Sell fill — clear position
-                self.set_position(None);
+                // Sell fill — reduce or clear position
+                if let Some(mut pos) = self.position.take() {
+                    pos.remaining_qty -= fill.quantity;
+                    if pos.remaining_qty <= 0.0001 {
+                        // Fully closed
+                        self.set_position(None);
+                    } else {
+                        self.set_position(Some(pos));
+                    }
+                }
             }
         }
 
-        Ok(orders)
+        Ok(Vec::new())
     }
 
     async fn on_start(&mut self) -> Result<Vec<OrderRequest>> {
@@ -300,8 +491,8 @@ impl Strategy for TrendStrategy {
         let (state, details, pnl) = if let Some(pos) = &self.position {
             let unrealized_pnl = if let Some(current_price) = self.ema_fast.value().into() {
                 match pos.side {
-                    OrderSide::Buy => (current_price - pos.entry_price) * pos.quantity,
-                    OrderSide::Sell => (pos.entry_price - current_price) * pos.quantity,
+                    OrderSide::Buy => (current_price - pos.entry_price) * pos.remaining_qty,
+                    OrderSide::Sell => (pos.entry_price - current_price) * pos.remaining_qty,
                 }
             } else {
                 0.0
@@ -312,11 +503,28 @@ impl Strategy for TrendStrategy {
                 OrderSide::Sell => "SHORT",
             };
 
+            let filled_tps: Vec<usize> = pos.tp_levels.iter()
+                .enumerate()
+                .filter(|(_, tp)| tp.filled)
+                .map(|(i, _)| i + 1)
+                .collect();
+
+            let trail_str = match pos.trailing_stop {
+                Some(ts) => format!(" | Trail: ${:.2}", ts),
+                None => String::new(),
+            };
+
+            let tp_str = if filled_tps.is_empty() {
+                String::new()
+            } else {
+                format!(" | TP{} hit", filled_tps.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(","))
+            };
+
             (
                 "POSITION".to_string(),
                 format!(
-                    "{} pos @ ${:.2} | SL: ${:.2} | TP: ${:.2}",
-                    side_str, pos.entry_price, pos.stop_loss, pos.take_profit
+                    "{} {:.4} @ ${:.2} | SL: ${:.2}{}{}",
+                    side_str, pos.remaining_qty, pos.entry_price, pos.stop_loss, trail_str, tp_str
                 ),
                 unrealized_pnl,
             )
@@ -343,10 +551,10 @@ impl Strategy for TrendStrategy {
     }
 
     fn current_capital(&self) -> f64 {
-        0.0 // Trend strategy uses shared capital pool
+        self.config.capital + self.realized_pnl
     }
 
     fn initial_capital(&self) -> f64 {
-        0.0 // Trend strategy uses shared capital pool
+        self.initial_capital
     }
 }
