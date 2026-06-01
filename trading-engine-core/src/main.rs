@@ -43,6 +43,11 @@ async fn async_main() -> Result<()> {
         let mut balances = std::collections::HashMap::new();
         balances.insert("USDT".to_string(), config.grid.capital_usdt);
         Box::new(trading_engine_core::connector::paper::PaperTradeConnector::new(balances))
+    } else if config.exchange.name.contains("gate") {
+        info!("Using LIVE Gate.io connector");
+        Box::new(trading_engine_core::connector::gateio_rest::GateioConnector::new(
+            &api_key, &api_secret
+        ))
     } else {
         info!("Using LIVE Binance connector");
         Box::new(trading_engine_core::connector::binance_rest::BinanceConnector::new(

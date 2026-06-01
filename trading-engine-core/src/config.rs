@@ -49,12 +49,19 @@ impl From<ExchangeRaw> for ExchangeConfig {
             ExchangeRaw::Full { name, api_key_env, api_secret_env, testnet } => Self {
                 name, api_key_env, api_secret_env, testnet,
             },
-            ExchangeRaw::NameOnly(name) => Self {
-                name,
-                api_key_env: "BINANCE_API_KEY".to_string(),
-                api_secret_env: "BINANCE_API_SECRET".to_string(),
-                testnet: false,
-            },
+            ExchangeRaw::NameOnly(name) => {
+                let (api_key_env, api_secret_env) = if name.contains("gate") {
+                    ("GATE_API_KEY".to_string(), "GATE_API_SECRET".to_string())
+                } else {
+                    ("BINANCE_API_KEY".to_string(), "BINANCE_API_SECRET".to_string())
+                };
+                Self {
+                    name,
+                    api_key_env,
+                    api_secret_env,
+                    testnet: false,
+                }
+            }
         }
     }
 }

@@ -1,6 +1,8 @@
 pub mod types;
 pub mod binance_rest;
 pub mod binance_ws;
+pub mod gateio_rest;
+pub mod gateio_ws;
 pub mod paper;
 
 use async_trait::async_trait;
