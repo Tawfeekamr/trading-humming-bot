@@ -60,6 +60,12 @@ RULES:
 9. If no stop-loss is given for a new position, set stop_loss to null.
 10. Convert shorthand: "95k" = 95000, "0.5" stays 0.5, "$100" = 100.0
 11. If the message is just market commentary, analysis, or chat with no specific entry/exit, action is NOT_A_SIGNAL.
+12. STOP-LOSS ADJUSTMENT: If the signal's SL is unreasonable (more than 30% below entry for LONG, or more than 30% above entry for SHORT), adjust it to a sensible level:
+    - For LONG: set SL to entry_price * 0.85 (15% below entry) as a maximum
+    - For SHORT: set SL to entry_price * 1.15 (15% above entry) as a maximum
+    - Always keep the original SL in reasoning: "Original SL $X adjusted to $Y (too far from entry)"
+    - Reduce quality_score by 2 points for signals requiring SL adjustment
+    - This ensures we capture the trade instead of rejecting it, while managing risk
 
 CRITICAL — Distinguishing NEW ENTRY signals from RESULT UPDATES:
 A message is a NEW ENTRY signal (action: OPEN_LONG) if it has an ENTRY price/zone and TARGETS without checkmarks (✅).
