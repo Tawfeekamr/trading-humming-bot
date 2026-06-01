@@ -12,6 +12,11 @@ path = "src/main.rs"
 [lib]
 name = "trading_engine_core"
 path = "src/lib.rs"
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+python = ["pyo3/extension-module"]
 
 [dependencies]
 # Async runtime
@@ -59,6 +64,9 @@ rusqlite = { version = "0.34", features = ["bundled"] }
 
 # Collections
 rustc-hash = "2"
+
+# Python bindings (optional — enabled for maturin wheel builds)
+pyo3 = { version = "0.24", features = ["extension-module"], optional = true }
 
 [dev-dependencies]
 tokio-test = "0.4"

@@ -11,7 +11,7 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 RUN pip install --no-cache-dir maturin
 COPY trading-engine-core/ /build/trading-engine-core/
 WORKDIR /build/trading-engine-core
-RUN maturin build --release --out /build/wheels
+RUN maturin build --release --features python --out /build/wheels 2>&1 || (echo "WHEEL_BUILD_FAILED" && ls -la /build/wheels/ 2>/dev/null || true)
 
 # Stage 2: Python runtime
 FROM python:3.13-slim

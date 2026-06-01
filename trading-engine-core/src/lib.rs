@@ -14,3 +14,17 @@ pub mod notifications;
 pub mod signal;
 pub mod engine;
 pub mod api;
+
+// ── PyO3 Python module (enabled with --features python) ─────────────
+#[cfg(feature = "python")]
+use pyo3::prelude::*;
+
+#[cfg(feature = "python")]
+#[pymodule]
+fn trading_engine_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<indicators::Ema>()?;
+    m.add_class::<indicators::Rsi>()?;
+    m.add_class::<indicators::Atr>()?;
+    m.add_class::<indicators::BollingerBands>()?;
+    Ok(())
+}
