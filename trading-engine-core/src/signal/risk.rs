@@ -1,6 +1,10 @@
 use crate::signal::types::{ParsedSignal, SignalConfidence};
 use std::time::{SystemTime, UNIX_EPOCH};
+use std::path::PathBuf;
+use std::fs;
 use chrono::Utc;
+use tracing::{info, warn};
+use serde::{Serialize, Deserialize};
 
 pub struct SignalRiskGuard {
     capital_pct: f64,
@@ -16,11 +20,23 @@ pub struct SignalRiskGuard {
     last_trade_time: u64,
     halted: bool,
     last_reset_date: String,
+    data_dir: PathBuf,
+}
+
+#[derive(Serialize, Deserialize)]
+struct RiskState {
+    trades_today: u32,
+    daily_pnl: f64,
+    halted: bool,
+    last_trade_time: u64,
+    last_reset_date: String,
 }
 
 impl SignalRiskGuard {
     pub fn new(config: &crate::config::SignalConfig) -> Self {
-        Self {
+        let data_dir = PathBuf::from("data");
+        let _ = fs::create_dir_all(&data_dir);
+        let mut guard = Self {
             capital_pct: config.capital_pct,
             max_capital: config.max_capital_usdt,
             max_positions: config.max_positions,
@@ -34,7 +50,10 @@ impl SignalRiskGuard {
             last_trade_time: 0,
             halted: false,
             last_reset_date: String::new(),
-        }
+            data_dir,
+        };
+        guard.load_state();
+        guard
     }
 
     pub fn can_trade(&mut self) -> bool {
@@ -70,6 +89,7 @@ impl SignalRiskGuard {
     pub fn record_trade_opened(&mut self) {
         self.trades_today += 1;
         self.last_trade_time = now_secs();
+        self.save_state();
     }
 
     pub fn record_trade_closed(&mut self, pnl: f64) {
@@ -79,6 +99,7 @@ impl SignalRiskGuard {
         {
             self.halted = true;
         }
+        self.save_state();
     }
 
     pub fn get_status(&mut self) -> SignalRiskStatus {
@@ -97,10 +118,51 @@ impl SignalRiskGuard {
     fn maybe_reset_daily(&mut self) {
         let today = Utc::now().format("%Y-%m-%d").to_string();
         if today != self.last_reset_date {
+            info!("Signal risk guard daily reset: {}", today);
             self.trades_today = 0;
             self.daily_pnl = 0.0;
             self.halted = false;
             self.last_reset_date = today;
+            self.save_state();
+        }
+    }
+
+    fn save_state(&self) {
+        let path = self.data_dir.join("signal_risk.json");
+        let state = RiskState {
+            trades_today: self.trades_today,
+            daily_pnl: self.daily_pnl,
+            halted: self.halted,
+            last_trade_time: self.last_trade_time,
+            last_reset_date: self.last_reset_date.clone(),
+        };
+        if let Ok(json) = serde_json::to_string_pretty(&state) {
+            let _ = fs::write(&path, json);
+        }
+    }
+
+    fn load_state(&mut self) {
+        let path = self.data_dir.join("signal_risk.json");
+        if !path.exists() { return; }
+
+        match fs::read_to_string(&path) {
+            Ok(content) => {
+                match serde_json::from_str::<RiskState>(&content) {
+                    Ok(state) => {
+                        self.trades_today = state.trades_today;
+                        self.daily_pnl = state.daily_pnl;
+                        self.halted = state.halted;
+                        self.last_trade_time = state.last_trade_time;
+                        self.last_reset_date = state.last_reset_date;
+                        // Apply daily reset in case state is from a previous day
+                        self.maybe_reset_daily();
+                        info!("Signal risk guard loaded: trades={}, pnl={:.2}, date={}",
+                            self.trades_today, self.daily_pnl, self.last_reset_date);
+                    }
+                    Err(e) => warn!("Failed to parse risk state: {}", e),
+                }
+            }
+            Err(e) => warn!("Failed to read risk state: {}", e),
         }
     }
 }

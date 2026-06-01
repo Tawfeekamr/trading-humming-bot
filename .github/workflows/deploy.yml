@@ -1,6 +1,8 @@
 name: Deploy Grid Bot
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 env:
@@ -39,7 +41,7 @@ jobs:
     name: Deploy Hybrid to AWS Tokyo
     needs: test
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main'
 
     steps:
       - name: Configure AWS credentials
