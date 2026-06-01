@@ -3,6 +3,8 @@ name: Deploy Bot
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - 'trading-engine-core/**'
   workflow_dispatch:
 
 env:
