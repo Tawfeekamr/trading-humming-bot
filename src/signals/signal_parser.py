@@ -110,11 +110,22 @@ class SignalParser:
         self._api_key = api_key or os.environ.get("DEEPSEEK_API_KEY", "")
         self._model = model
 
+    # Markers that indicate a result update, not a new entry signal
+    RESULT_MARKERS = ("✅", "🔥", "🚫", "% Profit", "% Loss", "[EDIT]",
+                      "TP1 HIT", "TP2 HIT", "TP3 HIT", "BREAKEVEN EXIT",
+                      "STOP LOSS HIT", "CANCELLED")
+
     def parse(self, message: str) -> ParsedSignal:
         """Parse a trader's message into a structured signal."""
         if not self._api_key:
             logger.warning("DEEPSEEK_API_KEY not set, cannot parse signals")
             return ParsedSignal(action=SignalAction.NOT_A_SIGNAL, raw_message=message)
+
+        # Fast pre-filter: skip result updates without calling DeepSeek
+        if any(marker.lower() in message.lower() for marker in self.RESULT_MARKERS):
+            logger.debug(f"Pre-filtered as result update (skipped DeepSeek): {message[:80]}")
+            return ParsedSignal(action=SignalAction.NOT_A_SIGNAL, raw_message=message,
+                                parse_reasoning="Pre-filtered: contains result update markers")
 
         prompt = f"Parse this trading signal message:\n\n{message}"
 
