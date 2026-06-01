@@ -27,6 +27,15 @@ import yaml
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+# Load secrets from .env into environment (DEEPSEEK_API_KEY, TELEGRAM_API_ID, etc.)
+_env_path = PROJECT_ROOT / ".env"
+if _env_path.exists():
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(_env_path, override=True)
+    except ImportError:
+        pass
+
 from src.trading_engine.adapter.factory import create_adapter
 from src.trading_engine.adapter.base import Order, OrderFill
 from src.trading_engine.host import StrategyHost
@@ -235,17 +244,42 @@ class TradingRunner:
         fill_task = asyncio.create_task(fill_detector.poll_loop())
         self._tasks.append(fill_task)
 
-        # 7. Main bar loop
+        # 7. Signal Copy Engine — listen to Telegram channels for trade signals
+        signal_engine = None
+        signal_cfg = self._config.get("signal_copy", {})
+        if signal_cfg.get("enabled", False):
+            try:
+                from src.signals.signal_engine import SignalEngine
+
+                signal_engine = SignalEngine(
+                    config=signal_cfg,
+                    btc_regime_fn=lambda: ("RANGING", 0.0, 0.0),
+                    telegram_send_fn=lambda msg: logger.info("Signal TG: %s", msg),
+                    buy_fn=lambda symbol, amount, price: self._signal_trade(adapter, "buy", symbol, amount, price),
+                    sell_fn=lambda symbol, amount, price: self._signal_trade(adapter, "sell", symbol, amount, price),
+                    get_price_fn=lambda symbol: self._get_signal_price(adapter, symbol),
+                )
+                signal_engine.start_listener()
+                logger.info("Signal Copy Engine started — listening to Telegram channels")
+            except Exception as e:
+                logger.error("Signal Copy Engine failed to start: %s", e)
+
+        # 8. Main bar loop
         logger.info("Starting bar feed for pairs: %s", feed.pairs)
         try:
             async for bar in feed.bars():
                 if not self._running:
                     break
                 host.on_bar(bar)
+                # Process queued signal messages on each tick
+                if signal_engine is not None:
+                    signal_engine.tick()
         except asyncio.CancelledError:
             pass
         finally:
             logger.info("TradingRunner shutting down...")
+            if signal_engine is not None:
+                signal_engine.stop_listener()
             fill_task.cancel()
             host.stop()
             logger.info("TradingRunner stopped.")
@@ -253,6 +287,33 @@ class TradingRunner:
     def stop(self):
         """Signal the runner to stop."""
         self._running = False
+
+    def _signal_trade(self, adapter, side: str, symbol: str, amount: float, price: float):
+        """Execute a signal trade via the adapter."""
+        try:
+            from src.trading_engine.adapter.base import Order
+            order_side = "BUY" if side == "buy" else "SELL"
+            order = Order(
+                instrument_id=symbol,
+                side=order_side,
+                order_type="LIMIT",
+                price=price,
+                quantity=amount,
+                client_order_id=f"sig_{symbol}_{int(time.time())}",
+            )
+            result = adapter.submit_order(order)
+            logger.info("Signal trade executed: %s %s %s @ %.4f → %s", side, amount, symbol, price, result)
+            return result
+        except Exception as e:
+            logger.error("Signal trade failed: %s %s @ %.4f — %s", side, symbol, price, e)
+            return None
+
+    def _get_signal_price(self, adapter, symbol: str) -> float:
+        """Get current price for a symbol via the adapter."""
+        try:
+            return adapter.get_mid_price(symbol)
+        except Exception:
+            return 0.0
 
 
 async def main():

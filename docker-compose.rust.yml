@@ -1,23 +1,53 @@
-# Docker Compose for the Rust trading bot
+# Docker Compose for the Rust trading bot + Python signal listener
 # Usage: docker compose -f docker-compose.rust.yml up -d
 
 services:
+  # ── Rust Trading Engine (API server on port 3030) ────────────────
   rust-bot:
     image: ghcr.io/tawfeekamr/trading-bot:latest
     container_name: trading-bot-rust
     restart: unless-stopped
     env_file: .env.rust
+    ports:
+      - "3030:3030"
     volumes:
       - ./config/strategy.yaml:/app/config/strategy.yaml:ro
       - ./data:/app/data
     environment:
       - RUST_LOG=${RUST_LOG:-info}
+      - API_PORT=3030
     healthcheck:
       test: ["CMD", "test", "-f", "/proc/1/cmdline"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+  # ── Python Signal Listener (Telegram → DeepSeek → Rust engine) ──
+  signal-listener:
+    build:
+      context: .
+      dockerfile: Dockerfile.hybrid
+    container_name: trading-signal-listener
+    restart: unless-stopped
+    depends_on:
+      rust-bot:
+        condition: service_healthy
+    env_file: .env.docker
+    environment:
+      - EXECUTION_MODE=rust
+      - RUST_ENGINE_URL=http://rust-bot:3030
+      # Secrets loaded from .env via python-dotenv inside container
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./config:/app/config:ro
+      - ./.env:/app/.env:ro
     logging:
       driver: json-file
       options:

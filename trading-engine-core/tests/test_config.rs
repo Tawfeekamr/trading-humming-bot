@@ -10,18 +10,18 @@ exchange:
   testnet: false
 
 pairs:
-  BTCUSDT:
+  - symbol: "BTC-USDT"
     step_size: 0.00001
     tick_size: 0.01
     enabled: true
-  ETHUSDT:
+  - symbol: "ETH-USDT"
     step_size: 0.0001
     tick_size: 0.01
     enabled: true
 
 grid:
   levels: 5
-  capital_usdt: 5000
+  capital_usdt: 10000
   min_reserve: 100
   spacing_multiplier: 1.5
 
@@ -53,7 +53,7 @@ ml:
     assert_eq!(config.exchange.name, "binance");
     assert_eq!(config.grid.levels, 5);
     assert_eq!(config.pairs.len(), 2);
-    assert!(config.pairs["BTCUSDT"].enabled);
+    assert!(config.pairs["BTC-USDT"].enabled);
     assert_eq!(config.trend.risk_reward_ratio, 2.0);
     assert_eq!(config.risk.max_drawdown_pct, 10.0);
 }
@@ -66,10 +66,10 @@ exchange:
   api_key_env: BINANCE_API_KEY
   api_secret_env: BINANCE_API_SECRET
   testnet: false
-pairs: {}
+pairs: []
 grid:
   levels: 5
-  capital_usdt: 5000
+  capital_usdt: 10000
   min_reserve: 100
   spacing_multiplier: 1.5
 trend:

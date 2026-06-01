@@ -36,7 +36,7 @@ timeframe: "1h"
 # ── Grid Parameters ───────────────────────────────────────────────
 grid:
   levels: 5                   # Orders on each side of mid price
-  capital_usdt: 5000          # Total USDT allocated
+  capital_usdt: 10000         # Total USDT allocated
   min_usdt_reserve: 100       # Always keep this in reserve
   order_refresh_time: 60      # Seconds between order refresh
 
@@ -83,7 +83,7 @@ dashboard:
 # ── Trend Engine ──────────────────────────────────────────────
 trend:
   enabled: true
-  capital: 5000                 # Trend engine capital pool ($0 = disabled)
+  capital: 10000                # Trend engine capital pool ($0 = disabled)
   ema_fast: 12  # Sweep: 20→12 improved BNB Sharpe +0.49
   ema_slow: 40
   ema_trend: 200
@@ -122,8 +122,8 @@ signal_copy:
   # Position management
   max_positions: 3                  # Max concurrent signal positions
   per_trade_risk_pct: 3.0           # Risk per trade (% of signal budget)
-  capital_pct: 10.0                 # % of total capital for signal trades
-  max_capital_usdt: 1000            # Hard cap
+  capital_pct: 100.0                # % of total capital for signal trades
+  max_capital_usdt: 10000           # Hard cap — 10K paper budget
   min_rr_ratio: 1.0                 # Minimum risk:reward (vs TP3)
   max_sl_distance_pct: 10.0         # Max stop-loss distance from entry (%)
   default_sl_atr_multiplier: 2.0   # Default SL = entry ± ATR × this (when signal has no SL)
