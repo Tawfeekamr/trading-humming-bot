@@ -8,7 +8,7 @@ fn default_trend_config() -> TrendConfig {
         ema_slow: 50,
         ema_trend: 200,
         rsi_period: 14,
-        rsi_min: 50.0,
+        rsi_min: 40.0,
         rsi_max: 80.0,
         min_signal_score: 3,
         confirmation_ticks: 2,
