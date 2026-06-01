@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 class WebSocketFeed:
     BINANCE_WS = "wss://stream.binance.com:9443/ws"
-    BINANCE_WS_TESTNET = "wss://testnet.binance.vision/ws"
+    BINANCE_WS_TESTNET = "wss://stream.testnet.binance.vision/ws"
 
     # Price sanity bounds: covers all reasonable crypto prices (BTC ~$100K, alts ~$0.01–$1K)
     MIN_PRICE = 0

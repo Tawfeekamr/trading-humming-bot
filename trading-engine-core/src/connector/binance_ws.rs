@@ -34,7 +34,7 @@ pub struct BinanceWs {
 impl BinanceWs {
     pub fn new(testnet: bool) -> Self {
         let base_url = if testnet {
-            "wss://testnet.binance.vision".to_string()
+            "wss://stream.testnet.binance.vision".to_string()
         } else {
             "wss://stream.binance.com:9443".to_string()
         };
