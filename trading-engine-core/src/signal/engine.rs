@@ -167,6 +167,7 @@ impl SignalEngine {
         if !self.enabled || self.manual_pause { return; }
 
         let mut mgr = self.position_mgr.lock().await;
+        mgr.reload_state(); // Pick up new positions opened by Python since last tick
         let positions: Vec<SignalPosition> = mgr.get_open_positions().into_iter().cloned().collect();
 
         for pos in &positions {
@@ -176,6 +177,11 @@ impl SignalEngine {
             // Stop-loss check
             if current_price <= pos.stop_loss {
                 let pnl = mgr.close_position(&pos.symbol, current_price, "stop_loss");
+                self.notify(&format!(
+                    "[{}] 🛑 SL hit: {} @ ${:.2}, PnL: ${:.2}",
+                    if self.config.audit_mode { "AUDIT" } else { "LIVE" },
+                    pos.symbol, current_price, pnl.unwrap_or(0.0)
+                )).await;
                 self.record_close(&pos, current_price, "stop_loss", pnl).await;
                 continue;
             }
@@ -208,6 +214,11 @@ impl SignalEngine {
             if !pos.tp3_hit && pos.take_profits.len() >= 3 && current_price >= pos.take_profits[2] {
                 mgr.get_position_mut(&pos.symbol).map(|p| p.tp3_hit = true);
                 let pnl = mgr.close_position(&pos.symbol, pos.take_profits[2], "tp3");
+                self.notify(&format!(
+                    "[{}] TP3 hit: {} @ ${:.2}, position closed",
+                    if self.config.audit_mode { "AUDIT" } else { "LIVE" },
+                    pos.symbol, pos.take_profits[2]
+                )).await;
                 self.record_close(&pos, pos.take_profits[2], "tp3", pnl).await;
             }
         }

@@ -173,6 +173,31 @@ impl SignalPositionManager {
             Err(e) => warn!("Failed to read signal positions: {}", e),
         }
     }
+
+    /// Reload positions from file, merging only NEW ones (won't overwrite existing tracking state)
+    pub fn reload_state(&mut self) {
+        let path = self.data_dir.join("signal_positions.json");
+        if !path.exists() { return; }
+
+        match fs::read_to_string(&path) {
+            Ok(content) => {
+                match serde_json::from_str::<HashMap<String, SignalPosition>>(&content) {
+                    Ok(positions) => {
+                        for (symbol, pos) in positions {
+                            // Only insert if we don't already track this position
+                            // (avoids overwriting tp1_hit, tp2_hit, etc. from our own monitoring)
+                            if !pos.is_closed && !self.positions.contains_key(&symbol) {
+                                info!("Signal position loaded from Python: {}", symbol);
+                                self.positions.insert(symbol, pos);
+                            }
+                        }
+                    }
+                    Err(e) => warn!("Failed to parse signal positions on reload: {}", e),
+                }
+            }
+            Err(e) => warn!("Failed to read signal positions on reload: {}", e),
+        }
+    }
 }
 
 impl Default for SignalPosition {
