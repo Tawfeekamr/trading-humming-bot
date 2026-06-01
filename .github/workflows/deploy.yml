@@ -1,4 +1,4 @@
-name: Deploy Grid Bot
+name: Deploy Bot
 
 on:
   push:
@@ -38,7 +38,7 @@ jobs:
         run: pytest tests/ -v --tb=short
 
   deploy:
-    name: Deploy Hybrid to AWS Tokyo
+    name: Deploy to AWS Tokyo
     needs: test
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
@@ -58,17 +58,14 @@ jobs:
             --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
             --region "${{ env.AWS_REGION }}" \
             --parameters commands='[
-              "cd /home/ec2-user/trading-humming-bot && git pull origin main 2>&1",
+              "cd /home/ec2-user/trading-humming-bot && git fetch origin && git reset --hard origin/main 2>&1",
               "cd /home/ec2-user/trading-humming-bot && mkdir -p data logs models",
-              "cd /home/ec2-user/trading-humming-bot && docker compose down --remove-orphans 2>&1 || true",
-              "cd /home/ec2-user/trading-humming-bot && docker image prune -af 2>&1 || true",
-              "cd /home/ec2-user/trading-humming-bot && docker builder prune -f 2>&1 || true",
-              "cd /home/ec2-user/trading-humming-bot && docker compose -f docker-compose.hybrid.yml build --no-cache 2>&1",
-              "cd /home/ec2-user/trading-humming-bot && docker compose -f docker-compose.hybrid.yml up -d 2>&1",
-              "docker volume prune -f 2>&1 || true"
+              "cd /home/ec2-user/trading-humming-bot && docker compose -f docker-compose.rust.yml pull rust-bot 2>&1 || true",
+              "cd /home/ec2-user/trading-humming-bot && docker compose -f docker-compose.rust.yml up -d --build 2>&1",
+              "docker image prune -af 2>&1 || true"
             ]' \
             --timeout-seconds 900 \
-            --comment "Deploying hybrid stack via GitHub Actions" \
+            --comment "Deploying Rust stack via GitHub Actions" \
             --query "Command.CommandId" \
             --output text)
 
@@ -105,9 +102,9 @@ jobs:
             --document-name "AWS-RunShellScript" \
             --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
             --region "${{ env.AWS_REGION }}" \
-            --parameters commands='["cd /home/ec2-user/trading-humming-bot && docker compose -f docker-compose.hybrid.yml ps --format json 2>&1"]' \
+            --parameters commands='["cd /home/ec2-user/trading-humming-bot && docker compose -f docker-compose.rust.yml ps --format json 2>&1"]' \
             --timeout-seconds 60 \
-            --comment "Verify hybrid deployment" \
+            --comment "Verify Rust deployment" \
             --query "Command.CommandId" \
             --output text)
 
@@ -126,7 +123,7 @@ jobs:
               echo "Container status:"
               echo "$OUTPUT"
               if echo "$OUTPUT" | grep -q "running"; then
-                echo "Hybrid stack is running"
+                echo "Stack is running"
                 exit 0
               fi
               echo "No containers running"
@@ -148,7 +145,7 @@ jobs:
             "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
             -d chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
             -d parse_mode=HTML \
-            -d text="🚀 <b>Hybrid Stack Deployed</b>%0A•••%0A📝 ${COMMIT_MSG}%0A🔗 Commit: ${{ github.sha }}%0A⏰ $(date -u +'%Y-%m-%d %H:%M UTC')"
+            -d text="🚀 <b>Rust Stack Deployed</b>%0A•••%0A📝 ${COMMIT_MSG}%0A🔗 Commit: ${{ github.sha }}%0A⏰ $(date -u +'%Y-%m-%d %H:%M UTC')"
 
       - name: Notify Telegram on failure
         if: failure()
@@ -157,4 +154,4 @@ jobs:
             "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
             -d chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
             -d parse_mode=HTML \
-            -d text="❌ <b>Hybrid Deploy FAILED</b>%0A•••%0A🔗 Commit: ${{ github.sha }}%0ACheck: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            -d text="❌ <b>Rust Deploy FAILED</b>%0A•••%0A🔗 Commit: ${{ github.sha }}%0ACheck: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
