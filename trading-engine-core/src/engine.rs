@@ -620,63 +620,52 @@ impl Engine {
     // ── Signal commands ────────────────────────────────────────────────
 
     async fn cmd_signal_status(&self) -> Option<String> {
-        // Read status from Python signal engine's shared JSON file
-        let status_content = tokio::fs::read_to_string("data/signal_status.json")
-            .await
-            .ok()
-            .unwrap_or_default();
-
-        if status_content.is_empty() {
-            return Some(
-                "📡 <b>SIGNAL ENGINE</b>\n•••\n\
-                 ⚠️ No signal data available (listener may be starting)\n\
-                 Status is synced from Python signal listener every tick."
-                    .to_string(),
-            );
-        }
-
-        let status: serde_json::Value = serde_json::from_str(&status_content).ok()?;
-        let state = status.get("state").and_then(|v| v.as_str()).unwrap_or("UNKNOWN");
-        let audit = status.get("audit_mode").and_then(|v| v.as_bool()).unwrap_or(false);
-        let open = status.get("open_positions").and_then(|v| v.as_i64()).unwrap_or(0);
-        let updated = status.get("updated_at").and_then(|v| v.as_str()).unwrap_or("?");
-        let mode_tag = if audit { "AUDIT" } else { "LIVE" };
-
-        let trades_today = status.get("trades_today").and_then(|v| v.as_i64()).unwrap_or(0);
-        let max_trades = status.get("max_trades").and_then(|v| v.as_i64()).unwrap_or(10);
-        let daily_pnl = status.get("daily_pnl").and_then(|v| v.as_f64()).unwrap_or(0.0);
-        let halted = status.get("halted").and_then(|v| v.as_bool()).unwrap_or(false);
+        // Read signal engine state from Rust's own tracking (accurate)
+        let signal = self.signal.as_ref()?;
+        let sig_status = signal.get_status().await;
+        let mode_tag = if sig_status.audit_mode { "AUDIT" } else { "LIVE" };
 
         let mut lines = vec![
             format!("📡 <b>SIGNAL ENGINE ({})</b>", mode_tag),
             "•••".to_string(),
-            format!("State: <b>{}</b>", state),
-            format!("Open positions: {}", open),
-            format!("Trades today: {}/{}", trades_today, max_trades),
-            format!("Daily P&L: ${:.2}", daily_pnl),
+            format!("State: <b>{}</b>", sig_status.state),
+            format!("Open positions: {}", sig_status.open_positions),
+            format!("Trades today: {}/{}", sig_status.trades_today, sig_status.max_trades),
+            format!("Daily P&L: ${:.2}", sig_status.daily_pnl),
         ];
 
-        if halted {
+        if sig_status.halted {
             lines.push("🚨 Risk guard halted — use /signal_resume".to_string());
         }
 
-        // Show positions from Python engine
-        if let Some(positions) = status.get("positions").and_then(|v| v.as_array()) {
-            if !positions.is_empty() {
-                lines.push("•••".to_string());
-                lines.push("📈 <b>Open Positions:</b>".to_string());
-                for pos in positions {
-                    let symbol = pos.get("symbol").and_then(|v| v.as_str()).unwrap_or("?");
-                    let entry = pos.get("entry_price").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                    let sl = pos.get("stop_loss").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                    let tp1 = if pos.get("tp1_hit").and_then(|v| v.as_bool()).unwrap_or(false) { "✅" } else { "⬜" };
-                    let tp2 = if pos.get("tp2_hit").and_then(|v| v.as_bool()).unwrap_or(false) { "✅" } else { "⬜" };
-                    let tp3 = if pos.get("tp3_hit").and_then(|v| v.as_bool()).unwrap_or(false) { "✅" } else { "⬜" };
-                    let channel = pos.get("channel_name").and_then(|v| v.as_str()).unwrap_or("");
-                    lines.push(format!(
-                        "  {}: ${:.4} SL=${:.4} TPs={}{}{} {}",
-                        symbol, entry, sl, tp1, tp2, tp3, channel
-                    ));
+        // Show positions from Rust's signal_positions.json (source of truth)
+        let positions_content = tokio::fs::read_to_string("data/signal_positions.json")
+            .await
+            .ok()
+            .unwrap_or_default();
+
+        if !positions_content.is_empty() {
+            if let Ok(positions) = serde_json::from_str::<serde_json::Value>(&positions_content) {
+                let open_positions: Vec<&serde_json::Value> = positions.as_object()
+                    .map(|m| m.values().filter(|p| !p.get("is_closed").and_then(|v| v.as_bool()).unwrap_or(true)).collect())
+                    .unwrap_or_default();
+
+                if !open_positions.is_empty() {
+                    lines.push("•••".to_string());
+                    lines.push("📈 <b>Open Positions:</b>".to_string());
+                    for pos in open_positions {
+                        let symbol = pos.get("symbol").and_then(|v| v.as_str()).unwrap_or("?");
+                        let entry = pos.get("entry_price").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                        let sl = pos.get("stop_loss").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                        let tp1 = if pos.get("tp1_hit").and_then(|v| v.as_bool()).unwrap_or(false) { "✅" } else { "⬜" };
+                        let tp2 = if pos.get("tp2_hit").and_then(|v| v.as_bool()).unwrap_or(false) { "✅" } else { "⬜" };
+                        let tp3 = if pos.get("tp3_hit").and_then(|v| v.as_bool()).unwrap_or(false) { "✅" } else { "⬜" };
+                        let channel = pos.get("channel_name").and_then(|v| v.as_str()).unwrap_or("");
+                        lines.push(format!(
+                            "  {}: ${:.4} SL=${:.4} TPs={}{}{} {}",
+                            symbol, entry, sl, tp1, tp2, tp3, channel
+                        ));
+                    }
                 }
             }
         }
