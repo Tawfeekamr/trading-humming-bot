@@ -29,8 +29,10 @@ RUN cargo build --release
 FROM debian:bookworm-slim
 
 # ca-certificates: required by rustls-tls-native-roots for Binance/Telegram TLS
+# curl: required for Docker health check
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Non-root user
