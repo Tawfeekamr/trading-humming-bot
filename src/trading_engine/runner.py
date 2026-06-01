@@ -84,8 +84,17 @@ def create_strategies(config: dict) -> list:
     """Create strategy instances for each enabled pair.
 
     Returns a list of (pair, strategy_instance) tuples.
+    Gracefully handles missing trading_engine_core wheel.
     """
-    from src.trading_engine.strategy.grid import GridStrategy
+    try:
+        from src.trading_engine.strategy.grid import GridStrategy
+    except ImportError as e:
+        logger.error(
+            "Cannot create strategies — trading_engine_core wheel not available: %s. "
+            "Strategies will not run. The Rust engine still handles trading independently.",
+            e,
+        )
+        return []
 
     strategies = []
     grid_cfg = build_grid_config(config)

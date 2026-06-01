@@ -25,8 +25,11 @@ COPY requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt && rm /tmp/requirements.txt
 
 # Install trading-engine-core Rust wheel (PyO3 indicator bindings)
+# Wheel is optional — runner handles missing wheel gracefully
 COPY --from=rust-builder /build/wheels/*.whl /tmp/wheels/
-RUN pip install --no-cache-dir /tmp/wheels/trading_engine_core*.whl && rm -rf /tmp/wheels
+RUN ls -la /tmp/wheels/ && \
+    (pip install --no-cache-dir /tmp/wheels/trading_engine_core*.whl || echo "WARNING: wheel install failed, strategies will be disabled") && \
+    rm -rf /tmp/wheels
 
 # Copy Python source modules
 COPY src/ /app/src/
