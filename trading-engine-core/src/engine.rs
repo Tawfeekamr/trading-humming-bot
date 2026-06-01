@@ -93,17 +93,24 @@ impl Engine {
         info!("Engine running — processing events for {} pairs", pairs.len());
 
         // Preload historical bars so strategies can evaluate state immediately
+        // First try loading from persisted file (instant warmup)
+        let loaded_from_disk = self.load_bar_buffers();
         for pair in &pairs {
-            let symbol = pair.replace("-", "");
-            match self.connector.get_klines(&symbol, &self.config.timeframe, 100).await {
-                Ok(bars) => {
-                    let count = bars.len();
-                    self.bar_buffers.insert(pair.clone(), bars);
-                    info!("Preloaded {} historical bars for {}", count, pair);
+            if !loaded_from_disk.contains(pair) {
+                let symbol = pair.replace("-", "");
+                match self.connector.get_klines(&symbol, &self.config.timeframe, 100).await {
+                    Ok(bars) => {
+                        let count = bars.len();
+                        self.bar_buffers.insert(pair.clone(), bars);
+                        info!("Preloaded {} historical bars for {}", count, pair);
+                    }
+                    Err(e) => warn!("Failed to preload bars for {}: {}", pair, e),
                 }
-                Err(e) => warn!("Failed to preload bars for {}: {}", pair, e),
             }
         }
+
+        // Replay loaded bars through strategies to restore indicator state
+        self.replay_bars_to_strategies().await;
 
         // Main event loop
         while let Some(event) = ws_rx.recv().await {
@@ -125,6 +132,8 @@ impl Engine {
                                 bars.drain(0..bars.len() - 500);
                             }
                         }
+                        // Persist bar buffers every closed candle
+                        self.save_bar_buffers();
                     }
                 }
                 WsEvent::Trade { symbol, price, .. } => {
@@ -809,6 +818,76 @@ impl Engine {
             Some(format!("Closed signal position: {}", pair))
         } else {
             Some(format!("No open signal position for {}", pair))
+        }
+    }
+
+    /// Save bar buffers to disk for warm startup after restart
+    fn save_bar_buffers(&self) {
+        let path = std::path::PathBuf::from("data/bar_buffers.json");
+        let _ = std::fs::create_dir_all("data");
+        if let Ok(json) = serde_json::to_string_pretty(&self.bar_buffers) {
+            if let Err(e) = std::fs::write(&path, json) {
+                warn!("Failed to save bar buffers: {}", e);
+            }
+        }
+    }
+
+    /// Load bar buffers from disk. Returns set of pairs that were loaded.
+    fn load_bar_buffers(&mut self) -> std::collections::HashSet<String> {
+        let path = std::path::PathBuf::from("data/bar_buffers.json");
+        if !path.exists() { return std::collections::HashSet::new(); }
+
+        let mut loaded = std::collections::HashSet::new();
+        match std::fs::read_to_string(&path) {
+            Ok(content) => {
+                match serde_json::from_str::<std::collections::HashMap<String, Vec<Bar>>>(&content) {
+                    Ok(buffers) => {
+                        for (pair, bars) in buffers {
+                            let count = bars.len();
+                            info!("Loaded {} cached bars for {}", count, pair);
+                            self.bar_buffers.insert(pair.clone(), bars);
+                            loaded.insert(pair);
+                        }
+                        info!("Bar buffers restored from disk ({} pairs)", loaded.len());
+                    }
+                    Err(e) => warn!("Failed to parse bar buffers: {}", e),
+                }
+            }
+            Err(e) => warn!("Failed to read bar buffers: {}", e),
+        }
+        loaded
+    }
+
+    /// Replay loaded bars through strategies to restore indicator state
+    async fn replay_bars_to_strategies(&mut self) {
+        if self.bar_buffers.is_empty() { return; }
+
+        for strategy in &mut self.strategies {
+            let pair = strategy.trading_pair().to_string();
+            if let Some(bars) = self.bar_buffers.get(&pair) {
+                if bars.len() >= 10 {
+                    info!("Replaying {} bars to warm up {} on {}", bars.len(), strategy.name(), pair);
+                    let balances = std::collections::HashMap::new();
+                    // Feed bars as tick context to restore indicator state
+                    for bar in bars.iter() {
+                        let ctx = TickContext {
+                            order_book: OrderBook {
+                                symbol: pair.clone(),
+                                bids: vec![],
+                                asks: vec![],
+                                timestamp: bar.timestamp,
+                            },
+                            recent_bars: vec![bar.clone()],
+                            balances: balances.clone(),
+                            open_orders: vec![],
+                            regime: None,
+                            timestamp: bar.timestamp,
+                        };
+                        let _ = strategy.on_tick(&ctx).await;
+                    }
+                    info!("{} on {} warmed up from cached bars", strategy.name(), pair);
+                }
+            }
         }
     }
 
