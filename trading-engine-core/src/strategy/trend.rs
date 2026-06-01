@@ -48,12 +48,14 @@ pub struct TrendPosition {
 }
 
 impl TrendPosition {
-    /// Calculate 3 TP levels based on risk:
+    /// Calculate 3 TP levels based on risk (Gemini recommendation):
     /// TP1: entry + 1× risk → close 33%
     /// TP2: entry + 1.5× risk → close 50% of remaining
-    /// TP3: entry + 2× risk → close all remaining
-    pub fn calculate_tp_levels(entry_price: f64, stop_loss: f64, risk_reward_ratio: f64) -> Vec<TpLevel> {
+    /// TP3: entry + 2× risk → close 80% of remaining (leave 10% runner)
+    pub fn calculate_tp_levels(entry_price: f64, stop_loss: f64, risk_reward_ratio: f64, runner_pct: f64) -> Vec<TpLevel> {
         let risk = entry_price - stop_loss;
+        // TP3 closes everything except the runner
+        let tp3_close = if runner_pct > 0.0 { 1.0 - runner_pct } else { 1.0 };
         vec![
             TpLevel {
                 price: entry_price + risk * 1.0,
@@ -67,7 +69,7 @@ impl TrendPosition {
             },
             TpLevel {
                 price: entry_price + risk * risk_reward_ratio,
-                close_pct: 1.0,
+                close_pct: tp3_close,
                 filled: false,
             },
         ]
@@ -116,6 +118,7 @@ impl TrendStrategy {
                 risk_per_trade_pct: config.risk_per_trade_pct,
                 max_position_pct: config.max_position_pct,
                 trailing_stop_pct: config.trailing_stop_pct,
+                trailing_stop_atr_mult: config.trailing_stop_atr_mult,
                 trailing_activation_pct: config.trailing_activation_pct,
                 exit_signal_threshold: config.exit_signal_threshold,
                 sl_buffer_pct: config.sl_buffer_pct,
@@ -374,10 +377,9 @@ impl Strategy for TrendStrategy {
                 }
             }
 
-            // ── Update trailing stop if position still open ──
+            // ── Update trailing stop if position still open (ATR-based Chandelier Exit) ──
             if let Some(pos) = &mut self.position {
                 let activation_pct = self.config.trailing_activation_pct / 100.0;
-                let trail_pct = self.config.trailing_stop_pct / 100.0;
 
                 // Activate trailing once price moves activation_pct above entry
                 if !pos.trailing_activated {
@@ -387,9 +389,15 @@ impl Strategy for TrendStrategy {
                     }
                 }
 
-                // Update trailing stop level on each tick
+                // Update trailing stop — ATR-based (Chandelier Exit)
                 if pos.trailing_activated {
-                    let new_trail = current_price * (1.0 - trail_pct);
+                    let atr_val = self.atr.value();
+                    let atr_mult = if self.config.trailing_stop_atr_mult > 0.0 {
+                        self.config.trailing_stop_atr_mult
+                    } else {
+                        2.5 // sensible default
+                    };
+                    let new_trail = current_price - atr_val * atr_mult;
                     pos.trailing_stop = Some(match pos.trailing_stop {
                         Some(prev) => new_trail.max(prev), // only move up, never down
                         None => new_trail,
@@ -447,7 +455,7 @@ impl Strategy for TrendStrategy {
                 // Buy fill — open position with SL + multi-TP
                 let stop_loss = self.calculate_stop_loss(fill.price);
                 let tp_levels = TrendPosition::calculate_tp_levels(
-                    fill.price, stop_loss, self.config.risk_reward_ratio,
+                    fill.price, stop_loss, self.config.risk_reward_ratio, 0.10, // 10% runner
                 );
 
                 let pos = TrendPosition {

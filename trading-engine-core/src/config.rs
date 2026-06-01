@@ -136,6 +136,8 @@ pub struct TrendConfig {
     pub max_position_pct: f64,
     #[serde(default = "default_1_5")]
     pub trailing_stop_pct: f64,
+    #[serde(default = "default_2_5")]
+    pub trailing_stop_atr_mult: f64,
     #[serde(default = "default_1_5")]
     pub trailing_activation_pct: f64,
     #[serde(default = "default_2_u8")]
@@ -148,6 +150,7 @@ fn default_10k() -> f64 { 10000.0 }
 fn default_25() -> f64 { 25.0 }
 fn default_2_u8() -> u8 { 2 }
 fn default_0_2() -> f64 { 0.2 }
+fn default_2_5() -> f64 { 2.5 }
 
 #[derive(Debug, Deserialize)]
 pub struct RiskConfig {

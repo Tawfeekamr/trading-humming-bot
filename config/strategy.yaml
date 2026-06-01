@@ -35,8 +35,8 @@ timeframe: "1h"
 
 # ── Grid Parameters ───────────────────────────────────────────────
 grid:
-  levels: 5                   # Orders on each side of mid price
-  capital_usdt: 10000         # Total USDT allocated
+  levels: 8                   # Gemini: 5→8 levels for tail-risk coverage
+  capital_usdt: 15000         # Gemini: Grid needs deepest capital (15K)
   min_usdt_reserve: 100       # Always keep this in reserve
   order_refresh_time: 60      # Seconds between order refresh
 
@@ -83,7 +83,7 @@ dashboard:
 # ── Trend Engine ──────────────────────────────────────────────
 trend:
   enabled: true
-  capital: 10000                # Trend engine capital pool ($0 = disabled)
+  capital: 10000                # Gemini: 10K for trend (less capital-intensive)
   ema_fast: 12  # Sweep: 20→12 improved BNB Sharpe +0.49
   ema_slow: 40
   ema_trend: 200
@@ -93,17 +93,19 @@ trend:
   min_signal_score: 3
   confirmation_ticks: 1
   risk_per_trade_pct: 2.0
-  max_position_pct: 25.0
+  max_position_pct: 80.0       # Gemini: 25→80 to fix position sizing bottleneck
   max_positions: 2
   max_total_positions: 3        # Max trend positions across ALL pairs combined
   exit_signal_threshold: 2      # Close position when signal score drops below this
-  trailing_stop_pct: 1.5
+  trailing_stop_atr_mult: 2.5   # Gemini: ATR-based Chandelier Exit (replaces fixed %)
   trailing_activation_pct: 1.5
   rr_ratio: 2.0
   sl_buffer_pct: 0.2
   max_drawdown_pct: 10.0
   daily_loss_limit_pct: 5.0
   timeframe: "1h"
+  # TP scaling: TP1=1R close 33%, TP2=1.5R close 50% remaining, TP3=2R close 80% (10% runner)
+  runner_pct: 10                # Gemini: leave 10% runner after final TP, trail closes it
 
 # ── Fee Optimization ───────────────────────────────────────────
 fee_optimization:
@@ -123,12 +125,12 @@ signal_copy:
   max_positions: 3                  # Max concurrent signal positions
   per_trade_risk_pct: 3.0           # Risk per trade (% of signal budget)
   capital_pct: 100.0                # % of total capital for signal trades
-  max_capital_usdt: 10000           # Hard cap — 10K paper budget
+  max_capital_usdt: 5000            # Gemini: highest risk engine gets least capital
   min_rr_ratio: 1.0                 # Minimum risk:reward (vs TP3)
   max_sl_distance_pct: 10.0         # Max stop-loss distance from entry (%)
   default_sl_atr_multiplier: 2.0   # Default SL = entry ± ATR × this (when signal has no SL)
   max_entry_zone_pct: 3.0           # Max entry zone width (%)
-  min_quality_score: 5              # Min AI quality score (1-10) to execute trade
+  min_quality_score: 7              # Gemini: 5→7, only A+ setups from signals
 
   # TP scaling
   tp1_close_pct: 33                 # Close 33% at TP1, move SL to breakeven
