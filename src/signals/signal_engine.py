@@ -95,6 +95,7 @@ class SignalEngine:
     def tick(self, connector=None):
         """Called from on_tick(). Processes queued messages and manages positions."""
         if not self._enabled or self._manual_pause:
+            self._write_status()
             return
 
         # Refresh available pairs every hour
@@ -112,6 +113,9 @@ class SignalEngine:
         if connector:
             self._manage_positions(connector)
 
+        # Write status to shared file for Rust engine to read
+        self._write_status()
+
     def get_status(self) -> dict:
         risk_status = self._risk.get_status()
         positions = self._position_mgr.get_open_positions()
@@ -121,6 +125,37 @@ class SignalEngine:
             "open_positions": len(positions),
             "risk": risk_status,
         }
+
+    def _write_status(self):
+        """Write current status to shared JSON file for Rust engine to read."""
+        try:
+            positions = self._position_mgr.get_open_positions()
+            pos_list = []
+            for p in positions:
+                pos_list.append({
+                    "symbol": p.symbol,
+                    "entry_price": p.entry_price,
+                    "amount": p.amount,
+                    "stop_loss": p.stop_loss,
+                    "take_profits": p.take_profits,
+                    "channel_name": getattr(p, 'channel_name', ''),
+                    "entry_time": str(getattr(p, 'entry_time', '')),
+                    "tp1_hit": p.tp1_hit,
+                    "tp2_hit": p.tp2_hit,
+                    "tp3_hit": p.tp3_hit,
+                })
+            status = {
+                "state": self.state.value,
+                "audit_mode": self._audit_mode,
+                "open_positions": len(positions),
+                "positions": pos_list,
+                "risk": self._risk.get_status(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+            with open("data/signal_status.json", "w") as f:
+                json.dump(status, f, indent=2)
+        except Exception as e:
+            logger.debug(f"Failed to write signal status: {e}")
 
     def pause(self):
         self._manual_pause = True

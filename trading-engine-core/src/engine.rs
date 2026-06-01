@@ -620,39 +620,54 @@ impl Engine {
     // ── Signal commands ────────────────────────────────────────────────
 
     async fn cmd_signal_status(&self) -> Option<String> {
-        let signal = self.signal.as_ref()?;
-        let status = signal.get_status().await;
-        let mode_tag = if status.audit_mode { "AUDIT" } else { "LIVE" };
+        // Read status from Python signal engine's shared JSON file
+        let status_content = tokio::fs::read_to_string("data/signal_status.json")
+            .await
+            .ok()
+            .unwrap_or_default();
+
+        if status_content.is_empty() {
+            return Some(
+                "📡 <b>SIGNAL ENGINE</b>\n•••\n\
+                 ⚠️ No signal data available (listener may be starting)\n\
+                 Status is synced from Python signal listener every tick."
+                    .to_string(),
+            );
+        }
+
+        let status: serde_json::Value = serde_json::from_str(&status_content).ok()?;
+        let state = status.get("state").and_then(|v| v.as_str()).unwrap_or("UNKNOWN");
+        let audit = status.get("audit_mode").and_then(|v| v.as_bool()).unwrap_or(false);
+        let open = status.get("open_positions").and_then(|v| v.as_i64()).unwrap_or(0);
+        let updated = status.get("updated_at").and_then(|v| v.as_str()).unwrap_or("?");
+        let mode_tag = if audit { "AUDIT" } else { "LIVE" };
 
         let mut lines = vec![
             format!("📡 <b>SIGNAL ENGINE ({})</b>", mode_tag),
             "•••".to_string(),
-            format!("State: <b>{}</b>", status.state),
-            format!("Open positions: {}", status.open_positions),
-            format!("Trades today: {}/{}", status.trades_today, status.max_trades),
-            format!("Daily P&L: ${:.2}", status.daily_pnl),
+            format!("State: <b>{}</b>", state),
+            format!("Open positions: {}", open),
+            format!("Synced: {}", updated),
         ];
 
-        if status.halted {
-            lines.push("🚨 Risk guard halted — use /signal_resume".to_string());
-        }
-
-        // Show open positions
-        let mgr = signal.position_mgr().await;
-        let positions = mgr.get_open_positions();
-        if !positions.is_empty() {
-            lines.push("•••".to_string());
-            lines.push("📈 <b>Open Positions:</b>".to_string());
-            for pos in positions {
-                let hold = pos.hold_minutes();
-                lines.push(format!(
-                    "  {}: ${:.2} ({}m) SL=${:.2} TPs={}{}{}{}",
-                    pos.symbol, pos.entry_price, hold, pos.stop_loss,
-                    if pos.tp1_hit { "✅" } else { "⬜" },
-                    if pos.tp2_hit { "✅" } else { "⬜" },
-                    if pos.tp3_hit { "✅" } else { "⬜" },
-                    ""
-                ));
+        // Show positions from Python engine
+        if let Some(positions) = status.get("positions").and_then(|v| v.as_array()) {
+            if !positions.is_empty() {
+                lines.push("•••".to_string());
+                lines.push("📈 <b>Open Positions:</b>".to_string());
+                for pos in positions {
+                    let symbol = pos.get("symbol").and_then(|v| v.as_str()).unwrap_or("?");
+                    let entry = pos.get("entry_price").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    let sl = pos.get("stop_loss").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    let tp1 = if pos.get("tp1_hit").and_then(|v| v.as_bool()).unwrap_or(false) { "✅" } else { "⬜" };
+                    let tp2 = if pos.get("tp2_hit").and_then(|v| v.as_bool()).unwrap_or(false) { "✅" } else { "⬜" };
+                    let tp3 = if pos.get("tp3_hit").and_then(|v| v.as_bool()).unwrap_or(false) { "✅" } else { "⬜" };
+                    let channel = pos.get("channel_name").and_then(|v| v.as_str()).unwrap_or("");
+                    lines.push(format!(
+                        "  {}: ${:.4} SL=${:.4} TPs={}{}{} {}",
+                        symbol, entry, sl, tp1, tp2, tp3, channel
+                    ));
+                }
             }
         }
 
