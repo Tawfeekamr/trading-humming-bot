@@ -238,6 +238,7 @@ impl Engine {
             "reset" => Some(self.cmd_reset()),
             // Signal commands
             "signal_status" => self.cmd_signal_status().await,
+            "signal_prices" => self.cmd_signal_prices().await,
             "signal_pnl" => self.cmd_signal_pnl().await,
             "signal_pause" => self.cmd_signal_pause(),
             "signal_resume" => self.cmd_signal_resume(),
@@ -380,6 +381,7 @@ impl Engine {
              •••\n\
              <b>Signal:</b>\n\
              /signal_status — Signal engine status & positions\n\
+             /signal_prices — Live prices & unrealized P&L for open positions\n\
              /signal_pnl — Signal trades P&L report\n\
              /signal_pause — Pause signal execution\n\
              /signal_resume — Resume signal execution\n\
@@ -668,6 +670,89 @@ impl Engine {
                     }
                 }
             }
+        }
+
+        Some(lines.join("\n"))
+    }
+
+    async fn cmd_signal_prices(&self) -> Option<String> {
+        // Read positions from Rust's signal_positions.json
+        let positions_content = tokio::fs::read_to_string("data/signal_positions.json")
+            .await
+            .ok()
+            .unwrap_or_default();
+
+        if positions_content.is_empty() {
+            return Some("📡 No signal positions file found.".to_string());
+        }
+
+        let positions: serde_json::Value = serde_json::from_str(&positions_content).ok()?;
+        let open: Vec<&serde_json::Value> = positions.as_object()
+            .map(|m| m.values().filter(|p| !p.get("is_closed").and_then(|v| v.as_bool()).unwrap_or(true)).collect())
+            .unwrap_or_default();
+
+        if open.is_empty() {
+            return Some("📡 No open signal positions.".to_string());
+        }
+
+        let mut lines = vec![
+            "💰 <b>Signal Prices</b>".to_string(),
+            "•••".to_string(),
+        ];
+
+        for pos in &open {
+            let symbol = pos.get("symbol").and_then(|v| v.as_str()).unwrap_or("?");
+            let entry = pos.get("entry_price").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let sl = pos.get("stop_loss").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let tps = pos.get("take_profits").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+            let tp1_hit = pos.get("tp1_hit").and_then(|v| v.as_bool()).unwrap_or(false);
+            let tp2_hit = pos.get("tp2_hit").and_then(|v| v.as_bool()).unwrap_or(false);
+            let tp3_hit = pos.get("tp3_hit").and_then(|v| v.as_bool()).unwrap_or(false);
+            let remaining = pos.get("amount").and_then(|v| v.as_f64()).unwrap_or(0.0)
+                - pos.get("amount_closed").and_then(|v| v.as_f64()).unwrap_or(0.0);
+
+            // Fetch current price from Binance
+            let binance_sym = symbol.replace("-", "");
+            let price = match reqwest::get(&format!(
+                "https://api.binance.com/api/v3/ticker/price?symbol={}", binance_sym
+            )).await {
+                Ok(resp) => resp.json::<serde_json::Value>().await
+                    .ok()
+                    .and_then(|d| d.get("price").and_then(|p| p.as_str()).and_then(|s| s.parse::<f64>().ok()))
+                    .unwrap_or(0.0),
+                Err(_) => 0.0,
+            };
+
+            if price <= 0.0 {
+                lines.push(format!("{} — ⚠️ Price unavailable", symbol));
+                continue;
+            }
+
+            let pnl_pct = (price - entry) / entry * 100.0;
+            let unrealized = (price - entry) * remaining;
+            let pnl_emoji = if unrealized >= 0.0 { "🟢" } else { "🔴" };
+
+            lines.push(format!("{} {} <b>${:.4}</b> ({:+.1}%)", pnl_emoji, symbol, price, pnl_pct));
+            lines.push(format!("  Entry: ${:.4} | SL: ${:.4}", entry, sl));
+            lines.push(format!("  Unrealized: ${:.2} ({} tokens)", unrealized, remaining as i64));
+
+            // Show TP status
+            let mut tp_str = String::new();
+            for (i, tp) in tps.iter().enumerate() {
+                let tp_price = tp.as_f64().unwrap_or(0.0);
+                let hit = match i {
+                    0 => tp1_hit,
+                    1 => tp2_hit,
+                    2 => tp3_hit,
+                    _ => false,
+                };
+                let marker = if hit { "✅" } else if price >= tp_price { "🔥" } else { "⬜" };
+                tp_str.push_str(&format!("{}${:.4} ", marker, tp_price));
+            }
+            if !tp_str.is_empty() {
+                lines.push(format!("  TPs: {}", tp_str.trim_end()));
+            }
+            lines.push("".to_string());
         }
 
         Some(lines.join("\n"))
