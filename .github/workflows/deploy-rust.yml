@@ -87,7 +87,8 @@ jobs:
               "docker compose -f docker-compose.rust.yml up -d --build rust-bot 2>&1",
               "docker compose -f docker-compose.rust.yml build --no-cache signal-listener 2>&1",
               "docker compose -f docker-compose.rust.yml up -d --no-build signal-listener 2>&1",
-              "docker image prune -af 2>&1 || true"
+              "docker image prune -af 2>&1 || true",
+              "docker builder prune -af 2>&1 || true"
             ]' \
             --timeout-seconds 120 \
             --comment "Pull and restart Rust trading bot" \
