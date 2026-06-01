@@ -98,12 +98,17 @@ def create_strategies(config: dict) -> list:
 
     strategies = []
     grid_cfg = build_grid_config(config)
-    pairs = config.get("pairs", {})
+    pairs = config.get("pairs", [])
 
-    for pair, pair_cfg in pairs.items():
+    # Support both list-of-dicts and dict-of-dicts format
+    pair_items = pairs.items() if isinstance(pairs, dict) else [(p.get("symbol", ""), p) for p in pairs]
+
+    for pair, pair_cfg in pair_items:
         if not isinstance(pair_cfg, dict):
             continue
         if not pair_cfg.get("enabled", True):
+            continue
+        if not pair:
             continue
 
         strategy = GridStrategy(pair, grid_cfg)
