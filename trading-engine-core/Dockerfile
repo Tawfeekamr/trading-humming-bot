@@ -45,5 +45,8 @@ RUN mkdir -p /app/config /app/data && chown -R bot:bot /app
 USER bot
 
 # Config path defaults to config/strategy.yaml relative to CWD
+# API server listens on port 3030 (configurable via API_PORT env var)
+EXPOSE 3030
+
 ENTRYPOINT ["/app/trading-bot"]
 CMD ["config/strategy.yaml"]

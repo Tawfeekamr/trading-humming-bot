@@ -1,5 +1,6 @@
 use anyhow::Result;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Instant;
 use tracing::{info, warn, error};
 use crate::config::AppConfig;
@@ -15,7 +16,7 @@ use crate::signal::SignalEngine;
 
 pub struct Engine {
     config: AppConfig,
-    connector: Box<dyn Connector>,
+    connector: Arc<dyn Connector>,
     strategies: Vec<Box<dyn Strategy>>,
     risk: RiskManager,
     telegram: TelegramBot,
@@ -30,7 +31,7 @@ pub struct Engine {
 impl Engine {
     pub fn new(
         config: AppConfig,
-        connector: Box<dyn Connector>,
+        connector: Arc<dyn Connector>,
         risk: RiskManager,
         telegram: TelegramBot,
     ) -> Self {

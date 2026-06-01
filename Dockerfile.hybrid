@@ -1,0 +1,48 @@
+# ════════════════════════════════════════════════════════════════════
+# Hybrid Dockerfile — Python bot WITHOUT Hummingbot
+# Talks to the Rust trading engine via HTTP API for all exchange ops
+# ════════════════════════════════════════════════════════════════════
+
+# Stage 1: Build Rust wheel (for PyO3 indicator bindings)
+FROM python:3.13-slim AS rust-builder
+RUN apt-get update && apt-get install -y --no-install-recommends curl build-essential pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH="/root/.cargo/bin:${PATH}"
+RUN pip install --no-cache-dir maturin
+COPY trading-engine-core/ /build/trading-engine-core/
+WORKDIR /build/trading-engine-core
+RUN maturin build --release --out /build/wheels
+
+# Stage 2: Python runtime
+FROM python:3.13-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install Python dependencies
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt && rm /tmp/requirements.txt
+
+# Install trading-engine-core Rust wheel (PyO3 indicator bindings)
+COPY --from=rust-builder /build/wheels/*.whl /tmp/wheels/
+RUN pip install --no-cache-dir /tmp/wheels/trading_engine_core*.whl && rm -rf /tmp/wheels
+
+# Copy Python source modules
+COPY src/ /app/src/
+
+# Copy utility scripts
+COPY scripts/ /app/scripts/
+
+# Ensure data/logs/models dirs exist
+RUN mkdir -p /app/data /app/logs /app/models /app/config
+
+# Copy pre-trained ML model
+COPY models/ /app/models/
+
+# Default: use Rust engine for execution
+ENV EXECUTION_MODE=rust
+ENV RUST_ENGINE_URL=http://rust-engine:3030
+ENV PYTHONPATH=/app
+
+ENTRYPOINT ["python", "-m", "src.trading_engine.runner"]

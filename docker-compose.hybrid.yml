@@ -1,0 +1,63 @@
+# ════════════════════════════════════════════════════════════════════
+# Hybrid Compose — Rust engine + Python bot, no Hummingbot, no MQTT
+#
+# Usage:
+#   docker compose -f docker-compose.hybrid.yml up -d --build
+#
+# Rollback to Hummingbot:
+#   docker compose down && docker compose up -d --build
+# ════════════════════════════════════════════════════════════════════
+
+services:
+  # ── Rust Trading Engine (API server on port 3030) ────────────────
+  rust-engine:
+    build:
+      context: ./trading-engine-core
+      dockerfile: Dockerfile
+    container_name: trading-engine
+    restart: unless-stopped
+    env_file: .env.rust
+    ports:
+      - "3030:3030"
+    volumes:
+      - ./config/strategy.yaml:/app/config/strategy.yaml:ro
+      - ./data:/app/data
+    environment:
+      - RUST_LOG=${RUST_LOG:-info}
+      - API_PORT=3030
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:3030/api/v1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+  # ── Python Strategy Bot (talks to Rust engine via HTTP) ──────────
+  python-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile.hybrid
+    container_name: trading-python
+    restart: unless-stopped
+    depends_on:
+      rust-engine:
+        condition: service_healthy
+    env_file: .env.docker
+    environment:
+      - EXECUTION_MODE=rust
+      - RUST_ENGINE_URL=http://rust-engine:3030
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./config:/app/config:ro
+      - ./.env:/app/.env:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"

@@ -15,7 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - uses: setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
@@ -29,11 +29,14 @@ jobs:
       - name: Build and install trading-engine-core wheel
         run: pip install maturin && cd trading-engine-core && maturin build --release && pip install target/wheels/trading_engine_core*.whl
 
-      - name: Run unit tests
+      - name: Run Rust tests
+        run: cd trading-engine-core && cargo test --lib
+
+      - name: Run Python unit tests
         run: pytest tests/ -v --tb=short
 
   deploy:
-    name: Deploy to AWS Tokyo
+    name: Deploy Hybrid to AWS Tokyo
     needs: test
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -52,15 +55,24 @@ jobs:
             --document-name "AWS-RunShellScript" \
             --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
             --region "${{ env.AWS_REGION }}" \
-            --parameters commands='["cd /home/ec2-user/trading-humming-bot && git pull origin main 2>&1","cd /home/ec2-user/trading-humming-bot && mkdir -p data logs models","cd /home/ec2-user/trading-humming-bot && docker compose down --remove-orphans 2>&1 || true","cd /home/ec2-user/trading-humming-bot && docker compose build --no-cache bot 2>&1","cd /home/ec2-user/trading-humming-bot && docker compose up -d 2>&1","docker image prune -af 2>&1 || true","docker builder prune -f 2>&1 || true","docker volume prune -f 2>&1 || true"]' \
-            --timeout-seconds 600 \
-            --comment "Deploying via GitHub Actions" \
+            --parameters commands='[
+              "cd /home/ec2-user/trading-humming-bot && git pull origin main 2>&1",
+              "cd /home/ec2-user/trading-humming-bot && mkdir -p data logs models",
+              "cd /home/ec2-user/trading-humming-bot && docker compose down --remove-orphans 2>&1 || true",
+              "cd /home/ec2-user/trading-humming-bot && docker image prune -af 2>&1 || true",
+              "cd /home/ec2-user/trading-humming-bot && docker builder prune -f 2>&1 || true",
+              "cd /home/ec2-user/trading-humming-bot && docker compose -f docker-compose.hybrid.yml build --no-cache 2>&1",
+              "cd /home/ec2-user/trading-humming-bot && docker compose -f docker-compose.hybrid.yml up -d 2>&1",
+              "docker volume prune -f 2>&1 || true"
+            ]' \
+            --timeout-seconds 900 \
+            --comment "Deploying hybrid stack via GitHub Actions" \
             --query "Command.CommandId" \
             --output text)
 
           echo "SSM Command ID: $COMMAND_ID"
 
-          for i in $(seq 1 60); do
+          for i in $(seq 1 90); do
             STATUS=$(aws ssm get-command-invocation \
               --command-id "$COMMAND_ID" \
               --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
@@ -91,9 +103,9 @@ jobs:
             --document-name "AWS-RunShellScript" \
             --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
             --region "${{ env.AWS_REGION }}" \
-            --parameters commands='["cd /home/ec2-user/trading-humming-bot && docker compose ps --format json 2>&1"]' \
+            --parameters commands='["cd /home/ec2-user/trading-humming-bot && docker compose -f docker-compose.hybrid.yml ps --format json 2>&1"]' \
             --timeout-seconds 60 \
-            --comment "Verify deployment" \
+            --comment "Verify hybrid deployment" \
             --query "Command.CommandId" \
             --output text)
 
@@ -112,7 +124,7 @@ jobs:
               echo "Container status:"
               echo "$OUTPUT"
               if echo "$OUTPUT" | grep -q "running"; then
-                echo "Bot is running"
+                echo "Hybrid stack is running"
                 exit 0
               fi
               echo "No containers running"
@@ -134,7 +146,7 @@ jobs:
             "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
             -d chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
             -d parse_mode=HTML \
-            -d text="🚀 <b>Bot Deployed</b>%0A•••%0A📝 ${COMMIT_MSG}%0A🔗 Commit: ${{ github.sha }}%0A⏰ $(date -u +'%Y-%m-%d %H:%M UTC')"
+            -d text="🚀 <b>Hybrid Stack Deployed</b>%0A•••%0A📝 ${COMMIT_MSG}%0A🔗 Commit: ${{ github.sha }}%0A⏰ $(date -u +'%Y-%m-%d %H:%M UTC')"
 
       - name: Notify Telegram on failure
         if: failure()
@@ -143,4 +155,4 @@ jobs:
             "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
             -d chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
             -d parse_mode=HTML \
-            -d text="❌ <b>Deploy FAILED</b>%0A•••%0A🔗 Commit: ${{ github.sha }}%0ACheck: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            -d text="❌ <b>Hybrid Deploy FAILED</b>%0A•••%0A🔗 Commit: ${{ github.sha }}%0ACheck: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"

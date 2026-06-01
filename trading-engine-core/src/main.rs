@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use anyhow::Result;
 use tracing::{info, error};
 use tracing_subscriber::EnvFilter;
@@ -38,19 +39,19 @@ async fn async_main() -> Result<()> {
     let grid_cfg = config.grid.clone();
     let trend_cfg = config.trend.clone();
 
-    let connector: Box<dyn trading_engine_core::connector::Connector> = if config.exchange.testnet {
+    let connector: Arc<dyn trading_engine_core::connector::Connector> = if config.exchange.testnet {
         info!("Using PAPER TRADE engine");
         let mut balances = std::collections::HashMap::new();
         balances.insert("USDT".to_string(), config.grid.capital_usdt);
-        Box::new(trading_engine_core::connector::paper::PaperTradeConnector::new(balances))
+        Arc::new(trading_engine_core::connector::paper::PaperTradeConnector::new(balances))
     } else if config.exchange.name.contains("gate") {
         info!("Using LIVE Gate.io connector");
-        Box::new(trading_engine_core::connector::gateio_rest::GateioConnector::new(
+        Arc::new(trading_engine_core::connector::gateio_rest::GateioConnector::new(
             &api_key, &api_secret
         ))
     } else {
         info!("Using LIVE Binance connector");
-        Box::new(trading_engine_core::connector::binance_rest::BinanceConnector::new(
+        Arc::new(trading_engine_core::connector::binance_rest::BinanceConnector::new(
             &api_key, &api_secret, false
         ))
     };
@@ -69,7 +70,7 @@ async fn async_main() -> Result<()> {
 
     let telegram = trading_engine_core::notifications::TelegramBot::new(&telegram_token, &telegram_chat_id);
 
-    let mut engine = trading_engine_core::engine::Engine::new(config, connector, risk, telegram);
+    let mut engine = trading_engine_core::engine::Engine::new(config, connector.clone(), risk, telegram);
 
     // Add strategies for each enabled pair
     for (symbol, pc) in &pair_configs {
@@ -90,10 +91,25 @@ async fn async_main() -> Result<()> {
         engine.add_strategy(Box::new(trend));
     }
 
+    // Spawn HTTP API server
+    let api_port: u16 = std::env::var("API_PORT")
+        .unwrap_or_else(|_| "3030".to_string())
+        .parse()
+        .unwrap_or(3030);
+    let app_state = trading_engine_core::api::server::AppState::new(connector);
+    let router = trading_engine_core::api::server::create_router(app_state);
+    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", api_port)).await?;
+    info!("API server listening on port {}", api_port);
+
     tokio::select! {
         result = engine.run() => {
             if let Err(e) = result {
                 error!("Engine error: {}", e);
+            }
+        }
+        result = axum::serve(listener, router) => {
+            if let Err(e) = result {
+                error!("API server error: {}", e);
             }
         }
         _ = tokio::signal::ctrl_c() => {
