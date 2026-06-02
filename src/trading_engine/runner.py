@@ -272,28 +272,39 @@ class TradingRunner:
             from src.journal.trade_journal import TradeJournal
             from types import SimpleNamespace
 
+            class RunnerProxy:
+                """Proxies runner state to TelegramCommandHandler.
+                Returns safe defaults for any Hummingbot-only attributes."""
+                def __init__(self, **kwargs):
+                    self._attrs = kwargs
+                def __getattr__(self, name):
+                    if name.startswith('_') or name in self._attrs:
+                        return self._attrs.get(name)
+                    # Safe defaults for Hummingbot-only attributes
+                    return {}
+
             # Build grid/trend state from strategy host
             state_machines = {}
-            position_managers = {}
             grid_order_trackers = {}
+            position_managers = {}
             for pair, strategy in strategies:
-                # Use format_status() which returns a human-readable status string
                 status_str = strategy.format_status()
                 state_val = "Active" if "Active" in status_str else "Paused"
                 state_machines[pair] = SimpleNamespace(state=SimpleNamespace(value=state_val))
                 grid_order_trackers[pair] = SimpleNamespace(total_pending=0)
-                # Trend: assume WAITING unless position detected
-                position_managers[pair] = SimpleNamespace(
-                    get_all_positions=lambda: [],
+                position_managers[pair] = SimpleNamespace(get_all_positions=lambda: [])
+
+            pairs = {}
+            for pair, _ in strategies:
+                pairs[pair] = SimpleNamespace(
+                    display_pair=pair.replace("-", "/"),
+                    symbol=pair,
+                    base_asset=pair.split("-")[0],
                 )
 
-            # Create a trade journal for grid P&L (SQLite persists across restarts)
-            journal = TradeJournal()
-
-            # Build a lightweight proxy so TelegramCommandHandler can access runner state
-            proxy = SimpleNamespace(
+            proxy = RunnerProxy(
                 env=os.environ.get("ENV", "testnet"),
-                pairs={},  # populated below
+                pairs=pairs,
                 state_machines=state_machines,
                 grid_order_trackers=grid_order_trackers,
                 _position_managers=position_managers,
@@ -302,14 +313,8 @@ class TradingRunner:
                 _last_price={},
                 _ml_classifier=None,
             )
-            for pair, _ in strategies:
-                proxy.pairs[pair] = SimpleNamespace(
-                    display_pair=pair.replace("-", "/"),
-                    symbol=pair,
-                    base_asset=pair.split("-")[0],
-                )
 
-            # Dummy state machine so _require_grid() doesn't block
+            journal = TradeJournal()
             dummy_sm = SimpleNamespace(state=SimpleNamespace(value="Active"))
 
             telegram_handler = TelegramCommandHandler(
