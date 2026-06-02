@@ -70,7 +70,8 @@ async fn async_main() -> Result<()> {
 
     let telegram = trading_engine_core::notifications::TelegramBot::new(&telegram_token, &telegram_chat_id);
 
-    let mut engine = trading_engine_core::engine::Engine::new(config, connector.clone(), risk, telegram);
+    let bar_cache = trading_engine_core::bar_cache::BarCache::new();
+    let mut engine = trading_engine_core::engine::Engine::new(config, connector.clone(), risk, telegram, bar_cache.clone());
 
     // Add strategies for each enabled pair
     for (symbol, pc) in &pair_configs {
@@ -96,7 +97,7 @@ async fn async_main() -> Result<()> {
         .unwrap_or_else(|_| "3030".to_string())
         .parse()
         .unwrap_or(3030);
-    let app_state = trading_engine_core::api::server::AppState::new(connector);
+    let app_state = trading_engine_core::api::server::AppState::new(connector, bar_cache);
     let router = trading_engine_core::api::server::create_router(app_state);
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", api_port)).await?;
     info!("API server listening on port {}", api_port);

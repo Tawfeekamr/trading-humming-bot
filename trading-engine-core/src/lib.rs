@@ -12,6 +12,7 @@ pub mod risk;
 pub mod ml;
 pub mod notifications;
 pub mod signal;
+pub mod bar_cache;
 pub mod engine;
 pub mod api;
 

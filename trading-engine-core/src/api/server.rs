@@ -3,6 +3,7 @@ use axum::Router;
 use axum::routing::{get, post, delete};
 use tower_http::cors::CorsLayer;
 
+use crate::bar_cache::BarCache;
 use crate::connector::Connector;
 
 use super::handlers;
@@ -11,11 +12,12 @@ use super::handlers;
 #[derive(Clone)]
 pub struct AppState {
     pub connector: Arc<dyn Connector>,
+    pub bars: BarCache,
 }
 
 impl AppState {
-    pub fn new(connector: Arc<dyn Connector>) -> Self {
-        Self { connector }
+    pub fn new(connector: Arc<dyn Connector>, bars: BarCache) -> Self {
+        Self { connector, bars }
     }
 }
 

@@ -143,8 +143,16 @@ pub async fn get_klines(
     Query(params): Query<KlinesQuery>,
 ) -> impl IntoResponse {
     let interval = params.interval.as_deref().unwrap_or("1m");
-    let limit = params.limit.unwrap_or(100);
-    match state.connector.get_klines(&params.symbol, interval, limit).await {
+    let limit = params.limit.unwrap_or(100) as usize;
+
+    // Try the engine's bar cache first (handles dash/no-dash normalization).
+    let cached = state.bars.get(&params.symbol, limit).await;
+    if !cached.is_empty() {
+        return Ok::<_, (axum::http::StatusCode, Json<serde_json::Value>)>(Json(cached));
+    }
+
+    // Fallback to connector for non-cached pairs (e.g. UI ad-hoc lookups).
+    match state.connector.get_klines(&params.symbol, interval, limit as u16).await {
         Ok(bars) => Ok(Json(bars)),
         Err(e) => Err((
             axum::http::StatusCode::BAD_GATEWAY,
@@ -166,6 +174,7 @@ mod tests {
 
     use crate::connector::Connector;
     use crate::connector::paper::PaperTradeConnector;
+    use crate::bar_cache::BarCache;
 
     use crate::api::server::{AppState, create_router};
 
@@ -173,7 +182,7 @@ mod tests {
         let mut balances = HashMap::new();
         balances.insert("USDT".to_string(), 10000.0);
         let connector = Arc::new(PaperTradeConnector::new(balances)) as Arc<dyn Connector>;
-        create_router(AppState::new(connector))
+        create_router(AppState::new(connector, BarCache::new()))
     }
 
     #[tokio::test]

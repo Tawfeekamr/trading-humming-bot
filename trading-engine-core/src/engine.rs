@@ -12,6 +12,7 @@ use crate::notifications::TelegramBot;
 use crate::strategy::{Strategy, TickContext};
 use crate::models::bar::Bar;
 use crate::models::order::OrderSide;
+use crate::bar_cache::BarCache;
 use crate::signal::SignalEngine;
 
 pub struct Engine {
@@ -21,7 +22,7 @@ pub struct Engine {
     risk: RiskManager,
     telegram: TelegramBot,
     signal: Option<SignalEngine>,
-    bar_buffers: HashMap<String, Vec<Bar>>,
+    bar_buffers: BarCache,
     order_books: HashMap<String, OrderBook>,
     started_at: Instant,
     last_update_id: i64,
@@ -34,6 +35,7 @@ impl Engine {
         connector: Arc<dyn Connector>,
         risk: RiskManager,
         telegram: TelegramBot,
+        bar_cache: BarCache,
     ) -> Self {
         let mut engine = Self {
             config,
@@ -42,7 +44,7 @@ impl Engine {
             risk,
             telegram: telegram.clone_for_signal(),
             signal: None, // initialized below
-            bar_buffers: HashMap::new(),
+            bar_buffers: bar_cache,
             order_books: HashMap::new(),
             started_at: Instant::now(),
             last_update_id: 0,
@@ -94,14 +96,14 @@ impl Engine {
 
         // Preload historical bars so strategies can evaluate state immediately
         // First try loading from persisted file (instant warmup)
-        let loaded_from_disk = self.load_bar_buffers();
+        let loaded_from_disk = self.load_bar_buffers().await;
         for pair in &pairs {
             if !loaded_from_disk.contains(pair) {
                 let symbol = pair.replace("-", "");
                 match self.connector.get_klines(&symbol, &self.config.timeframe, 100).await {
                     Ok(bars) => {
                         let count = bars.len();
-                        self.bar_buffers.insert(pair.clone(), bars);
+                        self.bar_buffers.set(pair.clone(), bars).await;
                         info!("Preloaded {} historical bars for {}", count, pair);
                     }
                     Err(e) => warn!("Failed to preload bars for {}: {}", pair, e),
@@ -126,14 +128,9 @@ impl Engine {
                 }
                 WsEvent::Kline { symbol, bar, is_closed } => {
                     if is_closed {
-                        self.bar_buffers.entry(symbol.clone()).or_default().push(bar);
-                        if let Some(bars) = self.bar_buffers.get_mut(&symbol) {
-                            if bars.len() > 500 {
-                                bars.drain(0..bars.len() - 500);
-                            }
-                        }
+                        self.bar_buffers.push_closed_bar(symbol, bar).await;
                         // Persist bar buffers every closed candle
-                        self.save_bar_buffers();
+                        self.save_bar_buffers().await;
                     }
                 }
                 WsEvent::Trade { symbol, price, .. } => {
@@ -175,7 +172,7 @@ impl Engine {
 
             let ctx = TickContext {
                 order_book,
-                recent_bars: self.bar_buffers.get(&pair).cloned().unwrap_or_default(),
+                recent_bars: self.bar_buffers.get_exact(&pair).await.unwrap_or_default(),
                 balances,
                 open_orders: Vec::new(),
                 regime: None,
@@ -822,10 +819,11 @@ impl Engine {
     }
 
     /// Save bar buffers to disk for warm startup after restart
-    fn save_bar_buffers(&self) {
+    async fn save_bar_buffers(&self) {
+        let snap = self.bar_buffers.snapshot().await;
         let path = std::path::PathBuf::from("data/bar_buffers.json");
         let _ = std::fs::create_dir_all("data");
-        if let Ok(json) = serde_json::to_string_pretty(&self.bar_buffers) {
+        if let Ok(json) = serde_json::to_string_pretty(&snap) {
             if let Err(e) = std::fs::write(&path, json) {
                 warn!("Failed to save bar buffers: {}", e);
             }
@@ -833,7 +831,7 @@ impl Engine {
     }
 
     /// Load bar buffers from disk. Returns set of pairs that were loaded.
-    fn load_bar_buffers(&mut self) -> std::collections::HashSet<String> {
+    async fn load_bar_buffers(&self) -> std::collections::HashSet<String> {
         let path = std::path::PathBuf::from("data/bar_buffers.json");
         if !path.exists() { return std::collections::HashSet::new(); }
 
@@ -842,13 +840,14 @@ impl Engine {
             Ok(content) => {
                 match serde_json::from_str::<std::collections::HashMap<String, Vec<Bar>>>(&content) {
                     Ok(buffers) => {
+                        let count = buffers.len();
                         for (pair, bars) in buffers {
-                            let count = bars.len();
-                            info!("Loaded {} cached bars for {}", count, pair);
-                            self.bar_buffers.insert(pair.clone(), bars);
-                            loaded.insert(pair);
+                            let n = bars.len();
+                            info!("Loaded {} cached bars for {}", n, pair);
+                            loaded.insert(pair.clone());
+                            self.bar_buffers.set(pair, bars).await;
                         }
-                        info!("Bar buffers restored from disk ({} pairs)", loaded.len());
+                        info!("Bar buffers restored from disk ({} pairs)", count);
                     }
                     Err(e) => warn!("Failed to parse bar buffers: {}", e),
                 }
@@ -860,11 +859,11 @@ impl Engine {
 
     /// Replay loaded bars through strategies to restore indicator state
     async fn replay_bars_to_strategies(&mut self) {
-        if self.bar_buffers.is_empty() { return; }
+        if self.bar_buffers.is_empty().await { return; }
 
         for strategy in &mut self.strategies {
             let pair = strategy.trading_pair().to_string();
-            if let Some(bars) = self.bar_buffers.get(&pair) {
+            if let Some(bars) = self.bar_buffers.get_exact(&pair).await {
                 if bars.len() >= 10 {
                     info!("Replaying {} bars to warm up {} on {}", bars.len(), strategy.name(), pair);
                     let balances = std::collections::HashMap::new();
