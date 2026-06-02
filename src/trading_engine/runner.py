@@ -269,15 +269,35 @@ class TradingRunner:
         try:
             from src.notifications.telegram_commands import TelegramCommandHandler
             from src.monitoring.system_monitor import get_stats
+            from src.journal.trade_journal import TradeJournal
             from types import SimpleNamespace
+
+            # Build grid/trend state from strategy host
+            state_machines = {}
+            position_managers = {}
+            grid_order_trackers = {}
+            for pair, strategy in strategies:
+                st = strategy.status()
+                # Grid strategies expose state via status()
+                sm_proxy = SimpleNamespace(state=SimpleNamespace(value=st.state))
+                state_machines[pair] = sm_proxy
+                grid_order_trackers[pair] = SimpleNamespace(total_pending=st.open_orders)
+                # Trend strategies: POSITION if pnl != 0, else WAITING
+                if st.name == "trend":
+                    position_managers[pair] = SimpleNamespace(
+                        get_all_positions=lambda: [True] if st.state == "POSITION" else [],
+                    )
+
+            # Create a trade journal for grid P&L (SQLite persists across restarts)
+            journal = TradeJournal()
 
             # Build a lightweight proxy so TelegramCommandHandler can access runner state
             proxy = SimpleNamespace(
                 env=os.environ.get("ENV", "testnet"),
                 pairs={},  # populated below
-                state_machines={},
-                grid_order_trackers={},
-                _position_managers={},
+                state_machines=state_machines,
+                grid_order_trackers=grid_order_trackers,
+                _position_managers=position_managers,
                 _trend_journal=None,
                 _signal_engine=signal_engine,
                 _last_price={},
@@ -291,7 +311,7 @@ class TradingRunner:
                 )
 
             telegram_handler = TelegramCommandHandler(
-                journal=None,
+                journal=journal,
                 state_machine=None,
                 circuit_breaker=SimpleNamespace(halted=False),
                 position_guard=None,
@@ -335,11 +355,18 @@ class TradingRunner:
                 if not self._running:
                     break
                 host.on_bar(bar)
-                # Update last price cache for status reports
+                # Update last price cache and strategy states for status reports
                 pair = bar.get("symbol", "")
                 close = bar.get("close", 0)
                 if pair and close and proxy is not None:
                     proxy._last_price[pair] = float(close)
+                    # Refresh strategy state in proxy
+                    for s in host.strategies():
+                        if s.trading_pair() == pair:
+                            st = s.status()
+                            if st.name == "grid":
+                                proxy.state_machines[pair] = SimpleNamespace(state=SimpleNamespace(value=st.state))
+                                proxy.grid_order_trackers[pair] = SimpleNamespace(total_pending=st.open_orders)
                 # Process queued signal messages on each bar tick too
                 if signal_engine is not None:
                     signal_engine.tick()
