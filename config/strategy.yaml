@@ -132,7 +132,7 @@ signal_copy:
   max_sl_distance_pct: 10.0         # Max stop-loss distance from entry (%)
   default_sl_atr_multiplier: 2.0   # Default SL = entry ± ATR × this (when signal has no SL)
   max_entry_zone_pct: 3.0           # Max entry zone width (%)
-  min_quality_score: 7              # Gemini: 5→7, only A+ setups from signals
+  min_quality_score: 6              # DeepSeek: 6+, allow signals with solid structure
 
   # TP scaling
   tp1_close_pct: 33                 # Close 33% at TP1, move SL to breakeven
