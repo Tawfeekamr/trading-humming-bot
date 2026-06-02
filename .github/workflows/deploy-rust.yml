@@ -84,9 +84,8 @@ jobs:
               "grep -q TELEGRAM_BOT_TOKEN .env.rust && sed -i '\''s|^TELEGRAM_BOT_TOKEN=.*|TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}|'\'' .env.rust || echo \"TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}\" >> .env.rust",
               "grep -q TELEGRAM_CHAT_ID .env.rust && sed -i '\''s|^TELEGRAM_CHAT_ID=.*|TELEGRAM_CHAT_ID=${{ secrets.TELEGRAM_CHAT_ID }}|'\'' .env.rust || echo \"TELEGRAM_CHAT_ID=${{ secrets.TELEGRAM_CHAT_ID }}\" >> .env.rust",
               "docker compose -f docker-compose.rust.yml pull rust-bot 2>&1",
-              "docker compose -f docker-compose.rust.yml up -d --build rust-bot 2>&1",
               "docker compose -f docker-compose.rust.yml build --no-cache signal-listener 2>&1",
-              "docker compose -f docker-compose.rust.yml up -d --no-build signal-listener 2>&1",
+              "docker compose -f docker-compose.rust.yml up -d --no-build --force-recreate rust-bot signal-listener 2>&1",
               "docker image prune -af 2>&1 || true",
               "docker builder prune -af 2>&1 || true"
             ]' \
