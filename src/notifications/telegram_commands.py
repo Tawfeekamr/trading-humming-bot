@@ -1223,26 +1223,60 @@ class TelegramCommandHandler:
         risk = status.get("risk", {})
         positions = engine._position_mgr.get_open_positions()
 
+        # Read realized P&L from signal_positions.json (accurate, survives restarts)
+        total_realized = 0.0
+        rust_positions = {}
+        try:
+            with open("data/signal_positions.json", "r") as f:
+                rust_data = json.load(f)
+                for sym, pdata in rust_data.items():
+                    total_realized += pdata.get("realized_pnl", 0)
+                    if not pdata.get("is_closed", False):
+                        rust_positions[sym] = pdata
+        except Exception:
+            pass
+
+        # Compute unrealized P&L
+        unrealized = self._compute_signal_unrealized()
+        total_pnl = total_realized + unrealized
+        open_count = len(rust_positions) if rust_positions else status["open_positions"]
+
         mode_tag = "AUDIT" if status.get("audit_mode") else "LIVE"
         lines = [
             f"📡 <b>SIGNAL ENGINE ({mode_tag})</b>",
             "•••",
             f"State: <b>{status['state']}</b>",
-            f"Open positions: {status['open_positions']}/{engine._risk._max_positions}",
+            f"Open positions: {open_count}/{engine._risk._max_positions}",
             f"Trades today: {risk.get('trades_today', 0)}/{risk.get('max_trades', 0)}",
-            f"Daily P&L: ${risk.get('daily_pnl', 0):.2f}",
+            f"Realized P&L: ${total_realized:.2f}",
+            f"Unrealized P&L: ${unrealized:.2f}",
+            f"<b>Total P&L: ${total_pnl:.2f}</b>",
         ]
 
         if positions:
             lines.append("•••")
             lines.append("📈 <b>Open Positions:</b>")
+            last_price = getattr(self.strategy, '_last_price', {})
             for pos in positions:
-                pnl_pct = 0
-                if pos.entry_price > 0:
-                    pnl_pct = ((pos.remaining_amount * pos.entry_price) - (pos.amount * pos.entry_price)) / (pos.amount * pos.entry_price) * 100
+                # Use Rust's TP state if available (more up-to-date)
+                rp = rust_positions.get(pos.symbol, {})
+                tp_hits = []
+                for i in range(len(pos.take_profits)):
+                    key = f"tp{i+1}_hit"
+                    tp_hits.append("✅" if rp.get(key, getattr(pos, f"tp{i+1}_hit", False)) else "⬜")
+                tp_str = "".join(tp_hits) if tp_hits else "N/A"
+
+                cur_price = last_price.get(pos.symbol, pos.entry_price)
+                unreal = (cur_price - pos.entry_price) * pos.remaining_amount if cur_price > 0 else 0
+                sign = "+" if unreal >= 0 else ""
+                realized = rp.get("realized_pnl", 0)
+
                 lines.append(
-                    f"  {pos.symbol}: ${pos.entry_price:,.2f} ({pos.hold_minutes}m) "
-                    f"SL=${pos.stop_loss:,.2f} TPs={'✅' if pos.tp1_hit else '⬜'}/{'✅' if pos.tp2_hit else '⬜'}/{'✅' if pos.tp3_hit else '⬜'}"
+                    f"  {pos.symbol}: ${pos.entry_price:.4f} SL=${pos.stop_loss:.4f} "
+                    f"TPs={tp_str}"
+                )
+                lines.append(
+                    f"    Realized: ${realized:.2f} | Unrealized: {sign}${unreal:.2f}"
                 )
 
         update.message.reply_text("\n".join(lines), parse_mode="HTML")
