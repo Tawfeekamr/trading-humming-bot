@@ -317,6 +317,19 @@ class TradingRunner:
                         logger.error("Signal tick error: %s", e)
 
         tick_task = asyncio.create_task(signal_tick_loop())
+
+        # Telegram polling task — poll every 3 seconds independent of bars
+        async def telegram_poll_loop():
+            """Poll Telegram for commands every 3 seconds."""
+            while self._running:
+                await asyncio.sleep(3)
+                if telegram_handler is not None:
+                    try:
+                        telegram_handler.poll_once()
+                    except Exception as e:
+                        logger.error("Telegram poll error: %s", e)
+
+        tg_task = asyncio.create_task(telegram_poll_loop())
         try:
             async for bar in feed.bars():
                 if not self._running:
@@ -330,14 +343,12 @@ class TradingRunner:
                 # Process queued signal messages on each bar tick too
                 if signal_engine is not None:
                     signal_engine.tick()
-                # Poll Telegram commands
-                if telegram_handler is not None:
-                    telegram_handler.poll_once()
         except asyncio.CancelledError:
             pass
         finally:
             logger.info("TradingRunner shutting down...")
             tick_task.cancel()
+            tg_task.cancel()
             if signal_engine is not None:
                 signal_engine.stop_listener()
             fill_task.cancel()
