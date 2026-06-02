@@ -264,20 +264,33 @@ class TradingRunner:
             except Exception as e:
                 logger.error("Signal Copy Engine failed to start: %s", e)
 
-        # 8. Main bar loop
+        # 8. Main bar loop + signal tick timer
         logger.info("Starting bar feed for pairs: %s", feed.pairs)
+
+        async def signal_tick_loop():
+            """Process queued signal messages every 30 seconds, independent of bars."""
+            while self._running:
+                await asyncio.sleep(30)
+                if signal_engine is not None:
+                    try:
+                        signal_engine.tick()
+                    except Exception as e:
+                        logger.error("Signal tick error: %s", e)
+
+        tick_task = asyncio.create_task(signal_tick_loop())
         try:
             async for bar in feed.bars():
                 if not self._running:
                     break
                 host.on_bar(bar)
-                # Process queued signal messages on each tick
+                # Process queued signal messages on each bar tick too
                 if signal_engine is not None:
                     signal_engine.tick()
         except asyncio.CancelledError:
             pass
         finally:
             logger.info("TradingRunner shutting down...")
+            tick_task.cancel()
             if signal_engine is not None:
                 signal_engine.stop_listener()
             fill_task.cancel()
