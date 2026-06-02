@@ -277,16 +277,15 @@ class TradingRunner:
             position_managers = {}
             grid_order_trackers = {}
             for pair, strategy in strategies:
-                st = strategy.status()
-                # Grid strategies expose state via status()
-                sm_proxy = SimpleNamespace(state=SimpleNamespace(value=st.state))
-                state_machines[pair] = sm_proxy
-                grid_order_trackers[pair] = SimpleNamespace(total_pending=st.open_orders)
-                # Trend strategies: POSITION if pnl != 0, else WAITING
-                if st.name == "trend":
-                    position_managers[pair] = SimpleNamespace(
-                        get_all_positions=lambda: [True] if st.state == "POSITION" else [],
-                    )
+                # Use format_status() which returns a human-readable status string
+                status_str = strategy.format_status()
+                state_val = "Active" if "Active" in status_str else "Paused"
+                state_machines[pair] = SimpleNamespace(state=SimpleNamespace(value=state_val))
+                grid_order_trackers[pair] = SimpleNamespace(total_pending=0)
+                # Trend: assume WAITING unless position detected
+                position_managers[pair] = SimpleNamespace(
+                    get_all_positions=lambda: [],
+                )
 
             # Create a trade journal for grid P&L (SQLite persists across restarts)
             journal = TradeJournal()
@@ -363,10 +362,9 @@ class TradingRunner:
                     # Refresh strategy state in proxy
                     for s in host.strategies():
                         if s.trading_pair() == pair:
-                            st = s.status()
-                            if st.name == "grid":
-                                proxy.state_machines[pair] = SimpleNamespace(state=SimpleNamespace(value=st.state))
-                                proxy.grid_order_trackers[pair] = SimpleNamespace(total_pending=st.open_orders)
+                            status_str = s.format_status()
+                            state_val = "Active" if "Active" in status_str else "Paused"
+                            proxy.state_machines[pair] = SimpleNamespace(state=SimpleNamespace(value=state_val))
                 # Process queued signal messages on each bar tick too
                 if signal_engine is not None:
                     signal_engine.tick()
