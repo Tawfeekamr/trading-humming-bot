@@ -665,13 +665,26 @@ impl Engine {
                         let symbol = pos.get("symbol").and_then(|v| v.as_str()).unwrap_or("?");
                         let entry = pos.get("entry_price").and_then(|v| v.as_f64()).unwrap_or(0.0);
                         let sl = pos.get("stop_loss").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                        let tp1 = if pos.get("tp1_hit").and_then(|v| v.as_bool()).unwrap_or(false) { "✅" } else { "⬜" };
-                        let tp2 = if pos.get("tp2_hit").and_then(|v| v.as_bool()).unwrap_or(false) { "✅" } else { "⬜" };
-                        let tp3 = if pos.get("tp3_hit").and_then(|v| v.as_bool()).unwrap_or(false) { "✅" } else { "⬜" };
                         let channel = pos.get("channel_name").and_then(|v| v.as_str()).unwrap_or("");
+
+                        // Show all TPs with hit markers
+                        let tps = pos.get("take_profits").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+                        let tp1_hit = pos.get("tp1_hit").and_then(|v| v.as_bool()).unwrap_or(false);
+                        let tp2_hit = pos.get("tp2_hit").and_then(|v| v.as_bool()).unwrap_or(false);
+                        let tp3_hit = pos.get("tp3_hit").and_then(|v| v.as_bool()).unwrap_or(false);
+                        let tp_markers: String = tps.iter().enumerate().map(|(i, _)| {
+                            let hit = match i {
+                                0 => tp1_hit,
+                                1 => tp2_hit,
+                                2 => tp3_hit,
+                                _ => false,
+                            };
+                            if hit { "✅" } else { "⬜" }
+                        }).collect();
+
                         lines.push(format!(
-                            "  {}: ${:.4} SL=${:.4} TPs={}{}{} {}",
-                            symbol, entry, sl, tp1, tp2, tp3, channel
+                            "  {}: ${:.4} SL=${:.4} TPs={} {}",
+                            symbol, entry, sl, tp_markers, channel
                         ));
                     }
                 }
@@ -740,7 +753,7 @@ impl Engine {
 
             lines.push(format!("{} {} <b>${:.4}</b> ({:+.1}%)", pnl_emoji, symbol, price, pnl_pct));
             lines.push(format!("  Entry: ${:.4} | SL: ${:.4}", entry, sl));
-            lines.push(format!("  Unrealized: ${:.2} ({} tokens)", unrealized, remaining as i64));
+            lines.push(format!("  Unrealized: ${:.2} ({:.2} tokens)", unrealized, remaining));
 
             // Show TP status
             let mut tp_str = String::new();
@@ -765,25 +778,57 @@ impl Engine {
     }
 
     async fn cmd_signal_pnl(&self) -> Option<String> {
-        let signal = self.signal.as_ref()?;
-        let journal = signal.journal();
+        // Read P&L from signal_positions.json (reliable, always up-to-date)
+        let positions_content = tokio::fs::read_to_string("data/signal_positions.json")
+            .await
+            .ok()
+            .unwrap_or_default();
 
-        let today = journal.summary(0);
-        let week = journal.summary(7);
-        let month = journal.summary(30);
-        let all = journal.summary(-1);
+        let mut total_pnl: f64 = 0.0;
+        let mut total_trades: i32 = 0;
+        let mut wins: i32 = 0;
+
+        if !positions_content.is_empty() {
+            if let Ok(positions) = serde_json::from_str::<serde_json::Value>(&positions_content) {
+                if let Some(map) = positions.as_object() {
+                    for (_sym, pos) in map {
+                        let realized = pos.get("realized_pnl").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                        let is_closed = pos.get("is_closed").and_then(|v| v.as_bool()).unwrap_or(false);
+                        let tp1_hit = pos.get("tp1_hit").and_then(|v| v.as_bool()).unwrap_or(false);
+
+                        // Count trades: fully closed positions or any TP hit (partial close)
+                        let has_trade = is_closed || tp1_hit;
+                        if has_trade {
+                            total_trades += 1;
+                            total_pnl += realized;
+                            if realized > 0.0 { wins += 1; }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Also read risk guard for daily tracking
+        let risk_content = tokio::fs::read_to_string("data/signal_risk.json")
+            .await
+            .ok()
+            .unwrap_or_default();
+        let daily_pnl = if !risk_content.is_empty() {
+            serde_json::from_str::<serde_json::Value>(&risk_content)
+                .ok()
+                .and_then(|d| d.get("daily_pnl").and_then(|v| v.as_f64()))
+                .unwrap_or(0.0)
+        } else { 0.0 };
+
+        let win_rate = if total_trades > 0 { wins as f64 / total_trades as f64 * 100.0 } else { 0.0 };
 
         Some(format!(
             "📊 <b>SIGNAL P&L</b>\n\
              •••\n\
-             📅 Today: {} trades, ${:.2} ({:.0}% win)\n\
-             📆 Week:  {} trades, ${:.2} ({:.0}% win)\n\
-             🗓 Month: {} trades, ${:.2} ({:.0}% win)\n\
+             📅 Today: ${:.2} (risk guard)\n\
              🏦 All:   {} trades, ${:.2} ({:.0}% win)",
-            today.total_trades, today.total_pnl, today.win_rate,
-            week.total_trades, week.total_pnl, week.win_rate,
-            month.total_trades, month.total_pnl, month.win_rate,
-            all.total_trades, all.total_pnl, all.win_rate,
+            daily_pnl,
+            total_trades, total_pnl, win_rate,
         ))
     }
 
