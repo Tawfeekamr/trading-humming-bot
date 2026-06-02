@@ -206,7 +206,7 @@ class TradingRunner:
     async def run(self):
         """Start the trading system."""
         self._running = True
-        logger.info("TradingRunner starting...")
+        proxy = None  # populated below if telegram handler is available
 
         # 1. Create execution adapter via factory
         adapter = create_adapter()
@@ -264,7 +264,46 @@ class TradingRunner:
             except Exception as e:
                 logger.error("Signal Copy Engine failed to start: %s", e)
 
-        # 8. Main bar loop + signal tick timer
+        # 8. Telegram command handler — poll for user commands
+        telegram_handler = None
+        try:
+            from src.notifications.telegram_commands import TelegramCommandHandler
+            from src.monitoring.system_monitor import get_stats
+            from types import SimpleNamespace
+
+            # Build a lightweight proxy so TelegramCommandHandler can access runner state
+            proxy = SimpleNamespace(
+                env=os.environ.get("ENV", "testnet"),
+                pairs={},  # populated below
+                state_machines={},
+                grid_order_trackers={},
+                _position_managers={},
+                _trend_journal=None,
+                _signal_engine=signal_engine,
+                _last_price={},
+                _ml_classifier=None,
+            )
+            for pair, _ in strategies:
+                proxy.pairs[pair] = SimpleNamespace(
+                    display_pair=pair.replace("-", "/"),
+                    symbol=pair,
+                    base_asset=pair.split("-")[0],
+                )
+
+            telegram_handler = TelegramCommandHandler(
+                journal=None,
+                state_machine=None,
+                circuit_breaker=SimpleNamespace(halted=False),
+                position_guard=None,
+                event_logger=None,
+                strategy=proxy,
+            )
+            telegram_handler.start()
+            logger.info("Telegram command handler started")
+        except Exception as e:
+            logger.warning("Telegram command handler not available: %s", e)
+
+        # 9. Main bar loop + signal tick timer
         logger.info("Starting bar feed for pairs: %s", feed.pairs)
 
         async def signal_tick_loop():
@@ -283,9 +322,17 @@ class TradingRunner:
                 if not self._running:
                     break
                 host.on_bar(bar)
+                # Update last price cache for status reports
+                pair = bar.get("symbol", "")
+                close = bar.get("close", 0)
+                if pair and close and proxy is not None:
+                    proxy._last_price[pair] = float(close)
                 # Process queued signal messages on each bar tick too
                 if signal_engine is not None:
                     signal_engine.tick()
+                # Poll Telegram commands
+                if telegram_handler is not None:
+                    telegram_handler.poll_once()
         except asyncio.CancelledError:
             pass
         finally:
