@@ -309,9 +309,12 @@ class TradingRunner:
                     base_asset=pair.split("-")[0],
                 )
 
+            # Dummy state machine so _require_grid() doesn't block
+            dummy_sm = SimpleNamespace(state=SimpleNamespace(value="Active"))
+
             telegram_handler = TelegramCommandHandler(
                 journal=journal,
-                state_machine=None,
+                state_machine=dummy_sm,
                 circuit_breaker=SimpleNamespace(halted=False),
                 position_guard=None,
                 event_logger=None,
