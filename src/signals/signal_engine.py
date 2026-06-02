@@ -391,7 +391,8 @@ class SignalEngine:
                 pos.tp1_hit = True
                 if not self._audit_mode:
                     self._execute_close(pos, pos.take_profits[0], "tp1")
-                self._position_mgr.partial_close(pos.symbol, pos.tp1_close_pct, pos.take_profits[0], "tp1")
+                _, tp1_pnl = self._position_mgr.partial_close(pos.symbol, pos.tp1_close_pct, pos.take_profits[0], "tp1")
+                self._risk.record_trade_closed(tp1_pnl)
                 self._position_mgr.update_stop_loss(pos.symbol, pos.entry_price)
                 self._notify(f"[{'AUDIT' if self._audit_mode else 'LIVE'}] TP1 hit: {pos.symbol} @ ${pos.take_profits[0]:,.2f}, SL → breakeven")
                 self._log_position_trade(pos, pos.take_profits[0], "tp1")
@@ -401,7 +402,8 @@ class SignalEngine:
                 pos.tp2_hit = True
                 if not self._audit_mode:
                     self._execute_close(pos, pos.take_profits[1], "tp2")
-                self._position_mgr.partial_close(pos.symbol, pos.tp2_close_pct, pos.take_profits[1], "tp2")
+                _, tp2_pnl = self._position_mgr.partial_close(pos.symbol, pos.tp2_close_pct, pos.take_profits[1], "tp2")
+                self._risk.record_trade_closed(tp2_pnl)
                 self._position_mgr.update_stop_loss(pos.symbol, pos.take_profits[0])
                 self._notify(f"[{'AUDIT' if self._audit_mode else 'LIVE'}] TP2 hit: {pos.symbol} @ ${pos.take_profits[1]:,.2f}")
                 self._log_position_trade(pos, pos.take_profits[1], "tp2")

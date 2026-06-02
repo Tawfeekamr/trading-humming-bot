@@ -99,12 +99,12 @@ class SignalPositionManager:
             self._save_state()
             return pos
 
-    def partial_close(self, symbol: str, close_pct: float, price: float, reason: str) -> float:
-        """Close a fraction of position. Returns amount closed."""
+    def partial_close(self, symbol: str, close_pct: float, price: float, reason: str) -> tuple:
+        """Close a fraction of position. Returns (amount_closed, realized_pnl)."""
         with self._lock:
             pos = self._positions.get(symbol)
             if not pos or pos.is_closed:
-                return 0.0
+                return (0.0, 0.0)
 
             close_amount = pos.remaining_amount * close_pct
             pnl = (price - pos.entry_price) * close_amount
@@ -114,7 +114,7 @@ class SignalPositionManager:
             logger.info(f"Signal partial close {symbol}: {close_pct:.0%} @ ${price:,.2f} "
                          f"({reason}, PnL: ${pnl:.2f})")
             self._save_state()
-            return close_amount
+            return (close_amount, pnl)
 
     def close_position(self, symbol: str, price: float, reason: str) -> Optional[float]:
         """Fully close position. Returns net PnL."""
