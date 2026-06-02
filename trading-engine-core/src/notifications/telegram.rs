@@ -133,42 +133,4 @@ impl TelegramBot {
     pub fn format_shutdown_message(&self, reason: &str) -> String {
         format!("🛑 <b>Bot Stopped</b>\nReason: {}", reason)
     }
-
-    /// Poll for commands — returns list of text commands received
-    pub async fn poll_commands(&self, last_update_id: &mut i64) -> Result<Vec<String>> {
-        if !self.enabled { return Ok(Vec::new()); }
-
-        let url = format!("https://api.telegram.org/bot{}/getUpdates", self.token);
-        let resp = self.client
-            .get(&url)
-            .query(&[("offset", (*last_update_id + 1).to_string())])
-            .send()
-            .await?;
-
-        let status = resp.status();
-        if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
-            warn!("Telegram getUpdates failed — HTTP {}: {}", status, body);
-            return Ok(Vec::new());
-        }
-
-        let resp_json: serde_json::Value = resp.json().await?;
-        let mut commands = Vec::new();
-        if let Some(updates) = resp_json["result"].as_array() {
-            let count = updates.len();
-            for update in updates {
-                if let Some(update_id) = update["update_id"].as_i64() {
-                    *last_update_id = update_id;
-                }
-                if let Some(text) = update["message"]["text"].as_str() {
-                    info!("Telegram command received: {}", text);
-                    commands.push(text.to_string());
-                }
-            }
-            if count > 0 {
-                info!("Telegram polled {} update(s), last_update_id={}", count, last_update_id);
-            }
-        }
-        Ok(commands)
-    }
 }

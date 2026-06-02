@@ -255,8 +255,27 @@ class TelegramCommandHandler:
         )
         return False
 
+    def _compute_signal_unrealized(self) -> float:
+        """Compute unrealized P&L for open signal positions using current prices."""
+        try:
+            sig = getattr(self.strategy, '_signal_engine', None)
+            if not sig:
+                return 0.0
+            positions = sig._position_mgr.get_open_positions()
+            if not positions:
+                return 0.0
+            total = 0.0
+            last_price = getattr(self.strategy, '_last_price', {})
+            for pos in positions:
+                price = last_price.get(pos.symbol, 0)
+                if price > 0 and pos.entry_price > 0:
+                    total += (price - pos.entry_price) * pos.remaining_amount
+            return total
+        except Exception:
+            return 0.0
+
     def _cmd_status(self, update, context):
-        """Daily summary for all engines — the main overview command."""
+        """Daily summary for all engines — per-pair format."""
         try:
             logger.info("Telegram /status received")
             strategy = self.strategy
@@ -271,49 +290,73 @@ class TelegramCommandHandler:
                 f"⏱ Up: {hours}h {minutes}m",
             ]
 
-            # Grid P&L today
-            try:
-                grid_summary = self.journal.summary_today()
-                grid_trades = grid_summary.get("total_trades", 0)
-                grid_pnl = grid_summary.get("net_pnl", 0)
-                grid_sign = "+" if grid_pnl >= 0 else ""
-                lines.append(f"🤖 <b>Grid:</b> {grid_trades} trades | P&L: {grid_sign}${grid_pnl:.2f}")
-            except Exception:
-                lines.append(f"🤖 <b>Grid:</b> Active")
+            today_since = datetime.now(timezone.utc).strftime("%Y-%m-%d 00:00:00")
 
-            # Trend P&L today
-            try:
+            # Per-pair Grid + Trend status
+            if hasattr(strategy, 'pairs') and strategy.pairs:
+                grid_by_pair = self.journal.summary_by_pair(today_since) if self.journal else {}
                 trend_journal = getattr(strategy, '_trend_journal', None)
-                if trend_journal:
-                    ts = trend_journal.summary_today()
-                    trend_trades = ts.get("total_trades", 0)
-                    trend_pnl = ts.get("net_pnl", 0)
-                    trend_sign = "+" if trend_pnl >= 0 else ""
-                    lines.append(f"📈 <b>Trend:</b> {trend_trades} trades | P&L: {trend_sign}${trend_pnl:.2f}")
-                else:
-                    trend_cap = getattr(strategy, '_trend_capital', 0)
-                    lines.append(f"📈 <b>Trend:</b> Capital ${trend_cap:,.0f}" if trend_cap else "📈 <b>Trend:</b> Disabled")
-            except Exception:
-                lines.append(f"📈 <b>Trend:</b> Active")
 
-            # Signal P&L today
+                for symbol, engine in strategy.pairs.items():
+                    # Grid line
+                    sm = strategy.state_machines.get(symbol)
+                    grid_state = sm.state.value if sm else "UNKNOWN"
+                    tracker = strategy.grid_order_trackers.get(symbol)
+                    pending = tracker.total_pending if tracker else 0
+                    pair_pnl = grid_by_pair.get(symbol, grid_by_pair.get(symbol.replace("-", "/"), {}))
+                    grid_pnl = pair_pnl.get("net_pnl", 0)
+                    sign = "+" if grid_pnl >= 0 else ""
+                    lines.append(
+                        f"🤖 <b>{engine.display_pair}:</b> {grid_state} | "
+                        f"P&L: {sign}${grid_pnl:.2f} | Orders: {pending}"
+                    )
+
+                    # Trend line
+                    pm = strategy._position_managers.get(symbol) if hasattr(strategy, '_position_managers') else None
+                    if pm:
+                        positions = pm.get_all_positions()
+                        trend_state = "POSITION" if positions else "WAITING"
+                        trend_pnl = 0.0
+                        if trend_journal:
+                            ts = trend_journal.summary_today()
+                            trend_pnl = ts.get("net_pnl", 0) if not positions else 0.0
+                        t_sign = "+" if trend_pnl >= 0 else ""
+                        lines.append(
+                            f"📈 <b>{engine.display_pair}:</b> {trend_state} | "
+                            f"P&L: {t_sign}${trend_pnl:.2f} | Orders: {len(positions)}"
+                        )
+
+            # Circuit breaker
+            cb_status = "🛑 HALTED" if self.circuit_breaker.halted else "✅ OK"
+            lines.append(f"🛡️ CB: {cb_status}")
+
+            # Signal engine with unrealized P&L
             sig = getattr(strategy, '_signal_engine', None)
             if sig:
-                sig_mode = "AUDIT" if sig._audit_mode else "LIVE"
-                sig_today = sig._journal.summary(days=0)
-                sig_trades = sig_today.get("total_trades", 0)
-                sig_pnl = sig_today.get("total_pnl", 0)
-                sig_sign = "+" if sig_pnl >= 0 else ""
                 sig_stats = sig.get_status()
-                lines.append(f"📡 <b>Signal ({sig_mode}):</b> {sig_trades} trades | P&L: {sig_sign}${sig_pnl:.2f} | State: {sig_stats.get('state', 'N/A')}")
+                sig_mode = "AUDIT" if sig_stats.get("audit_mode") else "LIVE"
+                sig_state = sig_stats.get("state", "N/A")
+                open_pos = sig_stats.get("open_positions", 0)
+                risk = sig_stats.get("risk", {})
+                trades_today = risk.get("trades_today", 0)
+                max_trades = risk.get("max_trades", 10)
+                daily_pnl = risk.get("daily_pnl", 0)
+                unrealized = self._compute_signal_unrealized()
+                total_pnl = daily_pnl + unrealized
+                total_trades = trades_today + open_pos
+                lines.append(
+                    f"📡 <b>Signal ({sig_mode}):</b> {sig_state} | "
+                    f"Positions: {open_pos} | P&L: ${total_pnl:.2f} | "
+                    f"Trades: {total_trades}/{max_trades}"
+                )
             else:
-                lines.append(f"📡 <b>Signal:</b> Disabled")
+                lines.append("📡 <b>Signal:</b> Disabled")
 
             # ML regime
             if hasattr(strategy, '_ml_classifier') and strategy._ml_classifier:
                 lines.append(f"🧠 <b>ML:</b> {strategy._ml_summary()}")
 
-            # Server
+            # System stats
             stats = get_stats()
             lines.append(f"•••")
             lines.append(f"💻 CPU: {stats.cpu_percent:.0f}% | RAM: {stats.ram_percent:.0f}% | Disk: {stats.disk_percent:.0f}%")
