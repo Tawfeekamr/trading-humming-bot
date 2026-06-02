@@ -1,5 +1,6 @@
 pub mod grid;
 pub mod trend;
+pub mod status_cache;
 
 use async_trait::async_trait;
 use anyhow::Result;
@@ -26,7 +27,7 @@ pub enum MarketRegime {
 }
 
 /// Status snapshot for Telegram reporting
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct StrategyStatus {
     pub name: String,
     pub pair: String,

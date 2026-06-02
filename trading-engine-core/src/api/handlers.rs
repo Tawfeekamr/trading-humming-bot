@@ -161,6 +161,14 @@ pub async fn get_klines(
     }
 }
 
+/// Get current status of all strategies (grid + trend per pair)
+pub async fn get_strategies(
+    State(state): State<AppState>,
+) -> Json<Vec<crate::strategy::StrategyStatus>> {
+    let statuses = state.strategies.snapshot().await;
+    Json(statuses)
+}
+
 // ── Tests ────────────────────────────────────────────────────────────
 
 #[cfg(test)]

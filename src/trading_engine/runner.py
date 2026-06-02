@@ -14,6 +14,7 @@ Or directly:
     EXECUTION_MODE=rust RUST_ENGINE_URL=http://localhost:3030 python -m src.trading_engine.runner
 """
 import asyncio
+import json
 import logging
 import os
 import signal
@@ -347,14 +348,39 @@ class TradingRunner:
 
         # Telegram polling task — poll every 3 seconds independent of bars
         async def telegram_poll_loop():
-            """Poll Telegram for commands every 3 seconds."""
+            """Poll Telegram for commands and refresh strategy status from Rust."""
+            import urllib.request
+            rust_url = os.environ.get("RUST_ENGINE_URL", "http://localhost:3030")
             while self._running:
-                await asyncio.sleep(3)
+                # Refresh strategy status from Rust engine API
+                if proxy is not None:
+                    try:
+                        req = urllib.request.Request(f"{rust_url}/api/v1/strategies")
+                        with urllib.request.urlopen(req, timeout=3) as resp:
+                            statuses = json.loads(resp.read())
+                            for st in statuses:
+                                pair = st.get("pair", "")
+                                state = st.get("state", "")
+                                pnl = st.get("pnl", 0)
+                                orders = st.get("open_orders", 0)
+                                name = st.get("name", "")
+                                if name == "grid":
+                                    proxy.state_machines[pair] = SimpleNamespace(
+                                        state=SimpleNamespace(value=state)
+                                    )
+                                    proxy.grid_order_trackers[pair] = SimpleNamespace(
+                                        total_pending=orders
+                                    )
+                                    proxy.grid_pnl = {**getattr(proxy, 'grid_pnl', {}), pair: pnl}
+                    except Exception:
+                        pass
+                # Poll Telegram commands
                 if telegram_handler is not None:
                     try:
                         telegram_handler.poll_once()
                     except Exception as e:
                         logger.error("Telegram poll error: %s", e)
+                await asyncio.sleep(3)
 
         tg_task = asyncio.create_task(telegram_poll_loop())
         try:

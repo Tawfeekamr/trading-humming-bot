@@ -10,6 +10,7 @@ use crate::connector::types::*;
 use crate::risk::RiskManager;
 use crate::notifications::TelegramBot;
 use crate::strategy::{Strategy, TickContext};
+use crate::strategy::status_cache::StrategyStatusCache;
 use crate::models::bar::Bar;
 use crate::bar_cache::BarCache;
 use crate::signal::SignalEngine;
@@ -24,6 +25,7 @@ pub struct Engine {
     bar_buffers: BarCache,
     order_books: HashMap<String, OrderBook>,
     started_at: Instant,
+    status_cache: StrategyStatusCache,
 }
 
 impl Engine {
@@ -33,6 +35,7 @@ impl Engine {
         risk: RiskManager,
         telegram: TelegramBot,
         bar_cache: BarCache,
+        status_cache: StrategyStatusCache,
     ) -> Self {
         let mut engine = Self {
             config,
@@ -44,6 +47,7 @@ impl Engine {
             bar_buffers: bar_cache,
             order_books: HashMap::new(),
             started_at: Instant::now(),
+            status_cache,
         };
         // Init signal engine after self.config is set
         engine.signal = engine.config.signal.as_ref().filter(|s| s.enabled).map(|sc| {
@@ -172,6 +176,11 @@ impl Engine {
             }
         }
         self.submit_orders(all_orders).await?;
+
+        // Update shared status cache for API access
+        let statuses: Vec<_> = self.strategies.iter().map(|s| s.status()).collect();
+        self.status_cache.update(statuses).await;
+
         Ok(())
     }
 
