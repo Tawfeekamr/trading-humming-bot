@@ -183,6 +183,7 @@ mod tests {
     use crate::connector::Connector;
     use crate::connector::paper::PaperTradeConnector;
     use crate::bar_cache::BarCache;
+    use crate::strategy::status_cache::StrategyStatusCache;
 
     use crate::api::server::{AppState, create_router};
 
@@ -190,7 +191,7 @@ mod tests {
         let mut balances = HashMap::new();
         balances.insert("USDT".to_string(), 10000.0);
         let connector = Arc::new(PaperTradeConnector::new(balances)) as Arc<dyn Connector>;
-        create_router(AppState::new(connector, BarCache::new()))
+        create_router(AppState::new(connector, BarCache::new(), StrategyStatusCache::new()))
     }
 
     #[tokio::test]
