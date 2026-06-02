@@ -76,8 +76,8 @@ class RustEngineAdapter(ExecutionAdapter):
             "symbol": symbol,
             "side": order.side.upper(),
             "order_type": order.order_type.capitalize(),
-            "price": order.price,
-            "quantity": order.quantity,
+            "price": float(order.price),
+            "quantity": float(order.quantity),
             "time_in_force": "Gtc",
             "client_order_id": order.client_order_id or None,
         }
