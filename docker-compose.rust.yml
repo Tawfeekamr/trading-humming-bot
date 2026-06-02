@@ -16,6 +16,8 @@ services:
     environment:
       - RUST_LOG=${RUST_LOG:-info}
       - API_PORT=3030
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
     healthcheck:
       test: ["CMD", "test", "-f", "/proc/1/cmdline"]
       interval: 30s
