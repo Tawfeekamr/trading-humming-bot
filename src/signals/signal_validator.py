@@ -60,12 +60,18 @@ class SignalValidator:
         if entry is None or entry <= 0:
             return False, "Invalid entry price"
 
-        # Stop-loss distance check
+        # Stop-loss distance check — auto-tighten if slightly over max
         if signal.stop_loss >= entry:
             return False, f"SL {signal.stop_loss} >= entry {entry}"
         sl_distance = (entry - signal.stop_loss) / entry * 100
         if sl_distance > self._max_sl_distance_pct:
-            return False, f"SL distance {sl_distance:.1f}% > max {self._max_sl_distance_pct}%"
+            # Auto-tighten SL to max allowed distance instead of rejecting
+            new_sl = round(entry * (1 - self._max_sl_distance_pct / 100), 6)
+            logger.warning(
+                f"SL auto-tightened for {signal.pair}: {signal.stop_loss} "
+                f"({sl_distance:.1f}% from entry) → {new_sl} ({self._max_sl_distance_pct}%)"
+            )
+            signal.stop_loss = new_sl
 
         # Risk:reward ratio check (using TP3 if available, else TP2, else TP1)
         risk = entry - signal.stop_loss
