@@ -63,8 +63,7 @@ jobs:
               "cd /home/ec2-user/trading-humming-bot && mkdir -p data logs models",
               "df -h / 2>&1",
               "cd /home/ec2-user/trading-humming-bot && DOCKER_BUILDKIT=1 docker compose -f docker-compose.rust.yml build --no-cache rust-bot 2>&1",
-              "cd /home/ec2-user/trading-humming-bot && docker compose -f docker-compose.rust.yml build signal-listener 2>&1 || echo 'WARN: signal-listener build skipped, using existing image'",
-              "cd /home/ec2-user/trading-humming-bot && docker compose -f docker-compose.rust.yml up -d --force-recreate --remove-orphans 2>&1",
+              "cd /home/ec2-user/trading-humming-bot && docker compose -f docker-compose.rust.yml up -d --build --force-recreate --remove-orphans 2>&1",
               "sleep 10 && cd /home/ec2-user/trading-humming-bot && docker compose -f docker-compose.rust.yml ps 2>&1",
               "docker image prune -af 2>&1 || true"
             ]' \
