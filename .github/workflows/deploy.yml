@@ -9,6 +9,7 @@ env:
   PYTHON_VERSION: "3.12"
   AWS_REGION: "ap-northeast-1"
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  REGISTRY: ghcr.io
 
 jobs:
   test:
@@ -37,11 +38,56 @@ jobs:
       - name: Run Python unit tests
         run: pytest tests/ -v --tb=short
 
-  deploy:
-    name: Deploy to AWS Tokyo
+  build-and-push:
+    name: Build & Push Images
     needs: test
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push Rust bot
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.rust
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/tawfeekamr/trading-bot:latest
+            ${{ env.REGISTRY }}/tawfeekamr/trading-bot:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push Signal listener
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.hybrid
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/tawfeekamr/trading-signal-listener:latest
+            ${{ env.REGISTRY }}/tawfeekamr/trading-signal-listener:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    name: Deploy to AWS Tokyo
+    needs: build-and-push
+    runs-on: ubuntu-latest
 
     steps:
       - name: Configure AWS credentials
@@ -61,20 +107,19 @@ jobs:
               "set -eo pipefail",
               "cd /home/ec2-user/trading-humming-bot && git fetch origin && git reset --hard origin/main 2>&1",
               "cd /home/ec2-user/trading-humming-bot && mkdir -p data logs models",
-              "df -h / 2>&1",
-              "cd /home/ec2-user/trading-humming-bot && DOCKER_BUILDKIT=1 docker compose -f docker-compose.rust.yml build --no-cache rust-bot 2>&1",
-              "cd /home/ec2-user/trading-humming-bot && docker compose -f docker-compose.rust.yml up -d --build --force-recreate --remove-orphans 2>&1",
+              "cd /home/ec2-user/trading-humming-bot && docker compose -f docker-compose.rust.yml pull 2>&1",
+              "cd /home/ec2-user/trading-humming-bot && docker compose -f docker-compose.rust.yml up -d --force-recreate --remove-orphans 2>&1",
               "sleep 10 && cd /home/ec2-user/trading-humming-bot && docker compose -f docker-compose.rust.yml ps 2>&1",
               "docker image prune -af 2>&1 || true"
             ]' \
-            --timeout-seconds 900 \
+            --timeout-seconds 300 \
             --comment "Deploying Rust stack via GitHub Actions" \
             --query "Command.CommandId" \
             --output text)
 
           echo "SSM Command ID: $COMMAND_ID"
 
-          for i in $(seq 1 90); do
+          for i in $(seq 1 30); do
             STATUS=$(aws ssm get-command-invocation \
               --command-id "$COMMAND_ID" \
               --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \

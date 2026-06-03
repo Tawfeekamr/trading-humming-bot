@@ -1,12 +1,11 @@
 # Docker Compose for the Rust trading bot + Python signal listener
-# Usage: docker compose -f docker-compose.rust.yml up -d
+# Images are built in CI and pushed to ghcr.io — EC2 just pulls and runs.
+# Usage: docker compose -f docker-compose.rust.yml pull && docker compose -f docker-compose.rust.yml up -d
 
 services:
   # ── Rust Trading Engine (API server on port 3030) ────────────────
   rust-bot:
-    build:
-      context: .
-      dockerfile: Dockerfile.rust
+    image: ghcr.io/tawfeekamr/trading-bot:latest
     container_name: trading-bot-rust
     restart: unless-stopped
     env_file: .env.rust
@@ -34,9 +33,7 @@ services:
 
   # ── Python Signal Listener (Telegram → DeepSeek → Rust engine) ──
   signal-listener:
-    build:
-      context: .
-      dockerfile: Dockerfile.hybrid
+    image: ghcr.io/tawfeekamr/trading-signal-listener:latest
     container_name: trading-signal-listener
     restart: unless-stopped
     depends_on:

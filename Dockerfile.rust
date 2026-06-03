@@ -1,21 +1,15 @@
 # syntax=docker/dockerfile:1
-# Debug build — verify source copy works correctly
+# Built in GitHub Actions CI and pushed to ghcr.io.
+# EC2 pulls the pre-built image — no local Rust compilation needed.
+
 FROM rust:latest AS builder
 
 RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
 
-# Copy EVERYTHING — no dummy source trick
 COPY trading-engine-core/ ./
 
-# Debug: verify source files
-RUN echo "=== /build/src/ contents ===" && \
-    ls -la src/ && \
-    echo "=== lib.rs first 5 lines ===" && \
-    head -5 src/lib.rs
-
-# Build with cargo registry cache only
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo build --release --bin trading-bot && \
     cp /build/target/release/trading-bot /build/trading-bot
