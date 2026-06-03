@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
-# Optimized Rust build with BuildKit cache mounts for fast incremental rebuilds.
-# First build: ~10 min. Subsequent builds (code-only changes): ~30-60 seconds.
+# Rust build with cargo registry cache mount (fast dependency downloads).
+# Dependency artifacts cached in Docker layers — no stale incremental state.
 #
 # Usage: DOCKER_BUILDKIT=1 docker build -f Dockerfile.rust -t trading-bot-rust-local .
 
@@ -17,9 +17,9 @@ COPY trading-engine-core/Cargo.toml trading-engine-core/Cargo.lock ./
 # 2. Create dummy source so cargo can resolve and cache dependencies
 RUN mkdir src && echo "fn main(){}" > src/main.rs && echo "" > src/lib.rs
 
-# 3. Build dependencies ONLY (cached via BuildKit mount — persists across builds)
+# 3. Build dependencies (cargo registry cached via BuildKit mount)
+#    Artifacts go to Docker layer (not cache mount) to avoid stale incremental state
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/build/target \
     cargo build --release --bin trading-bot 2>/dev/null || true
 
 # 4. Copy real source code (only this layer invalidates on code changes)
@@ -28,9 +28,8 @@ COPY trading-engine-core/src/ ./src/
 # 5. Touch main.rs to invalidate the cached binary from step 3
 RUN touch src/main.rs
 
-# 6. Incremental build — only recompiles changed files (deps are cached)
+# 6. Incremental build — deps cached in Docker layer from step 3
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/build/target \
     cargo build --release --bin trading-bot && \
     cp /build/target/release/trading-bot /build/trading-bot
 
