@@ -97,6 +97,52 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
+      - name: Check EC2 SSM agent health
+        run: |
+          echo "=== Checking instance status ==="
+          aws ec2 describe-instance-status \
+            --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
+            --query 'InstanceStatuses[0].{State:InstanceState.Name, System:SystemStatus.Status, Instance:InstanceStatus.Status}' \
+            --output table 2>&1 || true
+
+          echo "=== Testing SSM agent ==="
+          TEST_ID=$(aws ssm send-command \
+            --document-name "AWS-RunShellScript" \
+            --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
+            --region "${{ env.AWS_REGION }}" \
+            --parameters commands='["echo SSM_ALIVE"]' \
+            --timeout-seconds 30 \
+            --comment "SSM health check" \
+            --query "Command.CommandId" \
+            --output text)
+          echo "Test command: $TEST_ID"
+
+          for i in $(seq 1 6); do
+            STATUS=$(aws ssm get-command-invocation \
+              --command-id "$TEST_ID" \
+              --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
+              --query "Status" \
+              --output text 2>/dev/null || echo "Pending")
+            echo "Health check attempt $i: $STATUS"
+            if [ "$STATUS" = "Success" ]; then
+              echo "SSM agent is healthy"
+              break
+            elif [ "$STATUS" = "Failed" ]; then
+              echo "SSM agent unhealthy — attempting restart via EC2 Systems Manager"
+              # Try restarting the SSM agent using AWS-RunShellScript with a restart command
+              RESTART_ID=$(aws ssm send-command \
+                --document-name "AWS-RestartSSMAgent" \
+                --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
+                --region "${{ env.AWS_REGION }}" \
+                --query "Command.CommandId" \
+                --output text 2>/dev/null || echo "restart-failed")
+              echo "Restart command: $RESTART_ID"
+              sleep 30
+              break
+            fi
+            sleep 5
+          done
+
       - name: Deploy via SSM
         run: |
           COMMAND_ID=$(aws ssm send-command \
