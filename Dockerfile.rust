@@ -1,0 +1,42 @@
+# syntax=docker/dockerfile:1
+# Optimized Rust build with BuildKit cache mounts for fast incremental rebuilds.
+# First build: ~10 min. Subsequent builds (code-only changes): ~30-60 seconds.
+#
+# Usage: DOCKER_BUILDKIT=1 docker build -f Dockerfile.rust -t trading-bot-rust-local .
+
+FROM rust:latest AS builder
+
+# Install system deps (cached layer — rarely changes)
+RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+# 1. Copy only dependency files first (cached unless Cargo.toml changes)
+COPY trading-engine-core/Cargo.toml trading-engine-core/Cargo.lock ./
+
+# 2. Create dummy source so cargo can resolve and cache dependencies
+RUN mkdir src && echo "fn main(){}" > src/main.rs && echo "" > src/lib.rs
+
+# 3. Build dependencies ONLY (cached via BuildKit mount — persists across builds)
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/build/target \
+    cargo build --release --bin trading-bot 2>/dev/null || true
+
+# 4. Copy real source code (only this layer invalidates on code changes)
+COPY trading-engine-core/src/ ./src/
+
+# 5. Touch main.rs to invalidate the cached binary from step 3
+RUN touch src/main.rs
+
+# 6. Incremental build — only recompiles changed files (deps are cached)
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/build/target \
+    cargo build --release --bin trading-bot && \
+    cp /build/target/release/trading-bot /build/trading-bot
+
+# Runtime image — minimal
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y ca-certificates libssl3 curl && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /build/trading-bot /usr/local/bin/trading-bot
+WORKDIR /app
+CMD ["trading-bot"]
