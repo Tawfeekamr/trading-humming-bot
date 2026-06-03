@@ -402,27 +402,52 @@ class TelegramCommandHandler:
                     "•••"
                 ]
 
-                # Get capital info from CapitalManager
-                total_capital = getattr(self.strategy, '_capital_mgr', None)
-                if total_capital:
-                    capital_info = f"💰 Capital: ${total_capital.total_capital:,.0f} | Available: ${total_capital.available:,.0f}"
-                else:
-                    capital_info = "💰 Capital: N/A"
+                # Get capital info — try Rust API capital, fallback to config
+                capital_info = "💰 Capital: N/A"
+                trend_cap = getattr(self.strategy, '_trend_capital', 0)
+                grid_pnl = getattr(self.strategy, 'grid_pnl', {})
+                total_grid_pnl = sum(grid_pnl.values()) if grid_pnl else 0
+                trend_statuses = getattr(self.strategy, '_trend_statuses', {})
+                total_trend_pnl = sum(ts.get("pnl", 0) for ts in trend_statuses.values()) if trend_statuses else 0
+                g_sign = "+" if total_grid_pnl >= 0 else ""
+                t_sign = "+" if total_trend_pnl >= 0 else ""
+                capital_info = (
+                    f"💰 Grid P&L: {g_sign}${total_grid_pnl:.2f} | "
+                    f"Trend P&L: {t_sign}${total_trend_pnl:.2f}"
+                )
 
-                # Show each pair's grid state
+                # Show each pair's grid state (from Rust engine API via telegram_poll_loop)
                 grid_order_trackers = getattr(self.strategy, 'grid_order_trackers', {})
                 for symbol, engine in self.strategy.pairs.items():
                     state_machine = self.strategy.state_machines.get(symbol)
-                    grid_manager = self.strategy.grid_managers.get(symbol)
                     per_pair_tracker = grid_order_trackers.get(symbol)
 
-                    if state_machine and grid_manager:
+                    if state_machine:
                         state = state_machine.state.value
                         pending = per_pair_tracker.total_pending if per_pair_tracker else 0
-                        lines.append(f"{engine.display_pair} | Grid: <b>{state}</b> | Pending: {pending}")
+                        pair_pnl = grid_pnl.get(symbol, 0) if grid_pnl else 0
+                        sign = "+" if pair_pnl >= 0 else ""
+                        lines.append(
+                            f"🤖 {engine.display_pair} | Grid: <b>{state}</b> | "
+                            f"P&L: {sign}${pair_pnl:.2f} | Pending: {pending}"
+                        )
+
+                # Show trend status per pair from Rust API
+                for symbol, engine in self.strategy.pairs.items():
+                    ts = trend_statuses.get(symbol)
+                    if ts:
+                        t_state = ts.get("state", "WAITING")
+                        t_pnl = ts.get("pnl", 0)
+                        t_sign = "+" if t_pnl >= 0 else ""
+                        lines.append(
+                            f"📈 {engine.display_pair} | Trend: <b>{t_state}</b> | "
+                            f"P&L: {t_sign}${t_pnl:.2f}"
+                        )
 
                 lines.append("•••")
                 lines.append(capital_info)
+                if trend_cap:
+                    lines.append(f"💰 Trend Capital: ${trend_cap:,.0f}")
 
                 logger.info(f"Telegram /status response: multi-pair mode with {len(self.strategy.pairs)} pairs")
                 update.message.reply_text("\n".join(lines), parse_mode="HTML")
