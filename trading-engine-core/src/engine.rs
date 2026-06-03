@@ -167,7 +167,7 @@ impl Engine {
 
             let ctx = TickContext {
                 order_book,
-                recent_bars: self.bar_buffers.get_exact(&pair).await.unwrap_or_default(),
+                recent_bars: self.bar_buffers.get(&pair, 500).await,
                 balances,
                 open_orders: Vec::new(),
                 regime: None,
@@ -249,7 +249,8 @@ impl Engine {
 
         for strategy in &mut self.strategies {
             let pair = strategy.trading_pair().to_string();
-            if let Some(bars) = self.bar_buffers.get_exact(&pair).await {
+            let bars = self.bar_buffers.get(&pair, 500).await;
+            if !bars.is_empty() {
                 if bars.len() >= 10 {
                     info!("Replaying {} bars to warm up {} on {}", bars.len(), strategy.name(), pair);
                     let balances = std::collections::HashMap::new();
