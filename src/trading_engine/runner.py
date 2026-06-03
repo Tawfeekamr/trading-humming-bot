@@ -303,6 +303,8 @@ class TradingRunner:
                     base_asset=pair.split("-")[0],
                 )
 
+            trend_capital = self._config.get("trend", {}).get("capital", 0)
+
             proxy = RunnerProxy(
                 env=os.environ.get("ENV", "testnet"),
                 pairs=pairs,
@@ -310,6 +312,9 @@ class TradingRunner:
                 grid_order_trackers=grid_order_trackers,
                 _position_managers=position_managers,
                 _trend_journal=None,
+                _trend_manager=True,          # sentinel so /trend_status doesn't bail
+                _trend_statuses={},            # populated by poll loop from Rust API
+                _trend_capital=trend_capital,
                 _signal_engine=signal_engine,
                 _last_price={},
                 _ml_classifier=None,
@@ -364,6 +369,7 @@ class TradingRunner:
                                 pnl = st.get("pnl", 0)
                                 orders = st.get("open_orders", 0)
                                 name = st.get("name", "")
+                                details = st.get("details", "")
                                 if name == "grid":
                                     proxy.state_machines[pair] = SimpleNamespace(
                                         state=SimpleNamespace(value=state)
@@ -372,6 +378,13 @@ class TradingRunner:
                                         total_pending=orders
                                     )
                                     proxy.grid_pnl = {**getattr(proxy, 'grid_pnl', {}), pair: pnl}
+                                elif name == "trend":
+                                    proxy._trend_statuses[pair] = {
+                                        "state": state,
+                                        "pnl": pnl,
+                                        "open_orders": orders,
+                                        "details": details,
+                                    }
                     except Exception:
                         pass
                 # Poll Telegram commands
