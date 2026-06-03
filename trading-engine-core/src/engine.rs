@@ -124,10 +124,14 @@ impl Engine {
                         timestamp: chrono::Utc::now().timestamp_millis(),
                     });
                     self.tick_strategies().await?;
+                    self.process_paper_fills().await?;
                 }
                 WsEvent::Kline { symbol, bar, is_closed } => {
                     if is_closed {
-                        self.bar_buffers.push_closed_bar(symbol, bar).await;
+                        // WebSocket uses "DOGEUSDT" format; config uses "DOGE-USDT".
+                        let pair_key = self.find_pair_for_symbol(&symbol)
+                            .unwrap_or(symbol);
+                        self.bar_buffers.push_closed_bar(pair_key, bar).await;
                         // Persist bar buffers every closed candle
                         self.save_bar_buffers().await;
                     }
@@ -270,6 +274,60 @@ impl Engine {
                 }
             }
         }
+    }
+
+    /// For paper trading: attempt to fill open orders at current mid-price,
+    /// then dispatch fills to strategies via on_fill().
+    async fn process_paper_fills(&mut self) -> Result<()> {
+        // Collect fills from all orderbooks
+        let mut fills_by_pair: Vec<(String, Fill)> = Vec::new();
+        for (symbol, ob) in &self.order_books {
+            if let Some(mid_price) = ob.mid_price() {
+                let pair_fills = self.connector.try_fill_at_price(mid_price).await;
+                for fill in pair_fills {
+                    fills_by_pair.push((symbol.clone(), fill));
+                }
+            }
+        }
+
+        if fills_by_pair.is_empty() {
+            return Ok(());
+        }
+
+        for (ob_symbol, fill) in &fills_by_pair {
+            info!("Paper fill: {} {} {} @ ${:.2}",
+                fill.side, fill.quantity, fill.symbol, fill.price);
+        }
+
+        // Dispatch fills to strategies — collect resulting orders first to avoid borrow conflict
+        let mut all_orders = Vec::new();
+        for (ob_symbol, fill) in &fills_by_pair {
+            let ob_norm = ob_symbol.replace("-", "");
+            let fill_norm = fill.symbol.replace("-", "");
+            for strategy in &mut self.strategies {
+                let strategy_norm = strategy.trading_pair().replace("-", "");
+                if strategy_norm == fill_norm || strategy_norm == ob_norm {
+                    match strategy.on_fill(fill).await {
+                        Ok(orders) => all_orders.extend(orders),
+                        Err(e) => warn!("Strategy {} fill error: {}", strategy.name(), e),
+                    }
+                }
+            }
+        }
+        self.submit_orders(all_orders).await?;
+
+        Ok(())
+    }
+
+    /// Given a WebSocket symbol like "DOGEUSDT", find the config pair key "DOGE-USDT".
+    fn find_pair_for_symbol(&self, ws_symbol: &str) -> Option<String> {
+        let ws_upper = ws_symbol.to_uppercase();
+        for (pair_key, _) in self.config.pairs.iter() {
+            if pair_key.replace('-', "").to_uppercase() == ws_upper {
+                return Some(pair_key.clone());
+            }
+        }
+        None
     }
 
     /// Rough equity estimate from order book mid-price × USDT balance

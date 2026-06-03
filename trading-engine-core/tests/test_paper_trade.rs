@@ -1,4 +1,5 @@
-use trading_engine_core::connector::paper::PaperTradeEngine;
+use trading_engine_core::connector::paper::{PaperTradeEngine, PaperTradeConnector};
+use trading_engine_core::connector::Connector;
 use trading_engine_core::connector::types::*;
 use trading_engine_core::models::order::OrderSide;
 use std::collections::HashMap;
@@ -119,4 +120,55 @@ fn test_cancel_order() {
 
     engine.cancel_order(&order.order_id).unwrap();
     assert_eq!(engine.open_order_count(), 0);
+}
+
+#[tokio::test]
+async fn test_connector_try_fill_at_price() {
+    let mut balances = HashMap::new();
+    balances.insert("USDT".to_string(), 10000.0);
+    let connector = PaperTradeConnector::new(balances);
+
+    // Place a limit buy order
+    let req = OrderRequest {
+        symbol: "BTCUSDT".to_string(),
+        side: OrderSide::Buy,
+        order_type: OrderTypeReq::Limit,
+        price: Some(50000.0),
+        quantity: 0.1,
+        time_in_force: Some(TimeInForceReq::Gtc),
+        client_order_id: Some("test_connector_fill".to_string()),
+    };
+    connector.place_order(&req).await.unwrap();
+
+    // Price too high — no fills
+    let fills = connector.try_fill_at_price(51000.0).await;
+    assert!(fills.is_empty());
+
+    // Price drops below limit — should fill
+    let fills = connector.try_fill_at_price(49000.0).await;
+    assert_eq!(fills.len(), 1);
+    assert_eq!(fills[0].price, 50000.0);
+}
+
+#[tokio::test]
+async fn test_connector_klines_without_market_data() {
+    let mut balances = HashMap::new();
+    balances.insert("USDT".to_string(), 10000.0);
+    let connector = PaperTradeConnector::new(balances);
+
+    // Without market_data, returns empty
+    let bars = connector.get_klines("BTCUSDT", "1h", 10).await.unwrap();
+    assert!(bars.is_empty());
+}
+
+#[tokio::test]
+async fn test_connector_orderbook_without_market_data() {
+    let mut balances = HashMap::new();
+    balances.insert("USDT".to_string(), 10000.0);
+    let connector = PaperTradeConnector::new(balances);
+
+    // Without market_data, returns empty orderbook
+    let ob = connector.get_order_book("BTCUSDT", 10).await.unwrap();
+    assert!(ob.bids.is_empty());
+    assert!(ob.asks.is_empty());
 }

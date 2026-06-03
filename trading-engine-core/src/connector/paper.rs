@@ -1,6 +1,7 @@
 use anyhow::{Result, anyhow};
 use std::collections::HashMap;
 use crate::connector::types::*;
+use crate::connector::binance_rest::BinanceRest;
 use crate::models::order::OrderSide;
 
 const FEE_RATE: f64 = 0.001; // 0.1% per side
@@ -149,12 +150,29 @@ impl PaperTradeEngine {
 /// Connector trait implementation for paper trading
 pub struct PaperTradeConnector {
     engine: std::sync::Mutex<PaperTradeEngine>,
+    market_data: Option<BinanceRest>,
 }
 
 impl PaperTradeConnector {
+    /// Paper-only constructor (no real market data). Kept for backward compat.
     pub fn new(balances: std::collections::HashMap<String, f64>) -> Self {
         Self {
             engine: std::sync::Mutex::new(PaperTradeEngine::new(balances)),
+            market_data: None,
+        }
+    }
+
+    /// Paper trading with real Binance market data for klines/orderbook.
+    /// Trading operations (place/cancel/balances) remain paper/simulated.
+    pub fn with_market_data(
+        balances: std::collections::HashMap<String, f64>,
+        api_key: &str,
+        api_secret: &str,
+        testnet: bool,
+    ) -> Self {
+        Self {
+            engine: std::sync::Mutex::new(PaperTradeEngine::new(balances)),
+            market_data: Some(BinanceRest::new(api_key, api_secret, testnet)),
         }
     }
 }
@@ -185,16 +203,28 @@ impl crate::connector::Connector for PaperTradeConnector {
     }
 
     async fn get_order_book(&self, symbol: &str, limit: u16) -> anyhow::Result<OrderBook> {
-        Ok(OrderBook {
-            symbol: symbol.to_string(),
-            bids: Vec::new(),
-            asks: Vec::new(),
-            timestamp: 0,
-        })
+        if let Some(ref md) = self.market_data {
+            md.get_order_book(symbol, limit).await
+        } else {
+            Ok(OrderBook {
+                symbol: symbol.to_string(),
+                bids: Vec::new(),
+                asks: Vec::new(),
+                timestamp: 0,
+            })
+        }
     }
 
-    async fn get_klines(&self, _symbol: &str, _interval: &str, _limit: u16) -> anyhow::Result<Vec<crate::models::bar::Bar>> {
-        // Paper trade has no real kline data — return empty
-        Ok(Vec::new())
+    async fn get_klines(&self, symbol: &str, interval: &str, limit: u16) -> anyhow::Result<Vec<crate::models::bar::Bar>> {
+        if let Some(ref md) = self.market_data {
+            md.get_klines(symbol, interval, limit).await
+        } else {
+            Ok(Vec::new())
+        }
+    }
+
+    async fn try_fill_at_price(&self, market_price: f64) -> Vec<Fill> {
+        let mut engine = self.engine.lock().unwrap();
+        engine.try_fill_at_price(market_price)
     }
 }
