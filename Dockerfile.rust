@@ -1,34 +1,21 @@
 # syntax=docker/dockerfile:1
-# Rust build with cargo registry cache mount (fast dependency downloads).
-# Dependency artifacts cached in Docker layers — no stale incremental state.
-#
-# Usage: DOCKER_BUILDKIT=1 docker build -f Dockerfile.rust -t trading-bot-rust-local .
-
+# Debug build — verify source copy works correctly
 FROM rust:latest AS builder
 
-# Install system deps (cached layer — rarely changes)
 RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
 
-# 1. Copy only dependency files first (cached unless Cargo.toml changes)
-COPY trading-engine-core/Cargo.toml trading-engine-core/Cargo.lock ./
+# Copy EVERYTHING — no dummy source trick
+COPY trading-engine-core/ ./
 
-# 2. Create dummy source so cargo can resolve and cache dependencies
-RUN mkdir src && echo "fn main(){}" > src/main.rs && echo "" > src/lib.rs
+# Debug: verify source files
+RUN echo "=== /build/src/ contents ===" && \
+    ls -la src/ && \
+    echo "=== lib.rs first 5 lines ===" && \
+    head -5 src/lib.rs
 
-# 3. Build dependencies (cargo registry cached via BuildKit mount)
-#    Artifacts go to Docker layer (not cache mount) to avoid stale incremental state
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    cargo build --release --bin trading-bot 2>/dev/null || true
-
-# 4. Copy real source code (only this layer invalidates on code changes)
-COPY trading-engine-core/src/ ./src/
-
-# 5. Touch main.rs to invalidate the cached binary from step 3
-RUN touch src/main.rs
-
-# 6. Incremental build — deps cached in Docker layer from step 3
+# Build with cargo registry cache only
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo build --release --bin trading-bot && \
     cp /build/target/release/trading-bot /build/trading-bot
