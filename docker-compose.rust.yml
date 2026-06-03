@@ -4,7 +4,9 @@
 services:
   # ── Rust Trading Engine (API server on port 3030) ────────────────
   rust-bot:
-    image: ghcr.io/tawfeekamr/trading-bot:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.rust
     container_name: trading-bot-rust
     restart: unless-stopped
     env_file: .env.rust

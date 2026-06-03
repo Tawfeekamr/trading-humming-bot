@@ -60,8 +60,8 @@ jobs:
             --parameters commands='[
               "cd /home/ec2-user/trading-humming-bot && git fetch origin && git reset --hard origin/main 2>&1",
               "cd /home/ec2-user/trading-humming-bot && mkdir -p data logs models",
-              "cd /home/ec2-user/trading-humming-bot && docker compose -f docker-compose.rust.yml pull rust-bot 2>&1 || true",
-              "cd /home/ec2-user/trading-humming-bot && docker compose -f docker-compose.rust.yml up -d --build 2>&1",
+              "cd /home/ec2-user/trading-humming-bot && DOCKER_BUILDKIT=1 docker compose -f docker-compose.rust.yml build rust-bot 2>&1 | tail -5",
+              "cd /home/ec2-user/trading-humming-bot && docker compose -f docker-compose.rust.yml up -d --force-recreate 2>&1",
               "docker image prune -af 2>&1 || true"
             ]' \
             --timeout-seconds 900 \
