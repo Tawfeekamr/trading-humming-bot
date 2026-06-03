@@ -427,9 +427,11 @@ class TelegramCommandHandler:
                         pending = per_pair_tracker.total_pending if per_pair_tracker else 0
                         pair_pnl = grid_pnl.get(symbol, 0) if grid_pnl else 0
                         sign = "+" if pair_pnl >= 0 else ""
+                        grid_detail = getattr(state_machine, 'details', '')
+                        detail_line = f"\n  <i>{grid_detail}</i>" if grid_detail and state == "Paused" else ""
                         lines.append(
                             f"🤖 {engine.display_pair} | Grid: <b>{state}</b> | "
-                            f"P&L: {sign}${pair_pnl:.2f} | Pending: {pending}"
+                            f"P&L: {sign}${pair_pnl:.2f} | Pending: {pending}{detail_line}"
                         )
 
                 # Show trend status per pair from Rust API
@@ -438,10 +440,12 @@ class TelegramCommandHandler:
                     if ts:
                         t_state = ts.get("state", "WAITING")
                         t_pnl = ts.get("pnl", 0)
+                        t_details = ts.get("details", "")
                         t_sign = "+" if t_pnl >= 0 else ""
+                        trend_detail = f"\n  <i>{t_details}</i>" if t_details and t_state == "WAITING" else ""
                         lines.append(
                             f"📈 {engine.display_pair} | Trend: <b>{t_state}</b> | "
-                            f"P&L: {t_sign}${t_pnl:.2f}"
+                            f"P&L: {t_sign}${t_pnl:.2f}{trend_detail}"
                         )
 
                 lines.append("•••")

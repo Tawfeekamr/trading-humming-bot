@@ -372,7 +372,8 @@ class TradingRunner:
                                 details = st.get("details", "")
                                 if name == "grid":
                                     proxy.state_machines[pair] = SimpleNamespace(
-                                        state=SimpleNamespace(value=state)
+                                        state=SimpleNamespace(value=state),
+                                        details=details,
                                     )
                                     proxy.grid_order_trackers[pair] = SimpleNamespace(
                                         total_pending=orders

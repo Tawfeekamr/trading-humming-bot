@@ -537,9 +537,36 @@ impl Strategy for TrendStrategy {
                 unrealized_pnl,
             )
         } else {
+            let diag = if !self.indicators_ready() {
+                "⏳ Indicators warming up (need more bars)".to_string()
+            } else {
+                let ema_fast_val = self.ema_fast.value();
+                let ema_slow_val = self.ema_slow.value();
+                let rsi_val = self.rsi.value();
+
+                let ema_cross = ema_fast_val > ema_slow_val;
+                let trend_filter = ema_cross; // simplified
+                let rsi_range = rsi_val > if self.config.rsi_min > 0.0 { self.config.rsi_min } else { 40.0 }
+                    && rsi_val < if self.config.rsi_max > 0.0 { self.config.rsi_max } else { 70.0 };
+
+                let score = self.evaluate_signals(0.0 /* placeholder */);
+                let min_score = self.config.min_signal_score;
+
+                format!(
+                    "Score: {}/{} | EMA{} | RSI: {:.1}{} | Signals: {}",
+                    score.total, min_score,
+                    if ema_cross { "✅" } else { "❌" },
+                    rsi_val,
+                    if rsi_range { "✅" } else { "❌" },
+                    score.details.iter()
+                        .map(|d| format!("{}(+{})", d.name, d.score))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            };
             (
                 "WAITING".to_string(),
-                "No position — waiting for signal".to_string(),
+                diag,
                 0.0,
             )
         };

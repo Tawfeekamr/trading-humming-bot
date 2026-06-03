@@ -40,6 +40,13 @@ pub struct GridStrategy {
     peak_equity: f64,
     initial_capital: f64,
     current_capital: f64,
+    // Last evaluated indicator values for diagnostics
+    diag_price: f64,
+    diag_rsi: f64,
+    diag_ema200: f64,
+    diag_bb_lower: f64,
+    diag_bb_upper: f64,
+    diag_bars_count: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -70,6 +77,12 @@ impl GridStrategy {
             peak_equity: config.capital_usdt,
             initial_capital: config.capital_usdt,
             current_capital: config.capital_usdt,
+            diag_price: 0.0,
+            diag_rsi: 0.0,
+            diag_ema200: 0.0,
+            diag_bb_lower: 0.0,
+            diag_bb_upper: 0.0,
+            diag_bars_count: 0,
         }
     }
 
@@ -168,6 +181,13 @@ impl GridStrategy {
         ml_regime: i32,
         ml_confidence: f64,
     ) {
+        // Store diagnostics
+        self.diag_price = price;
+        self.diag_rsi = rsi;
+        self.diag_ema200 = ema_200;
+        self.diag_bb_lower = bb_lower;
+        self.diag_bb_upper = bb_upper;
+
         // ML Danger check — immediate pause
         if ml_regime == 2 && ml_confidence >= 0.55 {
             self.state = GridState::Paused;
@@ -263,6 +283,7 @@ impl Strategy for GridStrategy {
         };
 
         // Evaluate grid state using indicators from recent bars
+        self.diag_bars_count = ctx.recent_bars.len();
         if ctx.recent_bars.len() >= 20 {
             let closes: Vec<f64> = ctx.recent_bars.iter().map(|b| b.close).collect();
             let mean = closes.iter().sum::<f64>() / closes.len() as f64;
@@ -416,6 +437,44 @@ impl Strategy for GridStrategy {
             GridState::Disabled => "Disabled",
         };
 
+        let details = if self.state == GridState::Paused && self.diag_bars_count > 0 {
+            let price_ok = self.diag_price > self.diag_ema200;
+            let rsi_ok = self.diag_rsi > 30.0 && self.diag_rsi < 70.0;
+            let bb_ok = self.diag_price > self.diag_bb_lower && self.diag_price < self.diag_bb_upper;
+            format!(
+                "Capital: ${:.2} | Price: ${:.2} | RSI: {:.1} | EMA: ${:.2} | BB: [{:.2}, {:.2}] | Bars: {} | {}{}{}",
+                self.current_capital,
+                self.diag_price,
+                self.diag_rsi,
+                self.diag_ema200,
+                self.diag_bb_lower,
+                self.diag_bb_upper,
+                self.diag_bars_count,
+                if price_ok { "✅" } else { "❌" },
+                if rsi_ok { "✅" } else { "❌" },
+                if bb_ok { "✅" } else { "❌" },
+            )
+        } else if self.state == GridState::Paused && self.diag_bars_count == 0 {
+            format!(
+                "Capital: ${:.2} | ⏳ Warming up (no bars yet)",
+                self.current_capital,
+            )
+        } else if self.state == GridState::Active {
+            format!(
+                "Capital: ${:.2} / ${:.2} (Growth: {:.2}%)",
+                self.current_capital,
+                self.initial_capital,
+                (self.growth_ratio() - 1.0) * 100.0
+            )
+        } else {
+            format!(
+                "Capital: ${:.2} / ${:.2} (Growth: {:.2}%)",
+                self.current_capital,
+                self.initial_capital,
+                (self.growth_ratio() - 1.0) * 100.0
+            )
+        };
+
         StrategyStatus {
             name: self.name().to_string(),
             pair: self.pair.clone(),
@@ -424,12 +483,7 @@ impl Strategy for GridStrategy {
             open_orders: self.orders.len().max(
                 self.grid_layout.as_ref().map(|l| l.buy_levels.len() + l.sell_levels.len()).unwrap_or(0)
             ),
-            details: format!(
-                "Capital: ${:.2} / ${:.2} (Growth: {:.2}%)",
-                self.current_capital,
-                self.initial_capital,
-                (self.growth_ratio() - 1.0) * 100.0
-            ),
+            details,
         }
     }
 
