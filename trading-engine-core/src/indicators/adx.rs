@@ -61,6 +61,11 @@ impl Adx {
     }
 
     pub fn update_bar(&mut self, _open: f64, high: f64, low: f64, close: f64) {
+        // Guard: reject NaN bar data — once NaN enters Wilder smoothing it propagates forever
+        if high.is_nan() || low.is_nan() || close.is_nan() {
+            return;
+        }
+
         self.count += 1;
 
         // Need at least 2 bars to compute directional movement
@@ -111,9 +116,18 @@ impl Adx {
         } else {
             // Wilder smoothing phase
             let p = self.period as f64;
-            self.plus_dm_smooth = self.plus_dm_smooth * (p - 1.0) + plus_dm;
-            self.minus_dm_smooth = self.minus_dm_smooth * (p - 1.0) + minus_dm;
-            self.tr_smooth = self.tr_smooth * (p - 1.0) + tr;
+
+            // Self-heal: if any accumulator became NaN (e.g. from a missed NaN input),
+            // reset and re-seed from current bar to prevent permanent NaN propagation
+            if self.plus_dm_smooth.is_nan() || self.minus_dm_smooth.is_nan() || self.tr_smooth.is_nan() {
+                self.plus_dm_smooth = plus_dm;
+                self.minus_dm_smooth = minus_dm;
+                self.tr_smooth = tr;
+            } else {
+                self.plus_dm_smooth = self.plus_dm_smooth * (p - 1.0) + plus_dm;
+                self.minus_dm_smooth = self.minus_dm_smooth * (p - 1.0) + minus_dm;
+                self.tr_smooth = self.tr_smooth * (p - 1.0) + tr;
+            }
 
             // Update DI
             self.compute_di();
@@ -131,8 +145,12 @@ impl Adx {
                 self.dx_smooth = adx_seed;
                 self.initialized = true;
             } else {
-                // Wilder-smooth ADX
-                self.dx_smooth = (self.dx_smooth * (p - 1.0) + dx) / p;
+                // Self-heal: if ADX smoothing became NaN, re-seed from current DX
+                if self.dx_smooth.is_nan() {
+                    self.dx_smooth = dx;
+                } else {
+                    self.dx_smooth = (self.dx_smooth * (p - 1.0) + dx) / p;
+                }
                 self.adx_value = self.dx_smooth;
             }
         }
@@ -158,7 +176,9 @@ impl Adx {
         }
     }
 
-    pub fn adx(&self) -> f64 { self.adx_value }
+    pub fn adx(&self) -> f64 {
+        if self.adx_value.is_nan() { 0.0 } else { self.adx_value }
+    }
     pub fn plus_di(&self) -> f64 { self.plus_di_value }
     pub fn minus_di(&self) -> f64 { self.minus_di_value }
     pub fn is_initialized(&self) -> bool { self.initialized }
@@ -254,5 +274,51 @@ mod tests {
         assert!(adx.is_initialized());
         assert!(adx.plus_di() > adx.minus_di(),
             "+DI ({}) should be > -DI ({}) in uptrend", adx.plus_di(), adx.minus_di());
+    }
+
+    #[test]
+    fn test_adx_nan_input_rejected() {
+        let mut adx = Adx::new(14);
+        // Feed 40 valid bars to initialize
+        for i in 0..40 {
+            let base = 100.0 + i as f64;
+            adx.update_bar(base, base + 1.0, base - 1.0, base + 0.5);
+        }
+        assert!(adx.is_initialized());
+        let valid_adx = adx.adx();
+        assert!(!valid_adx.is_nan());
+
+        // Feed NaN bars — should be silently rejected
+        adx.update_bar(140.0, f64::NAN, 139.0, 140.5);
+        adx.update_bar(141.0, 142.0, f64::NAN, 141.5);
+        adx.update_bar(142.0, 143.0, 141.0, f64::NAN);
+
+        // ADX should remain valid (not NaN) since NaN bars were skipped
+        assert!(!adx.adx().is_nan(), "ADX should not become NaN after NaN inputs");
+        assert_eq!(adx.adx(), valid_adx, "ADX should be unchanged since NaN bars were rejected");
+    }
+
+    #[test]
+    fn test_adx_self_heal_from_corrupt_smoothing() {
+        let mut adx = Adx::new(14);
+        // Feed 40 valid bars to initialize
+        for i in 0..40 {
+            let base = 100.0 + i as f64;
+            adx.update_bar(base, base + 1.0, base - 1.0, base + 0.5);
+        }
+        assert!(adx.is_initialized());
+
+        // Simulate corruption: manually inject NaN into smooth accumulators
+        adx.plus_dm_smooth = f64::NAN;
+        adx.tr_smooth = f64::NAN;
+
+        // Feed valid bars — self-heal should kick in
+        for i in 0..5 {
+            let base = 150.0 + i as f64;
+            adx.update_bar(base, base + 1.0, base - 1.0, base + 0.5);
+        }
+
+        // ADX should have recovered (not NaN)
+        assert!(!adx.adx().is_nan(), "ADX should self-heal from NaN smoothing state");
     }
 }
