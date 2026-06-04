@@ -131,7 +131,7 @@ jobs:
               break
             elif [ "$STATUS" = "Failed" ]; then
               echo "SSM agent unhealthy — rebooting EC2 instance"
-              aws ec2 reboot-instance --instance-id "${{ secrets.EC2_INSTANCE_ID }}"
+              aws ec2 reboot-instances --instance-ids "${{ secrets.EC2_INSTANCE_ID }}"
               echo "Waiting 60s for instance to reboot and SSM agent to recover..."
               sleep 60
               # Test again after reboot
