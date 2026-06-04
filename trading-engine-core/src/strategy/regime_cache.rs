@@ -30,14 +30,19 @@ pub struct RegimeCache {
     inner: Arc<RwLock<HashMap<String, RegimeEntry>>>,
     file_path: String,
     last_mtime: Arc<RwLock<u64>>,
+    ttl_ms: i64, // Max age in milliseconds; entries older than this return None. 0 = never stale.
 }
 
 impl RegimeCache {
-    pub fn new(file_path: &str) -> Self {
+    /// Create a new RegimeCache.
+    /// `ttl_ms`: max entry age in milliseconds. 0 = no TTL (never stale).
+    /// Recommended: 3× poll interval (e.g., 180_000 for 60s polling).
+    pub fn new(file_path: &str, ttl_ms: i64) -> Self {
         Self {
             inner: Arc::new(RwLock::new(HashMap::new())),
             file_path: file_path.to_string(),
             last_mtime: Arc::new(RwLock::new(0)),
+            ttl_ms,
         }
     }
 
@@ -55,11 +60,20 @@ impl RegimeCache {
     }
 
     /// Get regime for a pair. Returns (regime, confidence).
+    /// Returns None if: pair not found, or entry is older than TTL.
     /// Checks file mtime first — if file changed since last read, reloads.
     pub async fn get(&self, pair: &str) -> Option<(i32, f64)> {
         self.maybe_reload_from_file().await;
         let map = self.inner.read().await;
-        map.get(pair).map(|e| (e.regime, e.confidence))
+        map.get(pair).and_then(|e| {
+            if self.ttl_ms > 0 {
+                let now = chrono::Utc::now().timestamp_millis();
+                if now - e.timestamp > self.ttl_ms {
+                    return None; // Stale — treat as unknown
+                }
+            }
+            Some((e.regime, e.confidence))
+        })
     }
 
     /// Check if file has been modified since last read. If so, reload.
@@ -129,7 +143,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_regime_cache_update_and_get() {
-        let cache = RegimeCache::new("/tmp/test_regime_cache.json");
+        let cache = RegimeCache::new("/tmp/test_regime_cache.json", 0);
         cache.update(&[
             RegimeUpdate { pair: "BTC-USDT".into(), regime: 0, confidence: 0.85 },
             RegimeUpdate { pair: "ETH-USDT".into(), regime: 1, confidence: 0.7 },
@@ -151,14 +165,14 @@ mod tests {
         let _ = std::fs::remove_file(path);
 
         // Write via cache
-        let cache = RegimeCache::new(path);
+        let cache = RegimeCache::new(path, 0);
         cache.update(&[
             RegimeUpdate { pair: "BTC-USDT".into(), regime: 2, confidence: 0.9 },
         ]).await;
         cache.persist().await;
 
         // Load into fresh cache
-        let cache2 = RegimeCache::new(path);
+        let cache2 = RegimeCache::new(path, 0);
         cache2.load_from_file().await;
         let btc = cache2.get("BTC-USDT").await;
         assert_eq!(btc, Some((2, 0.9)));
@@ -168,9 +182,40 @@ mod tests {
 
     #[tokio::test]
     async fn test_regime_cache_no_file_is_ok() {
-        let cache = RegimeCache::new("/tmp/nonexistent_regime.json");
+        let cache = RegimeCache::new("/tmp/nonexistent_regime.json", 0);
         cache.load_from_file().await; // should not panic
         let result = cache.get("BTC-USDT").await;
         assert_eq!(result, None);
+    }
+
+    #[tokio::test]
+    async fn test_regime_cache_ttl_expiry() {
+        let cache = RegimeCache::new("/tmp/test_regime_ttl.json", 5000); // 5s TTL
+
+        // Insert entry with timestamp 10 seconds ago
+        let mut map = cache.inner.write().await;
+        map.insert("BTC-USDT".to_string(), RegimeEntry {
+            regime: 0,
+            confidence: 0.9,
+            timestamp: chrono::Utc::now().timestamp_millis() - 10_000, // 10s ago
+        });
+        drop(map);
+
+        // Entry should be expired → None
+        let result = cache.get("BTC-USDT").await;
+        assert_eq!(result, None);
+    }
+
+    #[tokio::test]
+    async fn test_regime_cache_ttl_fresh_entry() {
+        let cache = RegimeCache::new("/tmp/test_regime_ttl_fresh.json", 180_000); // 3min TTL
+
+        cache.update(&[
+            RegimeUpdate { pair: "BTC-USDT".into(), regime: 1, confidence: 0.8 },
+        ]).await;
+
+        // Just inserted — should be fresh
+        let result = cache.get("BTC-USDT").await;
+        assert_eq!(result, Some((1, 0.8)));
     }
 }

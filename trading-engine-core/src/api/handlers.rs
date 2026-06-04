@@ -218,7 +218,7 @@ mod tests {
         let mut balances = HashMap::new();
         balances.insert("USDT".to_string(), 10000.0);
         let connector = Arc::new(PaperTradeConnector::new(balances)) as Arc<dyn Connector>;
-        let regime_cache = RegimeCache::new("data/regime_cache.json");
+        let regime_cache = RegimeCache::new("data/regime_cache.json", 180_000); // 3min TTL = 3×60s poll
         create_router(AppState::new(connector, BarCache::new(), StrategyStatusCache::new(), regime_cache))
     }
 

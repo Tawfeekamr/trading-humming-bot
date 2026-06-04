@@ -77,7 +77,7 @@ async fn async_main() -> Result<()> {
 
     let bar_cache = trading_engine_core::bar_cache::BarCache::new();
     let status_cache = trading_engine_core::strategy::status_cache::StrategyStatusCache::new();
-    let regime_cache = trading_engine_core::strategy::regime_cache::RegimeCache::new("data/regime_cache.json");
+    let regime_cache = trading_engine_core::strategy::regime_cache::RegimeCache::new("data/regime_cache.json", 180_000); // 3min TTL = 3×60s poll
     let mut engine = trading_engine_core::engine::Engine::new(config, connector.clone(), risk, telegram, bar_cache.clone(), status_cache.clone(), regime_cache.clone());
 
     // Add strategies for each enabled pair
