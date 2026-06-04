@@ -57,9 +57,14 @@ def calculate_technical_features(df: pd.DataFrame) -> pd.DataFrame:
     df['vwap'] = tp_vol.rolling(window=50, min_periods=1).sum() / df['volume'].rolling(window=50, min_periods=1).sum()
     df['distance_to_vwap'] = (df['close'] - df['vwap']) / (df['vwap'] + 1e-8)
 
-    # On-Balance Volume — 14-period rate of change (normalized)
+    # On-Balance Volume — 14-period differencing (z-scored for stability)
+    # Using pct_change on cumulative OBV is fragile near zero crossings.
+    # Differencing OBV gives volume-flow change, then z-score normalizes it.
     df['obv'] = ta.obv(df['close'], df['volume'])
-    df['obv_roc_14'] = df['obv'].pct_change(14).replace([np.inf, -np.inf], np.nan)
+    obv_diff = df['obv'].diff(14)
+    obv_mean = obv_diff.rolling(window=50, min_periods=14).mean()
+    obv_std = obv_diff.rolling(window=50, min_periods=14).std()
+    df['obv_roc_14'] = (obv_diff - obv_mean) / (obv_std + 1e-8)
     
     # Volume Features
     df['volume_sma_20'] = df['volume'].rolling(window=20).mean()
