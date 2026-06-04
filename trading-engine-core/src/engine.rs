@@ -230,12 +230,13 @@ impl Engine {
                 match serde_json::from_str::<std::collections::HashMap<String, Vec<Bar>>>(&content) {
                     Ok(buffers) => {
                         let count = buffers.len();
-                        for (pair, bars) in buffers {
+                        for (pair, bars) in &buffers {
                             let n = bars.len();
                             info!("Loaded {} cached bars for {}", n, pair);
                             loaded.insert(pair.clone());
-                            self.bar_buffers.set(pair, bars).await;
                         }
+                        // Use bulk_load which deduplicates no-dash/with-dash entries
+                        self.bar_buffers.bulk_load(buffers).await;
                         info!("Bar buffers restored from disk ({} pairs)", count);
                     }
                     Err(e) => warn!("Failed to parse bar buffers: {}", e),
