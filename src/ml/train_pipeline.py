@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from sklearn.metrics import classification_report, accuracy_score
+from sklearn.metrics import classification_report, accuracy_score, confusion_matrix
 import argparse
 import os
 import sys
@@ -187,6 +187,43 @@ def main():
     print(f"Accuracy: {accuracy_score(y_test, y_pred):.4f}")
     target_names = ["Ranging", "Trending", "Danger"] if n_classes == 3 else ["Ranging", "Trending"]
     print(classification_report(y_test, y_pred, target_names=target_names))
+
+    # Confusion matrix
+    cm = confusion_matrix(y_test, y_pred, labels=[0, 1, 2] if n_classes == 3 else [0, 1])
+    print("\n--- Confusion Matrix (rows=true, cols=predicted) ---")
+    labels_str = ["Ranging", "Trending", "Danger"] if n_classes == 3 else ["Ranging", "Trending"]
+    header = "true\\pred".ljust(12) + "  ".join(f"{l:>10s}" for l in labels_str)
+    print(f"  {header}")
+    for i, row in enumerate(cm):
+        row_str = "  ".join(f"{v:>10d}" for v in row)
+        print(f"  {labels_str[i]:<12s} {row_str}")
+
+    # Regime transition accuracy
+    if len(y_test) > 1:
+        y_true_arr = y_test.values if hasattr(y_test, 'values') else y_test
+        y_pred_arr = y_pred
+        transition_mask = y_true_arr[1:] != y_true_arr[:-1]
+        n_transitions = transition_mask.sum()
+        if n_transitions > 0:
+            transition_correct = (y_pred_arr[1:][transition_mask] == y_true_arr[1:][transition_mask]).sum()
+            transition_acc = transition_correct / n_transitions
+            print(f"\n--- Regime Transition Accuracy ---")
+            print(f"  Transitions detected: {n_transitions}/{len(y_true_arr)-1} bars")
+            print(f"  Transition accuracy:  {transition_acc:.4f} ({transition_correct}/{n_transitions})")
+        else:
+            print(f"\n--- Regime Transition Accuracy ---")
+            print(f"  No regime transitions in test set (all one class)")
+
+    # DANGER-specific metrics
+    if n_classes == 3 and 2 in y_test.values:
+        danger_mask = y_test == 2
+        n_danger = danger_mask.sum()
+        danger_correct = (y_pred[danger_mask.values] == 2).sum()
+        print(f"\n--- DANGER Class Breakdown ---")
+        print(f"  DANGER samples in test: {n_danger}")
+        print(f"  DANGER recall:          {danger_correct}/{n_danger} ({danger_correct/n_danger:.2%})")
+        danger_fn = (y_pred[danger_mask.values] != 2).sum()
+        print(f"  DANGER false negatives: {danger_fn} (missed danger events)")
 
     # Show per-feature importance
     importances = list(zip(feature_cols, classifier.model.feature_importances_))
