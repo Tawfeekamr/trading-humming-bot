@@ -207,8 +207,13 @@ class SignalEngine:
 
         # Parse with GLM
         signal = self._parser.parse(text)
-        logger.info(f"Signal parsed: action={signal.action.value}, pair={signal.pair}, "
-                     f"reasoning={signal.parse_reasoning[:80]}")
+        if signal.action == SignalAction.NOT_A_SIGNAL:
+            logger.debug(f"[{channel_name}] Not a signal: {signal.parse_reasoning[:60]}")
+        else:
+            logger.info(f"[{channel_name}] {signal.action.value} {signal.pair or '?'} "
+                        f"| entry={signal.entry_low}-{signal.entry_high} "
+                        f"| SL={signal.stop_loss} | TPs={signal.take_profits} "
+                        f"| score={signal.quality_score}/10")
 
         # Log raw message for audit
         self._journal.log_raw_message(

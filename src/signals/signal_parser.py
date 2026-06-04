@@ -188,7 +188,7 @@ class SignalParser:
             if not pair.endswith("-USDT"):
                 pair = f"{pair}-USDT"
 
-        tps = data.get("take_profits", [])
+        tps = data.get("take_profits") or []
         tps = sorted([float(tp) for tp in tps if tp is not None])
 
         conf_str = data.get("confidence", "medium")
