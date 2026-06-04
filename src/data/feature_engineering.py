@@ -2,6 +2,35 @@ import pandas as pd
 import numpy as np
 import pandas_ta as ta
 
+
+def _higuchi_fd(x: np.ndarray, kmax: int = 5) -> float:
+    """
+    Higuchi fractal dimension of a 1D price window. Bounded ~[1, 2].
+    ~1.0 = smooth/trending, ~1.5 = random walk, ->2.0 = choppy/space-filling.
+    """
+    x = np.asarray(x, dtype=float)
+    N = x.size
+    if N < kmax * 2:
+        return np.nan
+    Lk = np.empty(kmax)
+    lnk = np.empty(kmax)
+    for k in range(1, kmax + 1):
+        Lm = []
+        for m in range(k):
+            idx = np.arange(m, N, k)
+            if idx.size < 2:
+                continue
+            length = np.abs(np.diff(x[idx])).sum()
+            norm = (N - 1) / ((idx.size - 1) * k)
+            Lm.append(length * norm / k)
+        Lk[k - 1] = np.mean(Lm) if Lm else np.nan
+        lnk[k - 1] = np.log(1.0 / k)
+    valid = np.isfinite(Lk) & (Lk > 0)
+    if valid.sum() < 2:
+        return np.nan
+    return np.polyfit(lnk[valid], np.log(Lk[valid]), 1)[0]
+
+
 def calculate_technical_features(df: pd.DataFrame) -> pd.DataFrame:
     """
     Computes technical indicators and statistical features to be used as inputs for the ML regime classifier.
@@ -81,11 +110,14 @@ def calculate_technical_features(df: pd.DataFrame) -> pd.DataFrame:
     ll = df['low'].rolling(window=period).min()
     df['choppiness_index'] = 100 * np.log10(atr_sum / (hh - ll + 1e-8)) / np.log10(period)
 
-    # Fractal Dimension Index — ~1.0 = trend, ~1.5 = random walk, ~2.0 = reversal
-    positive_changes = (df['close'].diff() > 0).rolling(window=period).sum()
-    negative_changes = (df['close'].diff() < 0).rolling(window=period).sum()
-    trailing_range = (df['high'].rolling(window=period).max() - df['low'].rolling(window=period).min()) / df['close']
-    df['fractal_dimension_index'] = 1.0 + np.log(positive_changes + negative_changes + 1e-8) / (np.log(2 * period) + 1e-8) - np.log(trailing_range + 1e-8) / (np.log(2 * period) + 1e-8)
+    # Fractal Dimension Index (Higuchi) — ~1.0 = clean trend, ~1.5 = random walk, ->2.0 = choppy/ranging
+    fd_window = 30  # Higuchi needs more points than period=14 for stable regression
+    df['fractal_dimension_index'] = (
+        df['close']
+        .rolling(window=fd_window)
+        .apply(lambda s: _higuchi_fd(s, kmax=5), raw=True)
+        .clip(1.0, 2.0)  # pin to theoretical range; trims small estimation noise
+    )
 
     # Aroon Oscillator — positive = uptrend, negative = downtrend, near-zero = ranging
     aroon_result = ta.aroon(df['high'], df['low'], length=25)
