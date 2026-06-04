@@ -257,8 +257,12 @@ impl Engine {
                 if bars.len() >= 10 {
                     info!("Replaying {} bars to warm up {} on {}", bars.len(), strategy.name(), pair);
                     let balances = std::collections::HashMap::new();
-                    // Feed bars as tick context to restore indicator state
-                    for bar in bars.iter() {
+                    // Feed bars with growing window so indicators can compute
+                    // (strategies need 20+ bars to evaluate RSI/BB)
+                    for (i, bar) in bars.iter().enumerate() {
+                        let window_end = i + 1;
+                        let window_start = window_end.saturating_sub(200);
+                        let window = bars[window_start..window_end].to_vec();
                         let ctx = TickContext {
                             order_book: OrderBook {
                                 symbol: pair.clone(),
@@ -266,7 +270,7 @@ impl Engine {
                                 asks: vec![],
                                 timestamp: bar.timestamp,
                             },
-                            recent_bars: vec![bar.clone()],
+                            recent_bars: window,
                             balances: balances.clone(),
                             open_orders: vec![],
                             regime: None,
