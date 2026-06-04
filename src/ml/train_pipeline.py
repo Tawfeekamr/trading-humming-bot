@@ -98,8 +98,8 @@ def main():
     parser = argparse.ArgumentParser(description='ML Regime Classifier Training Pipeline')
     parser.add_argument('--timeframe', type=str, default=None,
                         help='Train on a single timeframe only (e.g., 1h). Default: all timeframes.')
-    parser.add_argument('--candles', type=int, default=1000,
-                        help='Number of candles per timeframe (default: 1000). Use 2000+ for single-TF training.')
+    parser.add_argument('--candles', type=int, default=2000,
+                        help='Number of candles per timeframe (default: 2000). Use 4000+ for 15m.')
     parser.add_argument('--pair', type=str, default="SOL-USDT",
                         help='Trading pair for per-pair model training (e.g., BNB-USDT). '
                              'Default: SOL-USDT (legacy behavior)')
@@ -130,6 +130,28 @@ def main():
         df = load_real_data(symbol, intervals=[interval], candles_per_interval=args.candles)
         datasets.append((interval, cfg, df))
         max_forward_window = max(max_forward_window, cfg["forward_window"])
+
+    # Data sufficiency warnings
+    INTERVAL_HOURS = {"15m": 0.25, "1h": 1.0, "4h": 4.0, "1d": 24.0}
+    MINIMUM_DAYS = {
+        "15m": 60,   # ~5,760 candles needed
+        "1h": 90,    # ~2,160 candles needed
+        "4h": 120,   # ~720 candles needed
+        "1d": 180,   # ~180 candles needed
+    }
+    for name, cfg, df in datasets:
+        if name in INTERVAL_HOURS and name in MINIMUM_DAYS:
+            span_hours = len(df) * INTERVAL_HOURS[name]
+            span_days = span_hours / 24.0
+            min_days = MINIMUM_DAYS[name]
+            min_candles = int(min_days * 24 / INTERVAL_HOURS[name])
+            if span_days < min_days:
+                print(f"\n  ⚠️  WARNING: {name} data spans only {span_days:.0f} days "
+                      f"({len(df)} candles). Recommended minimum: {min_days} days "
+                      f"({min_candles} candles). Short-TF models may overfit recent conditions.")
+                if span_days < min_days * 0.5:
+                    print(f"  🚨 CRITICAL: {name} data covers less than half the recommended span. "
+                          f"Model will likely be fragile. Use --candles {min_candles}.")
 
     feature_cols = [
         'returns', 'volatility_ratio', 'normalized_atr',
