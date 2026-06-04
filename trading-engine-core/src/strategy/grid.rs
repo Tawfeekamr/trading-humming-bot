@@ -1,10 +1,18 @@
 use std::collections::HashMap;
 use crate::config::GridConfig;
 use crate::models::order::OrderSide;
-use crate::indicators::{SupportResistance, LevelKind, Vwap, VolumeSma};
+use crate::indicators::{SupportResistance, LevelKind, Adx, Choppiness, Atr};
 
 const MIN_NOTIONAL: f64 = 5.0;
 const SIZE_FACTOR: f64 = 0.08;
+
+// ── Grid deploy gate thresholds ──
+// Grid bots profit in RANGING markets; these detect range and safe volatility.
+// ⚠️ NATR_FLOOR and NATR_CEIL are placeholders — TUNE PER ASSET/TIMEFRAME.
+const ADX_RANGE_MAX: f64 = 22.0;     // ADX below this → no strong trend
+const CHOP_RANGE_MIN: f64 = 55.0;    // Choppiness above this → ranging confirmed
+const NATR_FLOOR: f64 = 0.005;       // Min normalized ATR for grid to capture profit
+const NATR_CEIL: f64 = 0.04;         // Max normalized ATR — above this, risk too high
 
 #[derive(Debug, Clone)]
 pub struct GridLevel {
@@ -41,20 +49,22 @@ pub struct GridStrategy {
     peak_equity: f64,
     initial_capital: f64,
     current_capital: f64,
-    // Indicator modules
+    // Regime + volatility indicators
+    adx: Adx,
+    choppiness: Choppiness,
+    atr: Atr,
     sr: SupportResistance,
-    vwap: Vwap,
-    volume_sma: VolumeSma,
     last_bar_count: usize,
-    // Last evaluated indicator values for diagnostics
+    pause_reason: String,
+    // Diagnostic values
     diag_price: f64,
     diag_rsi: f64,
-    diag_ema200: f64,
     diag_bb_lower: f64,
     diag_bb_upper: f64,
+    diag_adx: f64,
+    diag_chop: f64,
+    diag_natr: f64,
     diag_bars_count: usize,
-    diag_vwap: f64,
-    diag_volume_ratio: f64,
     diag_near_support: bool,
     diag_near_resistance: bool,
 }
@@ -87,18 +97,20 @@ impl GridStrategy {
             peak_equity: config.capital_usdt,
             initial_capital: config.capital_usdt,
             current_capital: config.capital_usdt,
+            adx: Adx::new(14),
+            choppiness: Choppiness::new(14),
+            atr: Atr::new(14),
             sr: SupportResistance::new(50, 0.01),
-            vwap: Vwap::new(390),
-            volume_sma: VolumeSma::new(20),
             last_bar_count: 0,
+            pause_reason: "Warming up".to_string(),
             diag_price: 0.0,
             diag_rsi: 0.0,
-            diag_ema200: 0.0,
             diag_bb_lower: 0.0,
             diag_bb_upper: 0.0,
+            diag_adx: 0.0,
+            diag_chop: 0.0,
+            diag_natr: 0.0,
             diag_bars_count: 0,
-            diag_vwap: 0.0,
-            diag_volume_ratio: 0.0,
             diag_near_support: false,
             diag_near_resistance: false,
         }
@@ -205,71 +217,103 @@ impl GridStrategy {
         self.state
     }
 
-    /// Evaluate grid state based on indicators
-    pub fn evaluate_state(
-        &mut self,
-        price: f64,
-        rsi: f64,
-        ema_200: f64,
-        bb_lower: f64,
-        bb_upper: f64,
-    ) {
-        self.evaluate_state_with_ml(price, rsi, ema_200, bb_lower, bb_upper, 0, 0.0);
+    /// Regime-based grid deployment gate.
+    /// Returns (should_deploy: bool, reason_if_not: String).
+    fn should_deploy_grid(&self, price: f64, ml_regime: Option<i32>, ml_confidence: f64) -> (bool, String) {
+        // 1. ML Danger / Trending → block regardless
+        if let Some(regime) = ml_regime {
+            if regime == 2 && ml_confidence >= 0.55 {
+                return (false, format!("ML regime=Danger (conf={:.2})", ml_confidence));
+            }
+            if regime == 1 && ml_confidence >= 0.55 {
+                return (false, format!("ML regime=Trending (conf={:.2})", ml_confidence));
+            }
+        } else {
+            // Unknown regime → block (not safe to assume ranging)
+            return (false, "ML regime unknown (None)".to_string());
+        }
+
+        // 2. Indicator warm-up check
+        if !self.adx.is_initialized() {
+            let needed = 29; // 2*period + 1 for period=14
+            let have = self.diag_bars_count;
+            return (false, format!("Warming up (ADX needs {} bars, have {})", needed, have));
+        }
+        if !self.choppiness.is_initialized() {
+            return (false, "Warming up (Choppiness needs 14 bars)".to_string());
+        }
+        if !self.atr.is_initialized() {
+            return (false, "Warming up (ATR needs 14 bars)".to_string());
+        }
+
+        // 3. Range condition: ADX low AND Choppiness high
+        let adx_val = self.diag_adx;
+        let chop_val = self.diag_chop;
+        let adx_ok = adx_val < ADX_RANGE_MAX;
+        let chop_ok = chop_val > CHOP_RANGE_MIN;
+
+        if !adx_ok {
+            return (false, format!("Trending, ADX={:.1} (>={:.0})", adx_val, ADX_RANGE_MAX));
+        }
+        if !chop_ok {
+            return (false, format!("Not choppy enough, CHOP={:.1} (<{:.0})", chop_val, CHOP_RANGE_MIN));
+        }
+
+        // 4. Volatility band: NATR_FLOOR <= ATR/close <= NATR_CEIL
+        let natr = self.diag_natr;
+        if natr < NATR_FLOOR {
+            return (false, format!("Volatility too low, NATR={:.4} (<{:.3})", natr, NATR_FLOOR));
+        }
+        if natr > NATR_CEIL {
+            return (false, format!("Volatility too high, NATR={:.4} (>{:.3})", natr, NATR_CEIL));
+        }
+
+        // All conditions met
+        (true, String::new())
     }
 
-    /// Evaluate with ML regime overlay
+    /// Evaluate grid state based on regime + volatility gate
     pub fn evaluate_state_with_ml(
         &mut self,
         price: f64,
-        rsi: f64,
-        ema_200: f64,
         bb_lower: f64,
         bb_upper: f64,
-        ml_regime: i32,
+        ml_regime: Option<i32>,
         ml_confidence: f64,
     ) {
         // Store diagnostics
         self.diag_price = price;
-        self.diag_rsi = rsi;
-        self.diag_ema200 = ema_200;
         self.diag_bb_lower = bb_lower;
         self.diag_bb_upper = bb_upper;
 
-        // ML Danger check — immediate pause
-        if ml_regime == 2 && ml_confidence >= 0.55 {
-            self.state = GridState::Paused;
-            return;
-        }
-
         match self.state {
             GridState::Paused | GridState::Disabled => {
-                let price_above_ema = price > ema_200;
-                let rsi_neutral = rsi > 30.0 && rsi < 70.0;
-                let within_bb = price > bb_lower && price < bb_upper;
-                let above_vwap = if self.vwap.is_initialized() { price > self.vwap.value() } else { true };
-                let volume_ok = if self.volume_sma.is_initialized() { self.volume_sma.volume_ratio() > 0.8 } else { true };
-
-                let score = price_above_ema as u8 + rsi_neutral as u8 + within_bb as u8
-                    + above_vwap as u8 + volume_ok as u8;
-                if score >= 3 {
+                let (deploy, reason) = self.should_deploy_grid(price, ml_regime, ml_confidence);
+                if deploy {
                     self.state = GridState::Active;
+                    self.pause_reason.clear();
+                } else {
+                    self.pause_reason = reason;
                 }
             }
             GridState::Active => {
-                let rsi_extreme = rsi < 25.0 || rsi > 80.0;
-                let outside_bb = price < bb_lower * 0.98 || price > bb_upper * 1.02;
-                let below_ema = price < ema_200 * 0.97;
-                // High-volume dump below VWAP — potential capitulation
-                let volume_dump = self.vwap.is_initialized()
-                    && price < self.vwap.value() * 0.99
-                    && self.volume_sma.is_initialized()
-                    && self.volume_sma.volume_ratio() > 2.0;
-
-                if rsi_extreme || outside_bb || below_ema || volume_dump {
+                let (deploy, reason) = self.should_deploy_grid(price, ml_regime, ml_confidence);
+                if !deploy {
                     self.state = GridState::Paused;
+                    self.pause_reason = reason;
                 }
             }
         }
+    }
+
+    /// Backward-compat wrapper that passes no ML regime (blocks deployment)
+    pub fn evaluate_state(
+        &mut self,
+        price: f64,
+        bb_lower: f64,
+        bb_upper: f64,
+    ) {
+        self.evaluate_state_with_ml(price, bb_lower, bb_upper, None, 0.0);
     }
 
     pub fn set_grid_layout(&mut self, layout: GridLayout) {
@@ -336,17 +380,25 @@ impl Strategy for GridStrategy {
         self.diag_bars_count = ctx.recent_bars.len();
 
         // Feed new bars to indicator modules (avoid double-counting)
+        let mut prev_close: Option<f64> = None;
         let bars_to_process = if ctx.recent_bars.len() > self.last_bar_count {
+            // Set prev_close from the bar before our window
+            if self.last_bar_count > 0 && self.last_bar_count <= ctx.recent_bars.len() {
+                prev_close = Some(ctx.recent_bars[self.last_bar_count - 1].close);
+            }
             &ctx.recent_bars[self.last_bar_count..]
         } else if ctx.recent_bars.len() < self.last_bar_count {
             &ctx.recent_bars[..] // buffer was reset
         } else {
             &[][..] // no new bars
         };
+
         for bar in bars_to_process {
+            self.adx.update_bar(bar.open, bar.high, bar.low, bar.close);
+            self.choppiness.update_bar(bar.open, bar.high, bar.low, bar.close, prev_close);
+            self.atr.update_bar(bar.open, bar.high, bar.low, bar.close);
             self.sr.update_bar(bar.open, bar.high, bar.low, bar.close, bar.timestamp);
-            self.vwap.update_bar(bar.high, bar.low, bar.close, bar.volume);
-            self.volume_sma.update(bar.volume);
+            prev_close = Some(bar.close);
         }
         self.last_bar_count = ctx.recent_bars.len();
 
@@ -356,11 +408,17 @@ impl Strategy for GridStrategy {
             None => return Ok(Vec::new()),
         };
 
-        // Store VWAP and volume diagnostics
-        self.diag_vwap = self.vwap.value();
-        self.diag_volume_ratio = self.volume_sma.volume_ratio();
+        // Store regime indicator diagnostics
+        self.diag_adx = self.adx.adx();
+        self.diag_chop = self.choppiness.value();
+        self.diag_natr = if self.atr.is_initialized() && mid_price > 0.0 {
+            self.atr.value() / mid_price // matches Python: atr_14 / close (no ×100)
+        } else {
+            0.0
+        };
         self.diag_near_support = self.sr.near_support(mid_price);
         self.diag_near_resistance = self.sr.near_resistance(mid_price);
+
         if ctx.recent_bars.len() >= 20 {
             let closes: Vec<f64> = ctx.recent_bars.iter().map(|b| b.close).collect();
             let mean = closes.iter().sum::<f64>() / closes.len() as f64;
@@ -371,7 +429,7 @@ impl Strategy for GridStrategy {
             let bb_lower = mean - 2.0 * stddev;
             let bb_upper = mean + 2.0 * stddev;
 
-            // Simple RSI estimate from recent bars
+            // RSI (kept for grid center bias, not gate)
             let mut gains = 0.0;
             let mut losses = 0.0;
             for i in 1..closes.len() {
@@ -383,18 +441,17 @@ impl Strategy for GridStrategy {
             let rsi = if avg_loss == 0.0 { 100.0 } else {
                 100.0 - (100.0 / (1.0 + avg_gain / avg_loss))
             };
+            self.diag_rsi = rsi;
 
-            // Simple EMA-200 estimate (use mean as proxy until we have 200 bars)
-            let ema_200 = mean;
-
-            // Get ML regime from context or default to 0 (Ranging)
+            // Map ML regime to int (None = unknown → block deployment)
             let (ml_regime, ml_confidence) = match ctx.regime {
-                Some(MarketRegime::Danger) => (2, 0.8),
-                Some(MarketRegime::Trending) => (1, 0.6),
-                _ => (0, 0.0),
+                Some(MarketRegime::Danger) => (Some(2), 0.8),
+                Some(MarketRegime::Trending) => (Some(1), 0.6),
+                Some(MarketRegime::Ranging) => (Some(0), 0.0),
+                None => (None, 0.0),
             };
 
-            self.evaluate_state_with_ml(mid_price, rsi, ema_200, bb_lower, bb_upper, ml_regime, ml_confidence);
+            self.evaluate_state_with_ml(mid_price, bb_lower, bb_upper, ml_regime, ml_confidence);
         }
 
         // If not active after evaluation, return empty orders
@@ -402,7 +459,7 @@ impl Strategy for GridStrategy {
             return Ok(Vec::new());
         }
 
-        // Calculate grid layout using indicator estimates
+        // Calculate grid layout using BB bounds and ATR for spacing
         let (bb_lower, bb_upper, atr_estimate) = if ctx.recent_bars.len() >= 20 {
             let closes: Vec<f64> = ctx.recent_bars.iter().map(|b| b.close).collect();
             let mean = closes.iter().sum::<f64>() / closes.len() as f64;
@@ -410,15 +467,25 @@ impl Strategy for GridStrategy {
                 let variance = closes.iter().map(|c| (c - mean).powi(2)).sum::<f64>() / closes.len() as f64;
                 variance.sqrt()
             };
-            let avg_range: f64 = ctx.recent_bars.iter().map(|b| b.high - b.low).sum::<f64>()
-                / ctx.recent_bars.len() as f64;
-            (mean - 2.0 * stddev, mean + 2.0 * stddev, avg_range)
+            // Use proper ATR if available, else fall back to avg range
+            let atr_val = if self.atr.is_initialized() { self.atr.value() } else {
+                ctx.recent_bars.iter().map(|b| b.high - b.low).sum::<f64>() / ctx.recent_bars.len() as f64
+            };
+            (mean - 2.0 * stddev, mean + 2.0 * stddev, atr_val)
         } else {
-            // Fallback: simple percentages
             (mid_price * 0.98, mid_price * 1.02, mid_price * 0.01)
         };
 
-        let layout = self.calculate_levels(mid_price, atr_estimate, bb_lower, bb_upper);
+        // RSI bias: shift grid center toward oversold region (buy lower)
+        let center = if self.diag_rsi < 40.0 {
+            bb_lower + (bb_upper - bb_lower) * 0.4 // bias lower when oversold
+        } else if self.diag_rsi > 60.0 {
+            bb_lower + (bb_upper - bb_lower) * 0.6 // bias higher when overbought
+        } else {
+            (bb_lower + bb_upper) / 2.0
+        };
+
+        let layout = self.calculate_levels(center, atr_estimate, bb_lower, bb_upper);
         self.grid_layout = Some(layout.clone());
 
         // Generate orders only if we don't already have pending grid orders
@@ -477,6 +544,7 @@ impl Strategy for GridStrategy {
         if let Some(regime) = ctx.regime {
             if regime == MarketRegime::Danger {
                 self.state = GridState::Paused;
+                self.pause_reason = "ML regime=Danger override".to_string();
             }
         }
 
@@ -515,31 +583,23 @@ impl Strategy for GridStrategy {
         };
 
         let details = if self.state == GridState::Paused && self.diag_bars_count > 0 {
-            let price_ok = self.diag_price > self.diag_ema200;
-            let rsi_ok = self.diag_rsi > 30.0 && self.diag_rsi < 70.0;
-            let bb_ok = self.diag_price > self.diag_bb_lower && self.diag_price < self.diag_bb_upper;
-            let vwap_ok = self.diag_vwap > 0.0 && self.diag_price > self.diag_vwap;
-            let vol_ok = self.diag_volume_ratio > 0.8;
-            let score = price_ok as u8 + rsi_ok as u8 + bb_ok as u8 + vwap_ok as u8 + vol_ok as u8;
-            format!(
-                "Capital: ${:.2} | Score: {}/5 | Price: ${:.2} | RSI: {:.1} | EMA: ${:.2} | BB: [{:.2}, {:.2}] | VWAP: ${:.2} | Vol: {:.2}x | S/R: {}{} | {}{}{}{}{}",
-                self.current_capital,
-                score,
-                self.diag_price,
-                self.diag_rsi,
-                self.diag_ema200,
-                self.diag_bb_lower,
-                self.diag_bb_upper,
-                self.diag_vwap,
-                self.diag_volume_ratio,
-                if self.diag_near_support { "S" } else { "-" },
-                if self.diag_near_resistance { "R" } else { "-" },
-                if price_ok { "✅" } else { "❌" },
-                if rsi_ok { "✅" } else { "❌" },
-                if bb_ok { "✅" } else { "❌" },
-                if vwap_ok { "✅" } else { "❌" },
-                if vol_ok { "✅" } else { "❌" },
-            )
+            if !self.pause_reason.is_empty() {
+                format!(
+                    "Paused: {} | ADX={:.1} CHOP={:.0} NATR={:.4} | Price: ${:.2} | Bars: {}",
+                    self.pause_reason,
+                    self.diag_adx,
+                    self.diag_chop,
+                    self.diag_natr,
+                    self.diag_price,
+                    self.diag_bars_count,
+                )
+            } else {
+                format!(
+                    "Paused | ADX={:.1} CHOP={:.0} NATR={:.4} | Price: ${:.2} | Bars: {}",
+                    self.diag_adx, self.diag_chop, self.diag_natr,
+                    self.diag_price, self.diag_bars_count,
+                )
+            }
         } else if self.state == GridState::Paused && self.diag_bars_count == 0 {
             format!(
                 "Capital: ${:.2} | ⏳ Warming up (no bars yet)",
@@ -547,9 +607,9 @@ impl Strategy for GridStrategy {
             )
         } else if self.state == GridState::Active {
             format!(
-                "Capital: ${:.2} / ${:.2} (Growth: {:.2}%)",
+                "Active: ranging | ADX={:.1} CHOP={:.0} NATR={:.4} | Capital: ${:.2} (${:.2} growth)",
+                self.diag_adx, self.diag_chop, self.diag_natr,
                 self.current_capital,
-                self.initial_capital,
                 (self.growth_ratio() - 1.0) * 100.0
             )
         } else {
@@ -583,5 +643,160 @@ impl Strategy for GridStrategy {
 
     fn initial_capital(&self) -> f64 {
         self.initial_capital()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::GridConfig;
+
+    fn test_config() -> GridConfig {
+        GridConfig {
+            levels: 5,
+            capital_usdt: 10000.0,
+            min_reserve: 500.0,
+            spacing_multiplier: 1.5,
+        }
+    }
+
+    fn make_grid() -> GridStrategy {
+        GridStrategy::new("BTC-USDT", &test_config(), 0.01, 0.001)
+    }
+
+    fn warm_adx(grid: &mut GridStrategy) {
+        for i in 0..30 { grid.adx.update_bar(100.0, 101.0, 99.0, 100.5); }
+    }
+
+    fn warm_chop(grid: &mut GridStrategy) {
+        let mut prev = None;
+        for _ in 0..15 {
+            grid.choppiness.update_bar(100.0, 100.5, 99.5, 100.0, prev);
+            prev = Some(100.0);
+        }
+    }
+
+    fn warm_atr(grid: &mut GridStrategy) {
+        for _ in 0..15 { grid.atr.update_bar(100.0, 100.5, 99.5, 100.0); }
+    }
+
+    #[test]
+    fn test_gate_ml_none_blocks() {
+        let mut grid = make_grid();
+        grid.diag_adx = 15.0;
+        grid.diag_chop = 65.0;
+        grid.diag_natr = 0.02;
+        grid.diag_bars_count = 50;
+        warm_adx(&mut grid);
+
+        let (deploy, reason) = grid.should_deploy_grid(100.0, None, 0.0);
+        assert!(!deploy);
+        assert!(reason.contains("unknown") || reason.contains("None"), "Expected 'unknown' in reason, got: {}", reason);
+    }
+
+    #[test]
+    fn test_gate_ml_trending_blocks() {
+        let mut grid = make_grid();
+        grid.diag_adx = 10.0;
+        grid.diag_chop = 70.0;
+        grid.diag_natr = 0.02;
+        grid.diag_bars_count = 50;
+        warm_adx(&mut grid);
+
+        let (deploy, reason) = grid.should_deploy_grid(100.0, Some(1), 0.7);
+        assert!(!deploy);
+        assert!(reason.contains("Trending"), "Expected 'Trending' in reason, got: {}", reason);
+    }
+
+    #[test]
+    fn test_gate_ml_danger_blocks() {
+        let mut grid = make_grid();
+        grid.diag_adx = 10.0;
+        grid.diag_chop = 70.0;
+        grid.diag_natr = 0.02;
+        grid.diag_bars_count = 50;
+        warm_adx(&mut grid);
+
+        let (deploy, reason) = grid.should_deploy_grid(100.0, Some(2), 0.8);
+        assert!(!deploy);
+        assert!(reason.contains("Danger"), "Expected 'Danger' in reason, got: {}", reason);
+    }
+
+    #[test]
+    fn test_gate_strong_trend_stays_paused() {
+        let mut grid = make_grid();
+        grid.diag_adx = 30.0;
+        grid.diag_chop = 35.0;
+        grid.diag_natr = 0.02;
+        grid.diag_bars_count = 50;
+        warm_adx(&mut grid);
+        warm_chop(&mut grid);
+        warm_atr(&mut grid);
+
+        let (deploy, reason) = grid.should_deploy_grid(100.0, Some(0), 0.0);
+        assert!(!deploy);
+        assert!(reason.contains("Trending") || reason.contains("ADX=30"),
+            "Expected trend block, got: {}", reason);
+    }
+
+    #[test]
+    fn test_gate_volatility_too_high() {
+        let mut grid = make_grid();
+        grid.diag_adx = 15.0;
+        grid.diag_chop = 65.0;
+        grid.diag_natr = 0.06;
+        grid.diag_bars_count = 50;
+        warm_adx(&mut grid);
+        warm_chop(&mut grid);
+        warm_atr(&mut grid);
+
+        let (deploy, reason) = grid.should_deploy_grid(100.0, Some(0), 0.0);
+        assert!(!deploy);
+        assert!(reason.contains("too high"), "Expected vol too high, got: {}", reason);
+    }
+
+    #[test]
+    fn test_gate_volatility_too_low() {
+        let mut grid = make_grid();
+        grid.diag_adx = 15.0;
+        grid.diag_chop = 65.0;
+        grid.diag_natr = 0.001;
+        grid.diag_bars_count = 50;
+        warm_adx(&mut grid);
+        warm_chop(&mut grid);
+        warm_atr(&mut grid);
+
+        let (deploy, reason) = grid.should_deploy_grid(100.0, Some(0), 0.0);
+        assert!(!deploy);
+        assert!(reason.contains("too low"), "Expected vol too low, got: {}", reason);
+    }
+
+    #[test]
+    fn test_gate_confirmed_range_deploys() {
+        let mut grid = make_grid();
+        grid.diag_adx = 15.0;
+        grid.diag_chop = 65.0;
+        grid.diag_natr = 0.015;
+        grid.diag_bars_count = 50;
+        warm_adx(&mut grid);
+        warm_chop(&mut grid);
+        warm_atr(&mut grid);
+
+        let (deploy, reason) = grid.should_deploy_grid(100.0, Some(0), 0.0);
+        assert!(deploy, "Should deploy in confirmed range, reason: {}", reason);
+    }
+
+    #[test]
+    fn test_gate_not_warmed_up_stays_paused() {
+        let mut grid = make_grid();
+        grid.diag_adx = 15.0;
+        grid.diag_chop = 65.0;
+        grid.diag_natr = 0.015;
+        grid.diag_bars_count = 10;
+        // Don't warm up ADX — it won't be initialized
+
+        let (deploy, reason) = grid.should_deploy_grid(100.0, Some(0), 0.0);
+        assert!(!deploy);
+        assert!(reason.contains("Warming up"), "Expected warmup block, got: {}", reason);
     }
 }

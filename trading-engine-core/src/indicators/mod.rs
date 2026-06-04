@@ -6,6 +6,8 @@ mod support_resistance;
 mod candlestick;
 mod vwap;
 mod volume;
+mod adx;
+mod choppiness;
 
 pub use ema::Ema;
 pub use rsi::Rsi;
@@ -15,3 +17,5 @@ pub use support_resistance::{SupportResistance, LevelKind};
 pub use candlestick::{CandlestickPatterns, Pattern};
 pub use vwap::Vwap;
 pub use volume::VolumeSma;
+pub use adx::Adx;
+pub use choppiness::Choppiness;
