@@ -374,9 +374,19 @@ class TelegramCommandHandler:
             else:
                 lines.append("📡 <b>Signal:</b> Disabled")
 
-            # ML regime
-            if hasattr(strategy, '_ml_classifier') and strategy._ml_classifier:
-                lines.append(f"🧠 <b>ML:</b> {strategy._ml_summary()}")
+            # ML regime — display from grid strategy details (populated by Rust engine)
+            # The grid details string contains "Active: ranging | ..." or "Paused: ML regime ..."
+            regime_parts = []
+            if hasattr(strategy, 'pairs') and strategy.pairs:
+                for symbol in strategy.pairs:
+                    sm = strategy.state_machines.get(symbol)
+                    if sm and hasattr(sm, 'details') and sm.details:
+                        detail = sm.details
+                        # Show first segment which contains state + regime reason
+                        first_seg = detail.split('|')[0].strip()
+                        regime_parts.append(f"{symbol}: {first_seg}")
+            if regime_parts:
+                lines.append(f"🧠 <b>Regime:</b> {' | '.join(regime_parts)}")
 
             # System stats
             stats = get_stats()
