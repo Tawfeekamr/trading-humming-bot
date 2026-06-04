@@ -144,6 +144,20 @@ pub struct TrendConfig {
     pub exit_signal_threshold: u8,
     #[serde(default = "default_0_2")]
     pub sl_buffer_pct: f64,
+    #[serde(default = "default_25")]
+    pub adx_gate_threshold: f64,
+    #[serde(default = "default_20")]
+    pub adx_exit_threshold: f64,
+    #[serde(default = "default_38")]
+    pub choppiness_threshold: f64,
+    #[serde(default = "default_1_2")]
+    pub volume_ratio_threshold: f64,
+    #[serde(default = "default_65")]
+    pub rsi_long_max: f64,
+    #[serde(default = "default_35")]
+    pub rsi_short_min: f64,
+    #[serde(default = "default_3")]
+    pub atr_trailing_mult: f64,
 }
 
 fn default_10k() -> f64 { 10000.0 }
@@ -151,6 +165,11 @@ fn default_25() -> f64 { 25.0 }
 fn default_2_u8() -> u8 { 2 }
 fn default_0_2() -> f64 { 0.2 }
 fn default_2_5() -> f64 { 2.5 }
+fn default_38() -> f64 { 38.0 }
+fn default_1_2() -> f64 { 1.2 }
+fn default_65() -> f64 { 65.0 }
+fn default_35() -> f64 { 35.0 }
+fn default_20() -> f64 { 20.0 }
 
 #[derive(Debug, Deserialize)]
 pub struct RiskConfig {
