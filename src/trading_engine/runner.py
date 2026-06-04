@@ -45,6 +45,139 @@ from src.trading_engine.data_feed import DataFeed
 logger = logging.getLogger(__name__)
 
 
+class RegimeManager:
+    """Loads ML regime models, classifies regime from bar data, pushes to Rust engine.
+
+    Dual-path output:
+    1. HTTP push to POST /api/v1/regime (primary — instant, no file I/O)
+    2. File write to data/regime_cache.json (fallback — read on Rust startup)
+    """
+
+    def __init__(self, rust_url: str):
+        self._rust_url = rust_url
+        self._classifiers: dict = {}
+        self._latest: dict[str, tuple[str, float, float]] = {}  # pair → (regime_name, confidence, prob_trending)
+
+    def load_models(self, pairs: list[str]):
+        """Load per-pair regime models. Falls back to shared model."""
+        try:
+            from src.ml.regime_classifier import RegimeClassifier
+        except ImportError as e:
+            logger.warning("RegimeClassifier not available: %s — regime will stay None", e)
+            return
+
+        for pair in pairs:
+            pair_model = f"models/regime_{pair}.pkl"
+            shared_model = "models/regime_rf_v3.pkl"
+            path = pair_model if os.path.exists(pair_model) else (shared_model if os.path.exists(shared_model) else None)
+            if path is None:
+                logger.warning("No regime model found for %s (tried %s and %s)", pair, pair_model, shared_model)
+                continue
+            try:
+                clf = RegimeClassifier(model_path=path)
+                clf.load_model()
+                self._classifiers[pair] = clf
+                logger.info("Regime model loaded for %s from %s", pair, path)
+            except Exception as e:
+                logger.warning("Failed to load regime model for %s: %s", pair, e)
+
+    async def classify_and_push(self, pair: str):
+        """Classify regime for a pair using bars from Rust engine, push result."""
+        clf = self._classifiers.get(pair)
+        if clf is None:
+            return
+
+        try:
+            import pandas as pd
+            from src.data.feature_engineering import calculate_technical_features
+            import urllib.request
+
+            # Fetch bars from Rust engine
+            symbol = pair.replace("-", "")
+            url = f"{self._rust_url}/api/v1/klines?symbol={symbol}&limit=100"
+            req = urllib.request.Request(url)
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                bars = json.loads(resp.read())
+
+            if len(bars) < 50:
+                return
+
+            # Convert to DataFrame with numeric columns
+            df = pd.DataFrame(bars)
+            for col in ['open', 'high', 'low', 'close', 'volume']:
+                if col not in df.columns:
+                    return
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+            df.dropna(subset=['open', 'high', 'low', 'close', 'volume'], inplace=True)
+
+            # Compute features
+            features_df = calculate_technical_features(df)
+            if features_df.empty:
+                return
+
+            # Get last row and select feature columns (matching model training)
+            last_row = features_df.iloc[-1:]
+            # Use model's expected feature names if stored by sklearn
+            active_model = clf._active_model
+            if hasattr(active_model, 'feature_names_in_'):
+                feature_cols = list(active_model.feature_names_in_)
+                # Ensure all needed columns exist
+                missing = [c for c in feature_cols if c not in last_row.columns]
+                if missing:
+                    logger.debug("Missing features for %s: %s", pair, missing)
+                    return
+            else:
+                feature_cols = [c for c in last_row.columns
+                                if c not in ('open', 'high', 'low', 'close', 'volume')]
+            X = last_row[feature_cols]
+
+            # Predict
+            regime_int = clf.predict_class(X)
+            probs = clf.predict_proba_full(X)
+            confidence = max(probs.values()) if probs else 0.0
+
+            regime_names = {0: "RANGING", 1: "TRENDING", 2: "DANGER"}
+            regime_name = regime_names.get(regime_int, "RANGING")
+            self._latest[pair] = (regime_name, confidence, probs.get(1, 0.0))
+
+            # Push to Rust via API
+            payload = [{"pair": pair, "regime": regime_int, "confidence": confidence}]
+            push_data = json.dumps(payload).encode()
+            req = urllib.request.Request(
+                f"{self._rust_url}/api/v1/regime",
+                data=push_data,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                logger.info("Regime push %s: %s (conf=%.2f)", pair, regime_name, confidence)
+
+        except Exception as e:
+            logger.debug("Regime classify failed for %s: %s", pair, e)
+
+    def get_regime_fn(self, pair: str):
+        """Returns a callable for SignalEngine's btc_regime_fn: () -> (name, confidence, prob_trending)."""
+        def _fn():
+            return self._latest.get(pair, ("RANGING", 0.0, 0.0))
+        return _fn
+
+    async def poll_loop(self, pairs: list[str], interval: int = 60):
+        """Classify and push regime for all pairs every interval seconds."""
+        # Initial classification immediately
+        for pair in pairs:
+            await self.classify_and_push(pair)
+
+        while True:
+            try:
+                await asyncio.sleep(interval)
+                for pair in pairs:
+                    await self.classify_and_push(pair)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error("Regime poll loop error: %s", e)
+
+
 def load_config(path: str = "config/strategy.yaml") -> dict:
     """Load strategy configuration from YAML."""
     config_path = PROJECT_ROOT / path
@@ -245,7 +378,15 @@ class TradingRunner:
         fill_task = asyncio.create_task(fill_detector.poll_loop())
         self._tasks.append(fill_task)
 
-        # 7. Signal Copy Engine — listen to Telegram channels for trade signals
+        # 7. ML Regime Manager — load models, classify regime, push to Rust
+        regime_manager = RegimeManager(rust_url)
+        pair_list = [pair for pair, _ in strategies]
+        regime_manager.load_models(pair_list)
+        regime_task = asyncio.create_task(regime_manager.poll_loop(pair_list, interval=60))
+        self._tasks.append(regime_task)
+        logger.info("Regime manager started for %d pairs", len(pair_list))
+
+        # 8. Signal Copy Engine — listen to Telegram channels for trade signals
         signal_engine = None
         signal_cfg = self._config.get("signal_copy", {})
         if signal_cfg.get("enabled", False):
@@ -254,7 +395,7 @@ class TradingRunner:
 
                 signal_engine = SignalEngine(
                     config=signal_cfg,
-                    btc_regime_fn=lambda: ("RANGING", 0.0, 0.0),
+                    btc_regime_fn=regime_manager.get_regime_fn("BTC-USDT"),
                     telegram_send_fn=lambda msg: logger.info("Signal TG: %s", msg),
                     buy_fn=lambda symbol, amount, price: self._signal_trade(adapter, "buy", symbol, amount, price),
                     sell_fn=lambda symbol, amount, price: self._signal_trade(adapter, "sell", symbol, amount, price),
@@ -421,6 +562,7 @@ class TradingRunner:
         finally:
             logger.info("TradingRunner shutting down...")
             tick_task.cancel()
+            regime_task.cancel()
             tg_task.cancel()
             if signal_engine is not None:
                 signal_engine.stop_listener()

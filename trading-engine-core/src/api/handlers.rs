@@ -4,6 +4,7 @@ use axum::Json;
 use serde::Deserialize;
 
 use crate::connector::types::*;
+use crate::strategy::regime_cache::RegimeUpdate;
 use super::server::AppState;
 
 // ── Query parameter structs ──────────────────────────────────────────
@@ -169,6 +170,19 @@ pub async fn get_strategies(
     Json(statuses)
 }
 
+// ── Regime update (pushed by Python ML) ───────────────────────────────
+
+pub async fn update_regime(
+    State(state): State<AppState>,
+    Json(updates): Json<Vec<RegimeUpdate>>,
+) -> Json<serde_json::Value> {
+    let count = updates.len();
+    state.regime_cache.update(&updates).await;
+    state.regime_cache.persist().await;
+    tracing::info!("Regime updated via API: {} entries", count);
+    Json(serde_json::json!({ "updated": count }))
+}
+
 // ── Tests ────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -186,12 +200,14 @@ mod tests {
     use crate::strategy::status_cache::StrategyStatusCache;
 
     use crate::api::server::{AppState, create_router};
+    use crate::strategy::regime_cache::RegimeCache;
 
     fn test_app() -> Router {
         let mut balances = HashMap::new();
         balances.insert("USDT".to_string(), 10000.0);
         let connector = Arc::new(PaperTradeConnector::new(balances)) as Arc<dyn Connector>;
-        create_router(AppState::new(connector, BarCache::new(), StrategyStatusCache::new()))
+        let regime_cache = RegimeCache::new("data/regime_cache.json");
+        create_router(AppState::new(connector, BarCache::new(), StrategyStatusCache::new(), regime_cache))
     }
 
     #[tokio::test]

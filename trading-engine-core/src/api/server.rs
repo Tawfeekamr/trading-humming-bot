@@ -6,6 +6,7 @@ use tower_http::cors::CorsLayer;
 use crate::bar_cache::BarCache;
 use crate::connector::Connector;
 use crate::strategy::status_cache::StrategyStatusCache;
+use crate::strategy::regime_cache::RegimeCache;
 
 use super::handlers;
 
@@ -15,11 +16,12 @@ pub struct AppState {
     pub connector: Arc<dyn Connector>,
     pub bars: BarCache,
     pub strategies: StrategyStatusCache,
+    pub regime_cache: RegimeCache,
 }
 
 impl AppState {
-    pub fn new(connector: Arc<dyn Connector>, bars: BarCache, strategies: StrategyStatusCache) -> Self {
-        Self { connector, bars, strategies }
+    pub fn new(connector: Arc<dyn Connector>, bars: BarCache, strategies: StrategyStatusCache, regime_cache: RegimeCache) -> Self {
+        Self { connector, bars, strategies, regime_cache }
     }
 }
 
@@ -35,6 +37,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/v1/orderbook", get(handlers::get_order_book))
         .route("/api/v1/klines", get(handlers::get_klines))
         .route("/api/v1/strategies", get(handlers::get_strategies))
+        .route("/api/v1/regime", post(handlers::update_regime))
         .layer(CorsLayer::permissive())
         .with_state(state)
 }

@@ -1,6 +1,7 @@
 pub mod grid;
 pub mod trend;
 pub mod status_cache;
+pub mod regime_cache;
 
 use async_trait::async_trait;
 use anyhow::Result;

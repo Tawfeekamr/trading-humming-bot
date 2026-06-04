@@ -9,8 +9,9 @@ use crate::connector::binance_ws::{BinanceWs, WsEvent};
 use crate::connector::types::*;
 use crate::risk::RiskManager;
 use crate::notifications::TelegramBot;
-use crate::strategy::{Strategy, TickContext};
+use crate::strategy::{Strategy, TickContext, MarketRegime};
 use crate::strategy::status_cache::StrategyStatusCache;
+use crate::strategy::regime_cache::RegimeCache;
 use crate::models::bar::Bar;
 use crate::bar_cache::BarCache;
 use crate::signal::SignalEngine;
@@ -26,6 +27,7 @@ pub struct Engine {
     order_books: HashMap<String, OrderBook>,
     started_at: Instant,
     status_cache: StrategyStatusCache,
+    regime_cache: RegimeCache,
 }
 
 impl Engine {
@@ -36,6 +38,7 @@ impl Engine {
         telegram: TelegramBot,
         bar_cache: BarCache,
         status_cache: StrategyStatusCache,
+        regime_cache: RegimeCache,
     ) -> Self {
         let mut engine = Self {
             config,
@@ -48,6 +51,7 @@ impl Engine {
             order_books: HashMap::new(),
             started_at: Instant::now(),
             status_cache,
+            regime_cache,
         };
         // Init signal engine after self.config is set
         engine.signal = engine.config.signal.as_ref().filter(|s| s.enabled).map(|sc| {
@@ -113,6 +117,10 @@ impl Engine {
         // Replay loaded bars through strategies to restore indicator state
         self.replay_bars_to_strategies().await;
 
+        // Load regime cache from file (fallback for when Python hasn't pushed yet)
+        self.regime_cache.load_from_file().await;
+        info!("Regime cache loaded from file");
+
         // Main event loop
         while let Some(event) = ws_rx.recv().await {
             match event {
@@ -173,7 +181,11 @@ impl Engine {
                 recent_bars: self.bar_buffers.get(&pair, 500).await,
                 balances,
                 open_orders: Vec::new(),
-                regime: None,
+                regime: self.regime_cache.get(&pair).await.map(|(r, _c)| match r {
+                    0 => MarketRegime::Ranging,
+                    1 => MarketRegime::Trending,
+                    _ => MarketRegime::Danger,
+                }),
                 timestamp: chrono::Utc::now().timestamp_millis(),
             };
 
@@ -274,7 +286,7 @@ impl Engine {
                             recent_bars: window,
                             balances: balances.clone(),
                             open_orders: vec![],
-                            regime: None,
+                            regime: None, // No regime during warmup replay
                             timestamp: bar.timestamp,
                         };
                         let _ = strategy.on_tick(&ctx).await;
