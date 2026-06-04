@@ -298,7 +298,7 @@ class TelegramCommandHandler:
                 trend_journal = getattr(strategy, '_trend_journal', None)
 
                 for symbol, engine in strategy.pairs.items():
-                    # Grid line
+                    # Grid line — show state with icon
                     sm = strategy.state_machines.get(symbol)
                     grid_state = sm.state.value if sm else "UNKNOWN"
                     tracker = strategy.grid_order_trackers.get(symbol)
@@ -308,11 +308,12 @@ class TelegramCommandHandler:
                     grid_pnl_rust = sum(v for k, v in getattr(strategy, 'grid_pnl', {}).items() if k == symbol)
                     grid_pnl = grid_pnl_rust if grid_pnl_rust != 0 else grid_pnl
                     sign = "+" if grid_pnl >= 0 else ""
+                    state_icon = "🟢" if grid_state == "Active" else "🟡" if grid_state == "Paused" else "⚪"
                     lines.append(
-                        f"🤖 <b>{engine.display_pair}:</b> {grid_state} | "
+                        f"🤖 <b>{engine.display_pair}:</b> {state_icon} {grid_state} | "
                         f"P&L: {sign}${grid_pnl:.2f} | Orders: {pending}"
                     )
-                    # Grid details from Rust (ADX/CHOP/NATR + regime gate info)
+                    # Grid details from Rust (regime + ADX/CHOP/NATR)
                     if sm and hasattr(sm, 'details') and sm.details:
                         lines.append(f"  <i>{sm.details}</i>")
 
@@ -323,13 +324,27 @@ class TelegramCommandHandler:
                         trend_state = ts.get("state", "WAITING")
                         trend_pnl = ts.get("pnl", 0)
                         t_sign = "+" if trend_pnl >= 0 else ""
-                        lines.append(
-                            f"📈 <b>{engine.display_pair}:</b> {trend_state} | "
-                            f"P&L: {t_sign}${trend_pnl:.2f}"
-                        )
-                        # Trend details from Rust (score/direction/indicators)
                         trend_details = ts.get("details", "")
+                        if trend_state == "POSITION":
+                            lines.append(
+                                f"📈 <b>{engine.display_pair}:</b> {trend_state} | "
+                                f"P&L: {t_sign}${trend_pnl:.2f}"
+                            )
+                        else:
+                            # Extract direction from new 5-layer format for compact display
+                            dir_str = ""
+                            if "dir: +1" in trend_details:
+                                dir_str = "⬆"
+                            elif "dir: -1" in trend_details:
+                                dir_str = "⬇"
+                            elif "dir: 0" in trend_details:
+                                dir_str = "➡"
+                            lines.append(
+                                f"📈 <b>{engine.display_pair}:</b> {trend_state} {dir_str} | "
+                                f"P&L: {t_sign}${trend_pnl:.2f}"
+                            )
                         if trend_details:
+                            # Show compact: gate + dir + score on one line
                             lines.append(f"  <i>{trend_details}</i>")
 
             # Capital summary from Rust config
@@ -1023,17 +1038,16 @@ class TelegramCommandHandler:
                 update.message.reply_text("Trend engine not active — no status from Rust engine")
                 return
 
-            lines = ["🤖 <b>TREND ENGINE</b>", "•••"]
+            lines = ["📈 <b>TREND ENGINE</b>", "•••"]
 
             total_open = 0
             total_pnl = 0.0
-            max_positions = getattr(strategy, '_trend_capital', 0)  # just for display
 
             # Show per-pair trend status from Rust API
             for symbol, engine in (getattr(strategy, 'pairs', {}) or {}).items():
                 ts = trend_statuses.get(symbol)
                 if not ts:
-                    lines.append(f"{engine.display_pair} — No data")
+                    lines.append(f"<b>{engine.display_pair}:</b> No data")
                     continue
 
                 state = ts.get("state", "UNKNOWN")
@@ -1044,11 +1058,25 @@ class TelegramCommandHandler:
                 if state == "POSITION":
                     total_open += 1
                     sign = "+" if pnl >= 0 else ""
-                    lines.append(f"📈 <b>{engine.display_pair}:</b> {state}")
+                    lines.append(f"<b>{engine.display_pair}:</b> {state}")
                     lines.append(f"  {details}")
                     lines.append(f"  Unrealized P&L: {sign}${pnl:.2f}")
                 else:
-                    lines.append(f"📈 <b>{engine.display_pair}:</b> {state} — {details}")
+                    # Split 5-layer details: first line = gate + direction + reason, second = indicators
+                    lines.append(f"<b>{engine.display_pair}:</b> {state}")
+                    if details:
+                        # The new format: "Gate: ✅✅ | dir: -1 | S1:✅ S2:❌ S3:✅ | ADX=93.8 CHOP=37 RSI=29.8 | reason"
+                        # Split into: indicators | reason
+                        parts = details.split(" | ")
+                        if len(parts) >= 4:
+                            # First 3 segments: Gate, dir, S1/S2/S3
+                            top = " | ".join(parts[:3])
+                            # Remaining: ADX/CHOP/RSI + reason
+                            bottom = " | ".join(parts[3:])
+                            lines.append(f"  {top}")
+                            lines.append(f"  <i>{bottom}</i>")
+                        else:
+                            lines.append(f"  {details}")
 
             lines.append("•••")
             sign = "+" if total_pnl >= 0 else ""
