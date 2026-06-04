@@ -68,9 +68,25 @@ impl BarCache {
     }
 
     /// Bulk load — used by `load_bar_buffers` at startup.
+    ///
+    /// Deduplicates entries that differ only by dash (e.g. "ETHUSDT" vs
+    /// "ETH-USDT") by merging them under the config-format key and keeping
+    /// the larger bar set. This handles cache files written before the
+    /// symbol-normalization fix that stored bars under raw WebSocket keys.
     pub async fn bulk_load(&self, entries: HashMap<String, Vec<Bar>>) {
-        let mut map = self.inner.write().await;
+        let mut merged: HashMap<String, Vec<Bar>> = HashMap::new();
         for (k, v) in entries {
+            let normalized = insert_dash(&k);
+            // Insert under the normalized key, keeping the larger set
+            match merged.get(&normalized) {
+                Some(existing) if existing.len() >= v.len() => {}
+                _ => {
+                    merged.insert(normalized, v);
+                }
+            }
+        }
+        let mut map = self.inner.write().await;
+        for (k, v) in merged {
             map.insert(k, v);
         }
     }
