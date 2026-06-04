@@ -8,6 +8,7 @@ mod vwap;
 mod volume;
 mod adx;
 mod choppiness;
+mod macd;
 
 pub use ema::Ema;
 pub use rsi::Rsi;
@@ -19,3 +20,4 @@ pub use vwap::Vwap;
 pub use volume::VolumeSma;
 pub use adx::Adx;
 pub use choppiness::Choppiness;
+pub use macd::Macd;
