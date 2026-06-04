@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use crate::config::GridConfig;
 use crate::models::order::OrderSide;
+use crate::indicators::{SupportResistance, LevelKind, Vwap, VolumeSma};
 
 const MIN_NOTIONAL: f64 = 5.0;
 const SIZE_FACTOR: f64 = 0.08;
@@ -40,6 +41,11 @@ pub struct GridStrategy {
     peak_equity: f64,
     initial_capital: f64,
     current_capital: f64,
+    // Indicator modules
+    sr: SupportResistance,
+    vwap: Vwap,
+    volume_sma: VolumeSma,
+    last_bar_count: usize,
     // Last evaluated indicator values for diagnostics
     diag_price: f64,
     diag_rsi: f64,
@@ -47,6 +53,10 @@ pub struct GridStrategy {
     diag_bb_lower: f64,
     diag_bb_upper: f64,
     diag_bars_count: usize,
+    diag_vwap: f64,
+    diag_volume_ratio: f64,
+    diag_near_support: bool,
+    diag_near_resistance: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -77,17 +87,25 @@ impl GridStrategy {
             peak_equity: config.capital_usdt,
             initial_capital: config.capital_usdt,
             current_capital: config.capital_usdt,
+            sr: SupportResistance::new(50, 0.01),
+            vwap: Vwap::new(390),
+            volume_sma: VolumeSma::new(20),
+            last_bar_count: 0,
             diag_price: 0.0,
             diag_rsi: 0.0,
             diag_ema200: 0.0,
             diag_bb_lower: 0.0,
             diag_bb_upper: 0.0,
             diag_bars_count: 0,
+            diag_vwap: 0.0,
+            diag_volume_ratio: 0.0,
+            diag_near_support: false,
+            diag_near_resistance: false,
         }
     }
 
-    /// Calculate grid levels based on BB center, ATR, and BB bounds
-    /// Direct port of Python GridManager.calculate_grid()
+    /// Calculate grid levels based on BB center, ATR, and BB bounds.
+    /// Snap buy levels away from resistance and sell levels away from support.
     pub fn calculate_levels(
         &self,
         bb_center: f64,
@@ -107,13 +125,28 @@ impl GridStrategy {
         let buy_spacing = atr_spacing.min(max_buy_spacing);
         let sell_spacing = (atr_spacing * 0.75).min(max_sell_spacing);
 
+        let sr_levels = self.sr.get_levels();
+
         // Generate buy levels with geometric scaling
         let mut buy_levels = Vec::new();
         let base_buy_value = available * 0.4 / self.config.levels as f64;
 
         for i in 0..self.config.levels {
-            let price = round_down(bb_center - buy_spacing * (i + 1) as f64, self.tick_size);
+            let mut price = round_down(bb_center - buy_spacing * (i + 1) as f64, self.tick_size);
             if price <= 0.0 { continue; }
+
+            // Snap buy level away from resistance (shift to nearest support below)
+            for sr in sr_levels.iter().filter(|l| l.kind == LevelKind::Resistance) {
+                let distance_pct = (sr.price - price).abs() / price;
+                if distance_pct < 0.005 {
+                    if let Some(nearest_support) = sr_levels.iter()
+                        .filter(|l| l.kind == LevelKind::Support && l.price < price)
+                        .max_by(|a, b| a.price.partial_cmp(&b.price).unwrap())
+                    {
+                        price = round_down(nearest_support.price, self.tick_size);
+                    }
+                }
+            }
 
             let scaled_value = base_buy_value * (1.0 + SIZE_FACTOR).powi(i as i32);
             let quantity = round_down(scaled_value / price, self.step_size);
@@ -133,7 +166,21 @@ impl GridStrategy {
         let base_sell_value = sell_capital / self.config.levels as f64;
 
         for i in 0..self.config.levels {
-            let price = round_down(bb_center + sell_spacing * (i + 1) as f64, self.tick_size);
+            let mut price = round_down(bb_center + sell_spacing * (i + 1) as f64, self.tick_size);
+
+            // Snap sell level away from support (shift to nearest resistance above)
+            for sr in sr_levels.iter().filter(|l| l.kind == LevelKind::Support) {
+                let distance_pct = (sr.price - price).abs() / price;
+                if distance_pct < 0.005 {
+                    if let Some(nearest_resistance) = sr_levels.iter()
+                        .filter(|l| l.kind == LevelKind::Resistance && l.price > price)
+                        .min_by(|a, b| a.price.partial_cmp(&b.price).unwrap())
+                    {
+                        price = round_down(nearest_resistance.price, self.tick_size);
+                    }
+                }
+            }
+
             let quantity = round_down(base_sell_value / price, self.step_size);
 
             if price * quantity >= MIN_NOTIONAL {
@@ -199,8 +246,12 @@ impl GridStrategy {
                 let price_above_ema = price > ema_200;
                 let rsi_neutral = rsi > 30.0 && rsi < 70.0;
                 let within_bb = price > bb_lower && price < bb_upper;
+                let above_vwap = if self.vwap.is_initialized() { price > self.vwap.value() } else { true };
+                let volume_ok = if self.volume_sma.is_initialized() { self.volume_sma.volume_ratio() > 0.8 } else { true };
 
-                if price_above_ema && rsi_neutral && within_bb {
+                let score = price_above_ema as u8 + rsi_neutral as u8 + within_bb as u8
+                    + above_vwap as u8 + volume_ok as u8;
+                if score >= 3 {
                     self.state = GridState::Active;
                 }
             }
@@ -208,8 +259,13 @@ impl GridStrategy {
                 let rsi_extreme = rsi < 25.0 || rsi > 80.0;
                 let outside_bb = price < bb_lower * 0.98 || price > bb_upper * 1.02;
                 let below_ema = price < ema_200 * 0.97;
+                // High-volume dump below VWAP — potential capitulation
+                let volume_dump = self.vwap.is_initialized()
+                    && price < self.vwap.value() * 0.99
+                    && self.volume_sma.is_initialized()
+                    && self.volume_sma.volume_ratio() > 2.0;
 
-                if rsi_extreme || outside_bb || below_ema {
+                if rsi_extreme || outside_bb || below_ema || volume_dump {
                     self.state = GridState::Paused;
                 }
             }
@@ -279,11 +335,32 @@ impl Strategy for GridStrategy {
         // Track bar availability for diagnostics (before any early return)
         self.diag_bars_count = ctx.recent_bars.len();
 
+        // Feed new bars to indicator modules (avoid double-counting)
+        let bars_to_process = if ctx.recent_bars.len() > self.last_bar_count {
+            &ctx.recent_bars[self.last_bar_count..]
+        } else if ctx.recent_bars.len() < self.last_bar_count {
+            &ctx.recent_bars[..] // buffer was reset
+        } else {
+            &[][..] // no new bars
+        };
+        for bar in bars_to_process {
+            self.sr.update_bar(bar.open, bar.high, bar.low, bar.close, bar.timestamp);
+            self.vwap.update_bar(bar.high, bar.low, bar.close, bar.volume);
+            self.volume_sma.update(bar.volume);
+        }
+        self.last_bar_count = ctx.recent_bars.len();
+
         // Get mid price from order book
         let mid_price = match ctx.order_book.mid_price() {
             Some(price) => price,
             None => return Ok(Vec::new()),
         };
+
+        // Store VWAP and volume diagnostics
+        self.diag_vwap = self.vwap.value();
+        self.diag_volume_ratio = self.volume_sma.volume_ratio();
+        self.diag_near_support = self.sr.near_support(mid_price);
+        self.diag_near_resistance = self.sr.near_resistance(mid_price);
         if ctx.recent_bars.len() >= 20 {
             let closes: Vec<f64> = ctx.recent_bars.iter().map(|b| b.close).collect();
             let mean = closes.iter().sum::<f64>() / closes.len() as f64;
@@ -441,18 +518,27 @@ impl Strategy for GridStrategy {
             let price_ok = self.diag_price > self.diag_ema200;
             let rsi_ok = self.diag_rsi > 30.0 && self.diag_rsi < 70.0;
             let bb_ok = self.diag_price > self.diag_bb_lower && self.diag_price < self.diag_bb_upper;
+            let vwap_ok = self.diag_vwap > 0.0 && self.diag_price > self.diag_vwap;
+            let vol_ok = self.diag_volume_ratio > 0.8;
+            let score = price_ok as u8 + rsi_ok as u8 + bb_ok as u8 + vwap_ok as u8 + vol_ok as u8;
             format!(
-                "Capital: ${:.2} | Price: ${:.2} | RSI: {:.1} | EMA: ${:.2} | BB: [{:.2}, {:.2}] | Bars: {} | {}{}{}",
+                "Capital: ${:.2} | Score: {}/5 | Price: ${:.2} | RSI: {:.1} | EMA: ${:.2} | BB: [{:.2}, {:.2}] | VWAP: ${:.2} | Vol: {:.2}x | S/R: {}{} | {}{}{}{}{}",
                 self.current_capital,
+                score,
                 self.diag_price,
                 self.diag_rsi,
                 self.diag_ema200,
                 self.diag_bb_lower,
                 self.diag_bb_upper,
-                self.diag_bars_count,
+                self.diag_vwap,
+                self.diag_volume_ratio,
+                if self.diag_near_support { "S" } else { "-" },
+                if self.diag_near_resistance { "R" } else { "-" },
                 if price_ok { "✅" } else { "❌" },
                 if rsi_ok { "✅" } else { "❌" },
                 if bb_ok { "✅" } else { "❌" },
+                if vwap_ok { "✅" } else { "❌" },
+                if vol_ok { "✅" } else { "❌" },
             )
         } else if self.state == GridState::Paused && self.diag_bars_count == 0 {
             format!(

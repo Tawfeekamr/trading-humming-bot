@@ -9,9 +9,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl build-esse
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 ENV PATH="/root/.cargo/bin:${PATH}"
 RUN pip install --no-cache-dir maturin
-COPY trading-engine-core/ /build/trading-engine-core/
+
+# --- Dependency caching layer ---
+COPY trading-engine-core/Cargo.toml trading-engine-core/Cargo.lock /build/trading-engine-core/
 WORKDIR /build/trading-engine-core
-RUN maturin build --release --features python --out /build/wheels 2>&1 || (echo "WHEEL_BUILD_FAILED" && ls -la /build/wheels/ 2>/dev/null || true)
+RUN mkdir src && echo "fn main(){}" > src/main.rs
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/build/target \
+    cargo build --release --features python 2>/dev/null || true
+RUN rm -rf src
+
+# --- Source build layer ---
+COPY trading-engine-core/src/ /build/trading-engine-core/src/
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/build/target \
+    maturin build --release --features python --out /build/wheels 2>&1 || (echo "WHEEL_BUILD_FAILED" && ls -la /build/wheels/ 2>/dev/null || true)
 
 # Stage 2: Python runtime
 FROM python:3.13-slim

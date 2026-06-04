@@ -29,8 +29,13 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "trading-engine-core -> target"
+
       - name: Build and install trading-engine-core wheel
-        run: pip install maturin && cd trading-engine-core && maturin build --release && pip install target/wheels/trading_engine_core*.whl
+        run: pip install maturin && cd trading-engine-core && maturin build && pip install target/wheels/trading_engine_core*.whl
 
       - name: Run Rust tests
         run: cd trading-engine-core && cargo test --lib
@@ -38,8 +43,8 @@ jobs:
       - name: Run Python unit tests
         run: pytest tests/ -v --tb=short
 
-  build-and-push:
-    name: Build & Push Images
+  build-rust:
+    name: Build Rust Bot
     needs: test
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
@@ -72,6 +77,28 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  build-signal:
+    name: Build Signal Listener
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Build and push Signal listener
         uses: docker/build-push-action@v6
         with:
@@ -86,7 +113,7 @@ jobs:
 
   deploy:
     name: Deploy to AWS Tokyo
-    needs: build-and-push
+    needs: [build-rust, build-signal]
     runs-on: ubuntu-latest
 
     steps:

@@ -4,6 +4,8 @@ mod atr;
 mod bollinger;
 mod support_resistance;
 mod candlestick;
+mod vwap;
+mod volume;
 
 pub use ema::Ema;
 pub use rsi::Rsi;
@@ -11,3 +13,5 @@ pub use atr::Atr;
 pub use bollinger::BollingerBands;
 pub use support_resistance::{SupportResistance, LevelKind};
 pub use candlestick::{CandlestickPatterns, Pattern};
+pub use vwap::Vwap;
+pub use volume::VolumeSma;
