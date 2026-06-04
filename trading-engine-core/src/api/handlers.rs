@@ -148,13 +148,25 @@ pub async fn get_klines(
 
     // Try the engine's bar cache first (handles dash/no-dash normalization).
     let cached = state.bars.get(&params.symbol, limit).await;
-    if !cached.is_empty() {
+    if cached.len() >= limit {
         return Ok::<_, (axum::http::StatusCode, Json<serde_json::Value>)>(Json(cached));
     }
 
-    // Fallback to connector for non-cached pairs (e.g. UI ad-hoc lookups).
+    // Cache has fewer bars than requested — supplement from connector.
     match state.connector.get_klines(&params.symbol, interval, limit as u16).await {
-        Ok(bars) => Ok(Json(bars)),
+        Ok(bars) => {
+            if bars.len() > cached.len() {
+                Ok(Json(bars))
+            } else if !cached.is_empty() {
+                Ok(Json(cached))
+            } else {
+                Ok(Json(bars))
+            }
+        }
+        Err(_) if !cached.is_empty() => {
+            // Connector failed but we have cached bars — return what we have
+            Ok(Json(cached))
+        }
         Err(e) => Err((
             axum::http::StatusCode::BAD_GATEWAY,
             Json(serde_json::json!({ "error": e.to_string() })),

@@ -305,11 +305,16 @@ class TelegramCommandHandler:
                     pending = tracker.total_pending if tracker else 0
                     pair_pnl = grid_by_pair.get(symbol, grid_by_pair.get(symbol.replace("-", "/"), {}))
                     grid_pnl = pair_pnl.get("net_pnl", 0)
+                    grid_pnl_rust = sum(v for k, v in getattr(strategy, 'grid_pnl', {}).items() if k == symbol)
+                    grid_pnl = grid_pnl_rust if grid_pnl_rust != 0 else grid_pnl
                     sign = "+" if grid_pnl >= 0 else ""
                     lines.append(
                         f"🤖 <b>{engine.display_pair}:</b> {grid_state} | "
                         f"P&L: {sign}${grid_pnl:.2f} | Orders: {pending}"
                     )
+                    # Grid details from Rust (ADX/CHOP/NATR + regime gate info)
+                    if sm and hasattr(sm, 'details') and sm.details:
+                        lines.append(f"  <i>{sm.details}</i>")
 
                     # Trend line — read from Rust engine API status
                     trend_statuses = getattr(strategy, '_trend_statuses', {})
@@ -322,6 +327,10 @@ class TelegramCommandHandler:
                             f"📈 <b>{engine.display_pair}:</b> {trend_state} | "
                             f"P&L: {t_sign}${trend_pnl:.2f}"
                         )
+                        # Trend details from Rust (score/direction/indicators)
+                        trend_details = ts.get("details", "")
+                        if trend_details:
+                            lines.append(f"  <i>{trend_details}</i>")
 
             # Capital summary from Rust config
             grid_cap = getattr(strategy, 'grid_pnl', {})
