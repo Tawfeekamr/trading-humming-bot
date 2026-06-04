@@ -921,10 +921,13 @@ class TelegramCommandHandler:
                 f"🖥️ <b>System Status</b>",
                 f"•••",
                 f"⚙️ <b>Mode:</b> {strategy.env.upper()}",
-                f"💰 <b>Capital:</b> ${strategy.capital_usdt:,.0f}",
-                f"📊 <b>Pairs:</b> {', '.join(strategy.pairs.keys())}" if hasattr(strategy, 'pairs') else "",
-                f"•••",
             ]
+            capital_usdt = getattr(strategy, 'capital_usdt', 0)
+            if isinstance(capital_usdt, (int, float)) and capital_usdt > 0:
+                lines.append(f"💰 <b>Capital:</b> ${capital_usdt:,.0f}")
+            if hasattr(strategy, 'pairs') and strategy.pairs:
+                lines.append(f"📊 <b>Pairs:</b> {', '.join(strategy.pairs.keys())}")
+            lines.append(f"•••")
 
             # Grid Engine
             lines.append(f"🤖 <b>Grid Engine</b>")
@@ -933,19 +936,19 @@ class TelegramCommandHandler:
                 for sym in strategy.pairs:
                     sm = state_machines.get(sym)
                     state_str = sm.state.value if sm else "UNKNOWN"
-                    emoji = "🟢" if "ACTIVE" in state_str else "🔴"
+                    emoji = "🟢" if "ACTIVE" in state_str else "🟡" if "PAUSED" in state_str else "🔴"
                     lines.append(f"  {emoji} {sym}: {state_str}")
             else:
                 lines.append(f"  ⚪ No pairs")
 
-            # Trend Engine
+            # Trend Engine — read positions from Rust API statuses
             trend_cap = getattr(strategy, '_trend_capital', 0)
+            trend_statuses = getattr(strategy, '_trend_statuses', {})
             if trend_cap and trend_cap > 0:
-                trend_positions = 0
-                for sym, eng in strategy.pairs.items():
-                    pm = strategy._position_managers.get(sym) if hasattr(strategy, '_position_managers') else None
-                    if pm and hasattr(pm, 'has_open_position') and pm.has_open_position():
-                        trend_positions += 1
+                trend_positions = sum(
+                    1 for ts in trend_statuses.values()
+                    if ts.get("state") == "POSITION"
+                )
                 lines.append(f"📈 <b>Trend Engine</b>")
                 lines.append(f"  Capital: ${trend_cap:,.0f} | Positions: {trend_positions}")
             else:
@@ -962,9 +965,17 @@ class TelegramCommandHandler:
             else:
                 lines.append(f"📡 <b>Signal Copy Engine</b>: Disabled")
 
-            # ML
-            if hasattr(strategy, '_ml_classifier') and strategy._ml_classifier:
-                lines.append(f"🧠 <b>ML:</b> {strategy._ml_summary()}")
+            # ML Regime — from Rust engine strategies API
+            regime_parts = []
+            if hasattr(strategy, 'pairs') and strategy.pairs:
+                for sym in strategy.pairs:
+                    sm = state_machines.get(sym)
+                    if sm and hasattr(sm, 'details') and sm.details:
+                        detail = sm.details
+                        first_seg = detail.split('|')[0].strip()
+                        regime_parts.append(f"{sym}: {first_seg}")
+            if regime_parts:
+                lines.append(f"🧠 <b>ML Regime:</b> {' | '.join(regime_parts)}")
 
             # Server resources
             lines.append(f"•••")
