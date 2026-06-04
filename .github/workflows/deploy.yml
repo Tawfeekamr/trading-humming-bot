@@ -117,6 +117,7 @@ jobs:
             --output text)
           echo "Test command: $TEST_ID"
 
+          AGENT_OK=false
           for i in $(seq 1 6); do
             STATUS=$(aws ssm get-command-invocation \
               --command-id "$TEST_ID" \
@@ -126,22 +127,49 @@ jobs:
             echo "Health check attempt $i: $STATUS"
             if [ "$STATUS" = "Success" ]; then
               echo "SSM agent is healthy"
+              AGENT_OK=true
               break
             elif [ "$STATUS" = "Failed" ]; then
-              echo "SSM agent unhealthy — attempting restart via EC2 Systems Manager"
-              # Try restarting the SSM agent using AWS-RunShellScript with a restart command
-              RESTART_ID=$(aws ssm send-command \
-                --document-name "AWS-RestartSSMAgent" \
+              echo "SSM agent unhealthy — rebooting EC2 instance"
+              aws ec2 reboot-instance --instance-id "${{ secrets.EC2_INSTANCE_ID }}"
+              echo "Waiting 60s for instance to reboot and SSM agent to recover..."
+              sleep 60
+              # Test again after reboot
+              TEST_ID2=$(aws ssm send-command \
+                --document-name "AWS-RunShellScript" \
                 --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
                 --region "${{ env.AWS_REGION }}" \
+                --parameters commands='["echo SSM_ALIVE_AFTER_REBOOT"]' \
+                --timeout-seconds 60 \
+                --comment "SSM health check after reboot" \
                 --query "Command.CommandId" \
-                --output text 2>/dev/null || echo "restart-failed")
-              echo "Restart command: $RESTART_ID"
-              sleep 30
+                --output text)
+              for j in $(seq 1 12); do
+                STATUS2=$(aws ssm get-command-invocation \
+                  --command-id "$TEST_ID2" \
+                  --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
+                  --query "Status" \
+                  --output text 2>/dev/null || echo "Pending")
+                echo "Post-reboot check $j: $STATUS2"
+                if [ "$STATUS2" = "Success" ]; then
+                  echo "SSM agent recovered after reboot"
+                  AGENT_OK=true
+                  break 2
+                elif [ "$STATUS2" = "Failed" ]; then
+                  echo "SSM agent still unhealthy after reboot"
+                  break 2
+                fi
+                sleep 10
+              done
               break
             fi
             sleep 5
           done
+
+          if [ "$AGENT_OK" != "true" ]; then
+            echo "ERROR: SSM agent could not be recovered"
+            exit 1
+          fi
 
       - name: Deploy via SSM
         run: |
