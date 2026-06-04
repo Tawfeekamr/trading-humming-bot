@@ -52,11 +52,14 @@ class RegimeClassifier:
         print("Training complete.")
 
     def calibrate(self, X_val, y_val):
+        n_samples = len(X_val)
+        # Isotonic can overfit on small samples; sigmoid is more stable
+        method = 'isotonic' if n_samples >= 500 else 'sigmoid'
         self.calibrated_model = CalibratedClassifierCV(
-            self.model, method='isotonic', cv=5
+            self.model, method=method, cv=5
         )
         self.calibrated_model.fit(X_val, y_val)
-        print(f"Calibration complete.")
+        print(f"Calibration complete (method={method}, n_samples={n_samples}).")
 
     def predict_proba(self, X):
         if not self.is_trained:
