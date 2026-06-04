@@ -173,6 +173,15 @@ def main():
         )
         print(f"  After labeling: {len(df_labeled)} rows")
         print(f"  Label distribution: {df_labeled['regime_label'].value_counts().to_dict()}")
+        # DANGER class sufficiency check
+        danger_count = (df_labeled['regime_label'] == 2).sum()
+        danger_pct = danger_count / len(df_labeled) * 100
+        if danger_count < 50:
+            print(f"  ⚠️  WARNING: Only {danger_count} DANGER samples ({danger_pct:.1f}%). "
+                  f"Model will struggle to learn this class. Consider increasing --candles.")
+        elif danger_pct < 5.0:
+            print(f"  ⚠️  WARNING: DANGER class is only {danger_pct:.1f}% of labels ({danger_count} samples). "
+                  f"Consider adjusting danger_threshold or trend_atr_k to increase DANGER examples.")
 
         X = df_labeled[feature_cols]
         y = df_labeled['regime_label']
