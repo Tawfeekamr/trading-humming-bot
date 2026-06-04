@@ -1,6 +1,5 @@
 import pandas as pd
 import numpy as np
-from sklearn.model_selection import train_test_split, TimeSeriesSplit
 from sklearn.metrics import classification_report, accuracy_score
 import argparse
 import os
@@ -17,6 +16,7 @@ if __name__ == '__main__' and __package__ is None:
 from src.data.feature_engineering import calculate_technical_features
 from src.data.label_generation import generate_regime_labels
 from src.ml.regime_classifier import RegimeClassifier
+from src.ml.purged_cv import PurgedTimeSeriesSplit
 
 
 def load_real_data(symbol: str = "SOLUSDT", intervals: list[str] = None, candles_per_interval: int = 1000):
@@ -125,9 +125,11 @@ def main():
         print(f"  Single-timeframe mode: {args.timeframe}")
 
     datasets = []
+    max_forward_window = 0
     for interval, cfg in interval_configs.items():
         df = load_real_data(symbol, intervals=[interval], candles_per_interval=args.candles)
         datasets.append((interval, cfg, df))
+        max_forward_window = max(max_forward_window, cfg["forward_window"])
 
     feature_cols = [
         'returns', 'volatility_ratio', 'normalized_atr',
@@ -176,7 +178,9 @@ def main():
     model_path = f'models/regime_{args.pair}.pkl'
     output_path = args.output if args.output else model_path.replace(".pkl", ".pkl.new")
     classifier = RegimeClassifier(model_path=output_path, model_type='random_forest')
-    best_params = classifier.tune_hyperparameters(X_trainval, y_trainval, n_iter=20, cv=TimeSeriesSplit(n_splits=3))
+    embargo = max_forward_window
+    print(f"  Embargo gap: {embargo} samples (max forward_window across intervals)")
+    best_params = classifier.tune_hyperparameters(X_trainval, y_trainval, n_iter=20, cv=PurgedTimeSeriesSplit(n_splits=3, embargo=embargo))
 
     print("\n--- Evaluation on Test Set ---")
     y_pred = classifier.model.predict(X_test)
