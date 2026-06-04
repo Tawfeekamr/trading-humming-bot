@@ -276,14 +276,14 @@ impl Strategy for GridStrategy {
     }
 
     async fn on_tick(&mut self, ctx: &TickContext) -> Result<Vec<OrderRequest>> {
+        // Track bar availability for diagnostics (before any early return)
+        self.diag_bars_count = ctx.recent_bars.len();
+
         // Get mid price from order book
         let mid_price = match ctx.order_book.mid_price() {
             Some(price) => price,
             None => return Ok(Vec::new()),
         };
-
-        // Evaluate grid state using indicators from recent bars
-        self.diag_bars_count = ctx.recent_bars.len();
         if ctx.recent_bars.len() >= 20 {
             let closes: Vec<f64> = ctx.recent_bars.iter().map(|b| b.close).collect();
             let mean = closes.iter().sum::<f64>() / closes.len() as f64;

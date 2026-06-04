@@ -117,8 +117,11 @@ impl Engine {
         while let Some(event) = ws_rx.recv().await {
             match event {
                 WsEvent::OrderBookUpdate { symbol, bids, asks } => {
-                    self.order_books.insert(symbol.clone(), OrderBook {
-                        symbol: symbol.clone(),
+                    // Normalize WebSocket symbol ("XRPUSDT") to config pair key ("XRP-USDT")
+                    let pair_key = self.find_pair_for_symbol(&symbol)
+                        .unwrap_or_else(|| symbol.clone());
+                    self.order_books.insert(pair_key.clone(), OrderBook {
+                        symbol: pair_key,
                         bids,
                         asks,
                         timestamp: chrono::Utc::now().timestamp_millis(),
