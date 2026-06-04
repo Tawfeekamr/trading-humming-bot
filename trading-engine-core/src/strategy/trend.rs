@@ -209,7 +209,7 @@ impl TrendStrategy {
         (false, String::new())
     }
 
-    fn calculate_stop_loss(&self, entry_price: f64) -> f64 {
+    pub fn calculate_stop_loss(&self, entry_price: f64) -> f64 {
         entry_price - 2.0 * self.atr.value()
     }
 
