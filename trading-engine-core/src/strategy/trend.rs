@@ -69,6 +69,7 @@ pub struct TrendStrategy {
     atr: Atr,
     // State
     position: Option<TrendPosition>,
+    last_bar_count: usize,
     // Capital tracking
     initial_capital: f64,
     realized_pnl: f64,
@@ -114,6 +115,7 @@ impl TrendStrategy {
             rsi: Rsi::new(config.rsi_period),
             atr: Atr::new(14),
             position: None,
+            last_bar_count: 0,
             initial_capital: capital,
             realized_pnl: 0.0,
         }
@@ -234,9 +236,21 @@ impl Strategy for TrendStrategy {
 
     async fn on_tick(&mut self, ctx: &TickContext) -> Result<Vec<OrderRequest>> {
         let mut orders = Vec::new();
-        for bar in &ctx.recent_bars {
+
+        // Only process NEW bars since last tick (same pattern as GridStrategy)
+        let bars_to_process = if ctx.recent_bars.len() > self.last_bar_count {
+            &ctx.recent_bars[self.last_bar_count..]
+        } else if ctx.recent_bars.len() < self.last_bar_count {
+            &ctx.recent_bars[..] // buffer was reset (e.g. engine restart)
+        } else {
+            &ctx.recent_bars[0..0] // no new bars
+        };
+
+        for bar in bars_to_process {
             self.update_indicators(bar);
         }
+        self.last_bar_count = ctx.recent_bars.len();
+
         if !self.indicators_ready() { return Ok(orders); }
 
         let current_price = ctx.order_book.mid_price().unwrap_or_else(|| {

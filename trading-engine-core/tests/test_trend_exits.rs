@@ -39,7 +39,10 @@ fn make_bar(close: f64) -> Bar {
     Bar::new(close - 10.0, close + 10.0, close - 5.0, close, 100.0, 0)
 }
 
-fn make_tick(price: f64) -> TickContext {
+/// Creates a tick context with an incrementally growing bar buffer,
+/// matching the live engine behavior where bars accumulate over time.
+fn make_tick(price: f64, bars: &mut Vec<Bar>) -> TickContext {
+    bars.push(make_bar(price));
     TickContext {
         order_book: OrderBook {
             symbol: "BTCUSDT".to_string(),
@@ -47,7 +50,7 @@ fn make_tick(price: f64) -> TickContext {
             asks: vec![(price + 5.0, 1.0)],
             timestamp: 0,
         },
-        recent_bars: vec![make_bar(price)],
+        recent_bars: bars.clone(),
         balances: HashMap::from([("USDT".to_string(), 10000.0)]),
         open_orders: vec![],
         regime: None,
@@ -96,7 +99,8 @@ async fn test_stop_loss_triggers_exit() {
     assert!(sl < 50000.0, "Stop loss should be below entry, got {}", sl);
 
     // Tick at price below stop loss
-    let ctx = make_tick(sl - 100.0);
+    let mut bars = Vec::new();
+    let ctx = make_tick(sl - 100.0, &mut bars);
     let orders = strategy.on_tick(&ctx).await.unwrap();
 
     // Should generate a sell order for the full quantity
@@ -121,7 +125,8 @@ async fn test_tp1_partial_exit() {
     let tp_levels = TrendPosition::calculate_tp_levels(50000.0, sl, config.risk_reward_ratio, 0.10);
 
     // Tick at TP1 price
-    let ctx = make_tick(tp_levels[0].price);
+    let mut bars = Vec::new();
+    let ctx = make_tick(tp_levels[0].price, &mut bars);
     let orders = strategy.on_tick(&ctx).await.unwrap();
 
     let tp1_sell = orders.iter().find(|o| o.side == OrderSide::Sell);
@@ -155,9 +160,10 @@ async fn test_all_tp_levels_close_position() {
     let tp_levels = TrendPosition::calculate_tp_levels(50000.0, sl, config.risk_reward_ratio, 0.10);
 
     // Tick through all TP levels — some may fire together in one tick
+    let mut bars = Vec::new();
     let mut total_sell_qty = 0.0;
     for tp in &tp_levels {
-        let ctx = make_tick(tp.price);
+        let ctx = make_tick(tp.price, &mut bars);
         let orders = strategy.on_tick(&ctx).await.unwrap();
         for o in &orders {
             if o.side == OrderSide::Sell {
@@ -185,7 +191,7 @@ async fn test_all_tp_levels_close_position() {
     );
 
     // Verify no more exit orders on subsequent tick (position is gone)
-    let ctx_after = make_tick(tp_levels[2].price + 100.0);
+    let ctx_after = make_tick(tp_levels[2].price + 100.0, &mut bars);
     let orders_after = strategy.on_tick(&ctx_after).await.unwrap();
     let exit_orders: Vec<_> = orders_after.iter().filter(|o| o.side == OrderSide::Sell).collect();
     assert!(exit_orders.is_empty(), "No sell orders expected after position closed, got {:?}", exit_orders);
@@ -202,9 +208,10 @@ async fn test_trailing_stop_chandelier_exit() {
     // Push price up to raise highest_since_entry and trailing stop
     // After warmup with 0.5 step, ATR ≈ (20 * 0.5) = ~10 range per bar
     // Feed rising prices to update indicators and trail
+    let mut bars = Vec::new();
     for p in [50500.0, 51000.0, 51500.0, 52000.0] {
         strategy.update_indicators(&make_bar(p));
-        let ctx = make_tick(p);
+        let ctx = make_tick(p, &mut bars);
         strategy.on_tick(&ctx).await.unwrap();
     }
 
@@ -213,7 +220,7 @@ async fn test_trailing_stop_chandelier_exit() {
     // ATR after big moves should be at least 10+
     // Drop price far below trailing stop
     let drop_price = 50000.0; // well below peak at 52000
-    let ctx = make_tick(drop_price);
+    let ctx = make_tick(drop_price, &mut bars);
     let orders = strategy.on_tick(&ctx).await.unwrap();
 
     assert!(
@@ -237,7 +244,8 @@ async fn test_direction_flip_exit() {
     }
 
     // Tick at a very low price — direction should be Down, triggering exit for long position
-    let ctx = make_tick(45000.0);
+    let mut bars = Vec::new();
+    let ctx = make_tick(45000.0, &mut bars);
     let orders = strategy.on_tick(&ctx).await.unwrap();
 
     assert!(
