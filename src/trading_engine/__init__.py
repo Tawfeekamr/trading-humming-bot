@@ -18,14 +18,13 @@ Usage (programmatic):
 """
 
 from .host import StrategyHost
-from .adapter import ExecutionAdapter, MockAdapter, RustEngineAdapter, create_adapter, Order, InstrumentInfo
+from .adapter import ExecutionAdapter, RustEngineAdapter, create_adapter, Order, InstrumentInfo
 from .strategy import Strategy
 from .data_feed import DataFeed
 
 __all__ = [
     "StrategyHost",
     "ExecutionAdapter",
-    "MockAdapter",
     "RustEngineAdapter",
     "create_adapter",
     "Strategy",
