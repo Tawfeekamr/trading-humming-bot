@@ -13,6 +13,7 @@ const ADX_RANGE_MAX: f64 = 22.0;     // ADX below this → no strong trend
 const CHOP_RANGE_MIN: f64 = 55.0;    // Choppiness above this → ranging confirmed
 const NATR_FLOOR: f64 = 0.005;       // Min normalized ATR for grid to capture profit
 const NATR_CEIL: f64 = 0.04;         // Max normalized ATR — above this, risk too high
+const FILL_COOLDOWN_SECS: i64 = 60;  // Prevent re-placement at same levels after fill
 
 #[derive(Debug, Clone)]
 pub struct GridLevel {
@@ -56,6 +57,8 @@ pub struct GridStrategy {
     sr: SupportResistance,
     last_bar_count: usize,
     pause_reason: String,
+    // Fill cooldown — prevents order churn loop
+    last_fill_time: Option<i64>,  // epoch millis of most recent fill
     // Diagnostic values
     diag_price: f64,
     diag_rsi: f64,
@@ -93,6 +96,7 @@ impl GridStrategy {
             state: GridState::Paused,
             grid_layout: None,
             orders: HashMap::new(),
+            last_fill_time: None,
             total_pnl: 0.0,
             peak_equity: config.capital_usdt,
             initial_capital: config.capital_usdt,
@@ -353,6 +357,14 @@ impl GridStrategy {
     pub fn growth_ratio(&self) -> f64 {
         self.current_capital / self.initial_capital
     }
+
+    /// Check whether the fill cooldown is still active at the given time
+    pub fn is_on_cooldown(&self, now_ms: i64) -> bool {
+        match self.last_fill_time {
+            Some(last) => now_ms.saturating_sub(last) < FILL_COOLDOWN_SECS * 1000,
+            None => false,
+        }
+    }
 }
 
 fn round_down(value: f64, increment: f64) -> f64 {
@@ -494,6 +506,17 @@ impl Strategy for GridStrategy {
             return Ok(Vec::new());
         }
 
+        // Fill cooldown: prevent re-placement at same levels after a fill
+        // (stops paper-trading churn loop where fill → remove → re-place → fill)
+        if let Some(last_fill) = self.last_fill_time {
+            let cooldown_ms = FILL_COOLDOWN_SECS * 1000;
+            if ctx.timestamp.saturating_sub(last_fill) < cooldown_ms {
+                return Ok(Vec::new());
+            }
+            // Cooldown expired — clear it
+            self.last_fill_time = None;
+        }
+
         let mut orders = Vec::new();
 
         // Place buy limit orders and track them
@@ -554,6 +577,9 @@ impl Strategy for GridStrategy {
     async fn on_fill(&mut self, fill: &Fill) -> Result<Vec<OrderRequest>> {
         // Remove the filled order from tracking
         self.orders.retain(|_, o| o.order_id != fill.order_id);
+
+        // Record fill timestamp for cooldown (prevents churn loop)
+        self.last_fill_time = Some(fill.timestamp);
 
         // Calculate rough PnL estimate from fill
         let pnl = match fill.side {
@@ -798,5 +824,30 @@ mod tests {
         let (deploy, reason) = grid.should_deploy_grid(100.0, Some(0), 0.0);
         assert!(!deploy);
         assert!(reason.contains("Warming up"), "Expected warmup block, got: {}", reason);
+    }
+
+    #[test]
+    fn test_cooldown_blocks_after_fill() {
+        let mut grid = make_grid();
+        // Simulate a fill at t=1_000_000_000_000 ms
+        grid.last_fill_time = Some(1_000_000_000_000);
+
+        // 30 s later — still on cooldown
+        assert!(grid.is_on_cooldown(1_000_000_030_000));
+    }
+
+    #[test]
+    fn test_cooldown_expires_after_60s() {
+        let mut grid = make_grid();
+        grid.last_fill_time = Some(1_000_000_000_000);
+
+        // 61 s later — cooldown expired
+        assert!(!grid.is_on_cooldown(1_000_000_061_000));
+    }
+
+    #[test]
+    fn test_no_cooldown_when_no_fills() {
+        let grid = make_grid();
+        assert!(!grid.is_on_cooldown(0));
     }
 }
