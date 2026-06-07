@@ -537,7 +537,19 @@ class TradingRunner:
                         logger.error("Telegram poll error: %s", e)
                 await asyncio.sleep(3)
 
-        tg_task = asyncio.create_task(telegram_poll_loop())
+        async def telegram_poll_watchdog():
+            """Auto-restart telegram_poll_loop if it dies unexpectedly."""
+            while self._running:
+                task = asyncio.create_task(telegram_poll_loop())
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    return  # deliberate shutdown
+                except Exception as e:
+                    logger.error("Telegram poll loop died, restarting in 5s: %s", e)
+                    await asyncio.sleep(5)
+
+        tg_task = asyncio.create_task(telegram_poll_watchdog())
         try:
             async for bar in feed.bars():
                 if not self._running:
