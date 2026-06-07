@@ -635,6 +635,22 @@ class SignalEngine:
     def _log_position_trade(self, pos: SignalPosition, price: float, reason: str):
         self._journal.log_trade(SignalTrade(
             timestamp=datetime.now(timezone.utc).isoformat(),
+            symbol=pos.symbol,
+            channel_name=pos.channel_name,
+            action=f"CLOSE_{reason}",
+            entry_price=pos.entry_price,
+            current_price=price,
+            quantity=pos.amount,
+            realized_pnl=pos.realized_pnl,
+            exit_reason=reason,
+            signal_confidence=pos.signal_confidence,
+            stop_loss=pos.stop_loss,
+            take_profits=str(pos.take_profits),
+            tp1_hit=int(pos.tp1_hit),
+            tp2_hit=int(pos.tp2_hit),
+            tp3_hit=int(pos.tp3_hit),
+            raw_message=pos.raw_message[:500],
+            parse_reasoning="",
             is_audit=1 if self._audit_mode else 0,
         ))
 
