@@ -502,35 +502,11 @@ class TestGridTickMLIntegration:
 
         assert target._ml_models["DOGE-USDT"] is not target._ml_models["BTC-USDT"]
 
-    def test_state_machine_receives_per_pair_regime(self):
-        """GridStateMachine.evaluate should get this pair's ML prediction, not another's."""
-        from src.grid.grid_state import GridStateMachine, GridState
-        sm = GridStateMachine()
-        sm.state = GridState.ACTIVE
-        result = sm.evaluate(price=100_000, rsi=50, ema_200=100_000,
-                             bb_lower=95_000, bb_upper=105_000,
-                             ml_regime=2, ml_confidence=0.9)
-        assert result == GridState.DANGER
-
-    def test_state_machine_ignores_other_pair_regime(self):
-        """Different pairs should have independent ML state."""
-        from src.grid.grid_state import GridStateMachine, GridState
-        sm_a = GridStateMachine()
-        sm_a.state = GridState.ACTIVE
-        result_a = sm_a.evaluate(price=100_000, rsi=50, ema_200=100_000,
-                                  bb_lower=95_000, bb_upper=105_000,
-                                  ml_regime=2, ml_confidence=0.9)
-        assert result_a == GridState.DANGER
-
-        sm_b = GridStateMachine()
-        sm_b.state = GridState.ACTIVE
-        result_b = sm_b.evaluate(price=100_000, rsi=50, ema_200=100_000,
-                                  bb_lower=95_000, bb_upper=105_000,
-                                  ml_regime=0, ml_confidence=0.5)
-        assert result_b == GridState.ACTIVE
+    # Note: GridStateMachine tests removed — grid state now managed by Rust engine
 
 
 # ===================================================================
+# TestTrendEntryMLGate
 # TestTrendEntryMLGate
 # ===================================================================
 
