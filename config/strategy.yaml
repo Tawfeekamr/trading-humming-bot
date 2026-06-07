@@ -43,12 +43,12 @@ grid:
 # ── Indicator Settings ────────────────────────────────────────────
 indicators:
   bollinger:
-    period: 20  # Standard 20 — reverted from 15 (was swept on ETH only)
+    period: 15  # Standard 20 — reverted from 15 (was swept on ETH only)
     std_dev: 2.0
 
   rsi:
     period: 14
-    oversold: 30  # Standard 30
+    oversold: 35  # Standard 30
     overbought: 70            # Grid pauses above this
 
   ema:
@@ -86,12 +86,12 @@ dashboard:
 trend:
   enabled: true
   capital: 10000                # Claude: keep equal 10K until out-of-sample evidence
-  ema_fast: 12   # 12 is fine — fast enough for 1h without overfitting
+  ema_fast: 30  # 12 is fine — fast enough for 1h without overfitting
   ema_slow: 40
   ema_trend: 200
   rsi_period: 14
-  rsi_min: 40   # Reverted from 50 (was swept on XRP only) — standard 40
-  rsi_max: 80
+  rsi_min: 50  # Reverted from 50 (was swept on XRP only) — standard 40
+  rsi_max: 60
   min_signal_score: 3
   confirmation_ticks: 1
   risk_per_trade_pct: 2.0
