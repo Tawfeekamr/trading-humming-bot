@@ -1,6 +1,7 @@
 import os
 import time
 import json
+import html
 import logging
 import logging.handlers
 import threading
@@ -315,7 +316,7 @@ class TelegramCommandHandler:
                     )
                     # Grid details from Rust (regime + ADX/CHOP/NATR)
                     if sm and hasattr(sm, 'details') and sm.details:
-                        lines.append(f"  <i>{sm.details}</i>")
+                        lines.append(f"  <i>{html.escape(sm.details)}</i>")
 
                     # Trend line — read from Rust engine API status
                     trend_statuses = getattr(strategy, '_trend_statuses', {})
@@ -345,7 +346,7 @@ class TelegramCommandHandler:
                             )
                         if trend_details:
                             # Show compact: gate + dir + score on one line
-                            lines.append(f"  <i>{trend_details}</i>")
+                            lines.append(f"  <i>{html.escape(trend_details)}</i>")
 
             # Capital summary from Rust config
             grid_cap = getattr(strategy, 'grid_pnl', {})
@@ -399,7 +400,7 @@ class TelegramCommandHandler:
                         detail = sm.details
                         # Show first segment which contains state + regime reason
                         first_seg = detail.split('|')[0].strip()
-                        regime_parts.append(f"{symbol}: {first_seg}")
+                        regime_parts.append(f"{symbol}: {html.escape(first_seg)}")
             if regime_parts:
                 lines.append(f"🧠 <b>Regime:</b> {' | '.join(regime_parts)}")
 
@@ -462,7 +463,7 @@ class TelegramCommandHandler:
                         pair_pnl = grid_pnl.get(symbol, 0) if grid_pnl else 0
                         sign = "+" if pair_pnl >= 0 else ""
                         grid_detail = getattr(state_machine, 'details', '')
-                        detail_line = f"\n  <i>{grid_detail}</i>" if grid_detail and state == "Paused" else ""
+                        detail_line = f"\n  <i>{html.escape(grid_detail)}</i>" if grid_detail and state == "Paused" else ""
                         lines.append(
                             f"🤖 {engine.display_pair} | Grid: <b>{state}</b> | "
                             f"P&L: {sign}${pair_pnl:.2f} | Pending: {pending}{detail_line}"
@@ -476,7 +477,7 @@ class TelegramCommandHandler:
                         t_pnl = ts.get("pnl", 0)
                         t_details = ts.get("details", "")
                         t_sign = "+" if t_pnl >= 0 else ""
-                        trend_detail = f"\n  <i>{t_details}</i>" if t_details and t_state == "WAITING" else ""
+                        trend_detail = f"\n  <i>{html.escape(t_details)}</i>" if t_details and t_state == "WAITING" else ""
                         lines.append(
                             f"📈 {engine.display_pair} | Trend: <b>{t_state}</b> | "
                             f"P&L: {t_sign}${t_pnl:.2f}{trend_detail}"
@@ -973,7 +974,7 @@ class TelegramCommandHandler:
                     if sm and hasattr(sm, 'details') and sm.details:
                         detail = sm.details
                         first_seg = detail.split('|')[0].strip()
-                        regime_parts.append(f"{sym}: {first_seg}")
+                        regime_parts.append(f"{sym}: {html.escape(first_seg)}")
             if regime_parts:
                 lines.append(f"🧠 <b>ML Regime:</b> {' | '.join(regime_parts)}")
 
