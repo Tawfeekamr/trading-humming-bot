@@ -1080,12 +1080,12 @@ class TelegramCommandHandler:
                         parts = details.split(" | ")
                         if len(parts) >= 2:
                             # First segment: score breakdown
-                            lines.append(f"  {parts[0]}")
+                            lines.append(f"  {html.escape(parts[0])}")
                             # Remaining: dir + indicators + reason
-                            rest = " | ".join(parts[1:])
+                            rest = html.escape(" | ".join(parts[1:]))
                             lines.append(f"  <i>{rest}</i>")
                         else:
-                            lines.append(f"  {details}")
+                            lines.append(f"  {html.escape(details)}")
 
             lines.append("•••")
             sign = "+" if total_pnl >= 0 else ""
