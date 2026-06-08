@@ -71,11 +71,10 @@ jobs:
           context: .
           file: Dockerfile.rust
           push: true
+          no-cache: true
           tags: |
             ${{ env.REGISTRY }}/tawfeekamr/trading-bot:latest
             ${{ env.REGISTRY }}/tawfeekamr/trading-bot:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
 
   build-signal:
     name: Build Signal Listener
