@@ -445,11 +445,11 @@ impl Strategy for TrendStrategy {
             let dir_str = match dir { Direction::Up => "+1", Direction::Down => "-1", Direction::Flat => "0" };
             let reason = if dir == Direction::Flat { "Mixed direction".to_string() }
                          else if dir == Direction::Down && !TRADE_SHORTS { "dir=-1 blocks longs".to_string() }
-                         else if scores.total < threshold { format!("Score {}<{}", scores.total, threshold) }
-                         else { "Waiting".to_string() };
+                         else if scores.total < threshold { format!("Need {} more", threshold - scores.total) }
+                         else { "Ready".to_string() };
             (
                 "WAITING".to_string(),
-                format!("Score:{}/{} (A:{} C:{} V:{} M:{} R:{}) | dir:{} | ADX={:.1} CHOP={:.0} RSI={:.1} | {}",
+                format!("Score:{}/9 (A:{} C:{} V:{} M:{} R:{}) need≥{} | dir:{} | ADX={:.1} CHOP={:.0} RSI={:.1} | {}",
                     scores.total, threshold,
                     scores.adx, scores.chop, scores.volume, scores.macd, scores.rsi,
                     dir_str,
