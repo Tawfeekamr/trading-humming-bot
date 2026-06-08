@@ -134,13 +134,25 @@ trend:
 
 ## Status Display
 
-The `/status` Telegram command shows the score breakdown:
+The `/status` and `/trend_status` Telegram commands show the score breakdown:
 
+**Entering (score meets threshold):**
 ```
-Score:6/5 (A:3 C:1 V:0 M:1 R:1) | dir:+1 | ADX=68 CHOP=51 RSI=60 | Score 6<5
+Score:8/9 (A:3 C:2 V:1 M:1 R:1) need≥5 | dir:+1 | ADX=93 CHOP=16 RSI=58 | Ready
 ```
+
+**Blocked (score below threshold):**
+```
+Score:3/9 (A:0 C:1 V:0 M:1 R:1) need≥5 | dir:+1 | ADX=6 CHOP=49 RSI=61 | Need 2 more
+```
+
+Format: `Score:{actual}/9 (A:{} C:{} V:{} M:{} R:{}) need≥{threshold} | dir:{direction} | indicators | reason`
 
 Where: `A`=ADX, `C`=CHOP, `V`=Volume, `M`=MACD, `R`=RSI
+
+- The first number is the actual score (out of max 9)
+- `need≥5` shows the entry threshold from config
+- The reason shows `Ready` (score met) or `Need N more` (N points short of threshold)
 
 ## Why Scoring Beats Binary Gates
 
