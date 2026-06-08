@@ -576,12 +576,9 @@ impl Strategy for GridStrategy {
 
     async fn on_fill(&mut self, fill: &Fill) -> Result<Vec<OrderRequest>> {
         // Skip fills not placed by this grid (e.g., trend strategy fills).
-        // Allow through if we have no tracked orders yet (warmup / test).
-        if !self.orders.is_empty() {
-            let is_our_order = self.orders.values().any(|o| o.order_id == fill.order_id);
-            if !is_our_order {
-                return Ok(Vec::new());
-            }
+        // Grid orders use format "grid_{pair}_buy_{i}" or "grid_{pair}_sell_{i}".
+        if !fill.order_id.starts_with("grid_") {
+            return Ok(Vec::new());
         }
 
         // Remove the filled order from tracking
