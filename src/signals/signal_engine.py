@@ -117,6 +117,8 @@ class SignalEngine:
         self._write_status()
 
     def get_status(self) -> dict:
+        # Sync with Rust before reporting — catches positions closed by Rust engine
+        self._sync_closed_from_rust()
         risk_status = self._risk.get_status()
         positions = self._position_mgr.get_open_positions()
         return {
@@ -126,9 +128,23 @@ class SignalEngine:
             "risk": risk_status,
         }
 
+    def _sync_closed_from_rust(self):
+        """Mark Python positions as closed if Rust engine has closed them."""
+        try:
+            with open("data/signal_positions.json", "r") as f:
+                rust_data = json.load(f)
+            rust_open = {sym for sym, p in rust_data.items() if not p.get("is_closed", False)}
+            for pos in self._position_mgr.get_open_positions():
+                if pos.symbol not in rust_open:
+                    logger.info(f"Syncing closed position from Rust: {pos.symbol}")
+                    self._position_mgr.close_position(pos.symbol, pos.entry_price, "rust_sync")
+        except Exception:
+            pass  # File may not exist yet
+
     def _write_status(self):
         """Write current status to shared JSON file for Rust engine to read."""
         try:
+            self._sync_closed_from_rust()
             positions = self._position_mgr.get_open_positions()
             risk_status = self._risk.get_status()
 

@@ -1302,6 +1302,10 @@ class TelegramCommandHandler:
         except Exception:
             pass
 
+        # Filter: only show positions that Rust confirms as open
+        if rust_positions:
+            positions = [p for p in positions if p.symbol in rust_positions]
+
         # Compute unrealized P&L
         unrealized = self._compute_signal_unrealized()
         total_pnl = total_realized + unrealized
