@@ -450,8 +450,9 @@ impl Strategy for TrendStrategy {
             (
                 "WAITING".to_string(),
                 format!("Score:{}/9 (A:{} C:{} V:{} M:{} R:{}) need≥{} | dir:{} | ADX={:.1} CHOP={:.0} RSI={:.1} | {}",
-                    scores.total, threshold,
+                    scores.total,
                     scores.adx, scores.chop, scores.volume, scores.macd, scores.rsi,
+                    threshold,
                     dir_str,
                     self.adx.adx(), self.choppiness.value(), self.rsi.value(), reason),
                 0.0,
