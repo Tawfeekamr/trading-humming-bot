@@ -99,6 +99,7 @@ trend:
   max_positions: 2
   max_total_positions: 2        # Claude: 3×2%=6% > 5% daily limit — reduced to 2
   exit_signal_threshold: 2      # Close position when signal score drops below this
+  entry_score_threshold: 5      # Min score (0-9) to enter: ADX(0-3) + CHOP(0-2) + VOL(0-2) + MACD(0-1) + RSI(0-1)
   trailing_stop_atr_mult: 2.5   # ATR-based Chandelier Exit
   trailing_activation_pct: 3.0  # Claude: must be > trail distance to avoid immediate stop-out
   rr_ratio: 2.0

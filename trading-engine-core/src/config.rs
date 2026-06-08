@@ -152,6 +152,8 @@ pub struct TrendConfig {
     pub choppiness_threshold: f64,
     #[serde(default = "default_1_2")]
     pub volume_ratio_threshold: f64,
+    #[serde(default = "default_5_u8")]
+    pub entry_score_threshold: u8,
     #[serde(default = "default_65")]
     pub rsi_long_max: f64,
     #[serde(default = "default_35")]
@@ -167,6 +169,7 @@ fn default_0_2() -> f64 { 0.2 }
 fn default_2_5() -> f64 { 2.5 }
 fn default_38() -> f64 { 38.0 }
 fn default_1_2() -> f64 { 1.2 }
+fn default_5_u8() -> u8 { 5 }
 fn default_65() -> f64 { 65.0 }
 fn default_35() -> f64 { 35.0 }
 fn default_20() -> f64 { 20.0 }

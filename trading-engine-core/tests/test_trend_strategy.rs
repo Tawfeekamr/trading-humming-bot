@@ -25,6 +25,7 @@ fn default_trend_config() -> TrendConfig {
         adx_exit_threshold: 20.0,
         choppiness_threshold: 38.0,
         volume_ratio_threshold: 1.2,
+        entry_score_threshold: 5,
         rsi_long_max: 65.0,
         rsi_short_min: 35.0,
         atr_trailing_mult: 3.0,

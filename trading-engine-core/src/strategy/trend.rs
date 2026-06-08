@@ -18,6 +18,18 @@ pub enum Direction {
 /// Spot long-only: dir=Down exits longs and blocks new entries, never shorts.
 const TRADE_SHORTS: bool = false;
 
+/// Weighted signal scores (0–9 total).
+/// ADX(0-3) + CHOP(0-2) + VOL(0-2) + MACD(0-1) + RSI(0-1) = max 9.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SignalScores {
+    pub adx: u8,
+    pub chop: u8,
+    pub volume: u8,
+    pub macd: u8,
+    pub rsi: u8,
+    pub total: u8,
+}
+
 /// Take-profit level with close percentage
 #[derive(Debug, Clone)]
 pub struct TpLevel {
@@ -102,6 +114,7 @@ impl TrendStrategy {
                 adx_exit_threshold: config.adx_exit_threshold,
                 choppiness_threshold: config.choppiness_threshold,
                 volume_ratio_threshold: config.volume_ratio_threshold,
+                entry_score_threshold: config.entry_score_threshold,
                 rsi_long_max: config.rsi_long_max,
                 rsi_short_min: config.rsi_short_min,
                 atr_trailing_mult: config.atr_trailing_mult,
@@ -144,11 +157,48 @@ impl TrendStrategy {
             && self.volume_sma.is_initialized()
     }
 
-    /// Layer 1: GATE — does a trend exist?
-    fn gate(&self) -> bool {
-        let adx_thresh = if self.config.adx_gate_threshold > 0.0 { self.config.adx_gate_threshold } else { 25.0 };
-        let chop_thresh = if self.config.choppiness_threshold > 0.0 { self.config.choppiness_threshold } else { 38.0 };
-        self.adx.adx() > adx_thresh && self.choppiness.value() < chop_thresh
+    /// Unified scoring — replaces binary gate + score with weighted 0–9 system.
+    ///   ADX(0-3)  + CHOP(0-2) + VOL(0-2) + MACD(0-1) + RSI(0-1) = max 9
+    fn compute_score(&self, dir: Direction) -> SignalScores {
+        // ADX: trend strength (higher ADX = stronger trend)
+        let adx_val = self.adx.adx();
+        let adx = if adx_val > 50.0 { 3 }
+                  else if adx_val > 30.0 { 2 }
+                  else if adx_val > 20.0 { 1 }
+                  else { 0 };
+
+        // CHOP: trend quality (lower = cleaner trend, higher = choppy)
+        let chop_val = self.choppiness.value();
+        let chop = if chop_val < 30.0 { 2 }
+                   else if chop_val < 50.0 { 1 }
+                   else { 0 };
+
+        // Volume: market participation
+        let vol_ratio = self.volume_sma.volume_ratio();
+        let volume = if vol_ratio > 1.5 { 2 }
+                     else if vol_ratio > 0.9 { 1 }
+                     else { 0 };
+
+        // MACD: momentum alignment with direction
+        let dir_sign = match dir {
+            Direction::Up => 1.0,
+            Direction::Down => -1.0,
+            Direction::Flat => 0.0,
+        };
+        let macd = if dir != Direction::Flat
+            && self.macd.histogram().signum() == dir_sign { 1 } else { 0 };
+
+        // RSI: entry timing (not overbought for longs, not oversold for shorts)
+        let rsi_val = self.rsi.value();
+        let rsi_long_max = if self.config.rsi_long_max > 0.0 { self.config.rsi_long_max } else { 65.0 };
+        let rsi = match dir {
+            Direction::Up if rsi_val < rsi_long_max => 1,
+            Direction::Down if rsi_val > 35.0 => 1,
+            _ => 0,
+        };
+
+        let total = adx + chop + volume + macd + rsi;
+        SignalScores { adx, chop, volume, macd, rsi, total }
     }
 
     /// Layer 2: DIRECTION — +1 / -1 / 0
@@ -164,38 +214,17 @@ impl TrendStrategy {
         }
     }
 
-    /// Layer 3: SCORE — S1 (momentum), S2 (participation), S3 (entry timing).
-    fn score(&self, dir: Direction) -> (bool, bool, bool) {
-        let dir_sign = match dir {
-            Direction::Up => 1.0,
-            Direction::Down => -1.0,
-            Direction::Flat => 0.0,
-        };
-        let s1 = dir != Direction::Flat && self.macd.histogram().signum() == dir_sign;
-        let vol_thresh = if self.config.volume_ratio_threshold > 0.0 { self.config.volume_ratio_threshold } else { 1.2 };
-        let s2 = self.volume_sma.volume_ratio() > vol_thresh;
-        let rsi_val = self.rsi.value();
-        let rsi_long_max = if self.config.rsi_long_max > 0.0 { self.config.rsi_long_max } else { 65.0 };
-        let rsi_short_min = if self.config.rsi_short_min > 0.0 { self.config.rsi_short_min } else { 35.0 };
-        let s3 = match dir {
-            Direction::Up => rsi_val < rsi_long_max,
-            Direction::Down => rsi_val > rsi_short_min,
-            Direction::Flat => false,
-        };
-        (s1, s2, s3)
-    }
-
-    /// Layer 4: ACTIVATE — trend_exists AND dir==Up AND S2 AND (S1 OR S3).
+    /// Activate — enter when score meets threshold AND direction is clear.
     fn should_activate(&self, price: f64) -> bool {
-        if !self.gate() { return false; }
         let dir = self.direction(price);
         if TRADE_SHORTS {
             if dir == Direction::Flat { return false; }
         } else {
             if dir != Direction::Up { return false; }
         }
-        let (s1, s2, s3) = self.score(dir);
-        s2 && (s1 || s3)
+        let threshold = if self.config.entry_score_threshold > 0 { self.config.entry_score_threshold } else { 5 };
+        let scores = self.compute_score(dir);
+        scores.total >= threshold
     }
 
     /// Layer 5: EXIT — ADX dying OR direction flipped.
@@ -410,24 +439,20 @@ impl Strategy for TrendStrategy {
         } else if !self.indicators_ready() {
             ("WAITING".to_string(), "⏳ All indicators warming up".to_string(), 0.0)
         } else {
-            let gate = self.gate();
             let dir = self.direction(self.ema_fast.value());
-            let (s1, s2, s3) = self.score(dir);
+            let scores = self.compute_score(dir);
+            let threshold = if self.config.entry_score_threshold > 0 { self.config.entry_score_threshold } else { 5 };
             let dir_str = match dir { Direction::Up => "+1", Direction::Down => "-1", Direction::Flat => "0" };
-            let reason = if !gate { "No trend gate" }
-                         else if dir == Direction::Flat { "Mixed direction" }
-                         else if dir == Direction::Down && !TRADE_SHORTS { "dir=-1 blocks longs" }
-                         else if !s2 { "No volume (S2 mandatory)" }
-                         else { "Waiting for confirmation" };
+            let reason = if dir == Direction::Flat { "Mixed direction".to_string() }
+                         else if dir == Direction::Down && !TRADE_SHORTS { "dir=-1 blocks longs".to_string() }
+                         else if scores.total < threshold { format!("Score {}<{}", scores.total, threshold) }
+                         else { "Waiting".to_string() };
             (
                 "WAITING".to_string(),
-                format!("Gate: {}{} | dir: {} | S1:{} S2:{} S3:{} | ADX={:.1} CHOP={:.0} RSI={:.1} | {}",
-                    if gate { "✅" } else { "❌" },
-                    if self.choppiness.value() < 38.0 { "✅" } else { "❌" },
+                format!("Score:{}/{} (A:{} C:{} V:{} M:{} R:{}) | dir:{} | ADX={:.1} CHOP={:.0} RSI={:.1} | {}",
+                    scores.total, threshold,
+                    scores.adx, scores.chop, scores.volume, scores.macd, scores.rsi,
                     dir_str,
-                    if s1 { "✅" } else { "❌" },
-                    if s2 { "✅" } else { "❌" },
-                    if s3 { "✅" } else { "❌" },
                     self.adx.adx(), self.choppiness.value(), self.rsi.value(), reason),
                 0.0,
             )

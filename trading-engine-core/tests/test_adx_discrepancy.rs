@@ -27,6 +27,7 @@ fn make_config() -> TrendConfig {
         adx_exit_threshold: 20.0,
         choppiness_threshold: 38.0,
         volume_ratio_threshold: 1.5,
+        entry_score_threshold: 5,
         rsi_long_max: 70.0,
         rsi_short_min: 30.0,
         atr_trailing_mult: 0.0,
