@@ -332,13 +332,13 @@ class TelegramCommandHandler:
                                 f"P&L: {t_sign}${trend_pnl:.2f}"
                             )
                         else:
-                            # Extract direction from new 5-layer format for compact display
+                            # Extract direction from details for compact display
                             dir_str = ""
-                            if "dir: +1" in trend_details:
+                            if "dir:+1" in trend_details or "dir: +1" in trend_details:
                                 dir_str = "⬆"
-                            elif "dir: -1" in trend_details:
+                            elif "dir:-1" in trend_details or "dir: -1" in trend_details:
                                 dir_str = "⬇"
-                            elif "dir: 0" in trend_details:
+                            elif "dir:0" in trend_details or "dir: 0" in trend_details:
                                 dir_str = "➡"
                             lines.append(
                                 f"📈 <b>{engine.display_pair}:</b> {trend_state} {dir_str} | "
@@ -1074,19 +1074,16 @@ class TelegramCommandHandler:
                     lines.append(f"  {details}")
                     lines.append(f"  Unrealized P&L: {sign}${pnl:.2f}")
                 else:
-                    # Split 5-layer details: first line = gate + direction + reason, second = indicators
                     lines.append(f"<b>{engine.display_pair}:</b> {state}")
                     if details:
-                        # The new format: "Gate: ✅✅ | dir: -1 | S1:✅ S2:❌ S3:✅ | ADX=93.8 CHOP=37 RSI=29.8 | reason"
-                        # Split into: indicators | reason
+                        # Format: "Score:4/5 (A:0 C:1 V:1 M:1 R:1) | dir:+1 | ADX=68 CHOP=51 RSI=60 | Score 4<5"
                         parts = details.split(" | ")
-                        if len(parts) >= 4:
-                            # First 3 segments: Gate, dir, S1/S2/S3
-                            top = " | ".join(parts[:3])
-                            # Remaining: ADX/CHOP/RSI + reason
-                            bottom = " | ".join(parts[3:])
-                            lines.append(f"  {top}")
-                            lines.append(f"  <i>{bottom}</i>")
+                        if len(parts) >= 2:
+                            # First segment: score breakdown
+                            lines.append(f"  {parts[0]}")
+                            # Remaining: dir + indicators + reason
+                            rest = " | ".join(parts[1:])
+                            lines.append(f"  <i>{rest}</i>")
                         else:
                             lines.append(f"  {details}")
 
