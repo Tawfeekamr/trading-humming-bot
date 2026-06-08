@@ -286,7 +286,7 @@ jobs:
                 --output text)
               echo "=== Container Status ==="
               echo "$OUTPUT"
-              if echo "$OUTPUT" | grep -q "running"; then
+              if echo "$OUTPUT" | grep -qE "Up|running"; then
                 echo "Stack is running"
                 exit 0
               fi
