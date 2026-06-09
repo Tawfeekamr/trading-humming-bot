@@ -58,15 +58,20 @@ impl SignalPositionManager {
         signal_confidence: &str,
         raw_message: &str,
         channel_name: &str,
-    ) -> Option<&SignalPosition> {
+    ) -> Result<(), String> {
         let open_count = self.positions.values().filter(|p| !p.is_closed).count();
         if open_count >= self.max_positions as usize {
-            warn!("Max signal positions ({}) reached", self.max_positions);
-            return None;
+            let reason = format!(
+                "Max signal positions ({}/{}) reached — skipping {}",
+                open_count, self.max_positions, symbol
+            );
+            warn!("{}", reason);
+            return Err(reason);
         }
         if self.positions.get(symbol).map(|p| !p.is_closed).unwrap_or(false) {
-            warn!("Signal position already open for {}", symbol);
-            return None;
+            let reason = format!("Position already open for {} — skipping duplicate", symbol);
+            warn!("{}", reason);
+            return Err(reason);
         }
 
         let now = SystemTime::now()
@@ -90,7 +95,7 @@ impl SignalPositionManager {
         };
         self.positions.insert(symbol.to_string(), pos);
         self.save_state();
-        self.positions.get(symbol)
+        Ok(())
     }
 
     pub fn partial_close(&mut self, symbol: &str, close_pct: f64, price: f64, reason: &str) -> f64 {

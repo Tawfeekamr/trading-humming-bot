@@ -250,8 +250,7 @@ impl SignalEngine {
         if entry <= 0.0 { return; }
 
         let sl = signal.stop_loss.unwrap_or(entry * 0.95);
-        let mut mgr = self.position_mgr.lock().await;
-        mgr.open_position(
+        let result = self.position_mgr.lock().await.open_position(
             signal.pair.as_deref().unwrap_or("?"),
             entry,
             100.0, // Simulated amount
@@ -262,15 +261,27 @@ impl SignalEngine {
             channel_name,
         );
 
-        self.risk.lock().await.record_trade_opened();
-        self.log_audit_trade(signal, channel_name, "OPEN_LONG", entry, "audit_entry");
-        self.notify(&format!(
-            "[AUDIT] Signal entered: {}\nEntry: ${:.2}\nSL: ${:.2}\nTPs: {}\nChannel: {}",
-            signal.pair.as_deref().unwrap_or("?"), entry, sl,
-            signal.take_profits.iter().map(|t| format!("${:.2}", t)).collect::<Vec<_>>().join(", "),
-            channel_name
-        )).await;
-        info!("[AUDIT] Signal entered: {} @ ${:.2} from {}", signal.pair.as_deref().unwrap_or("?"), entry, channel_name);
+        match result {
+            Ok(()) => {
+                self.risk.lock().await.record_trade_opened();
+                self.log_audit_trade(signal, channel_name, "OPEN_LONG", entry, "audit_entry");
+                self.notify(&format!(
+                    "[AUDIT] Signal entered: {}\nEntry: ${:.2}\nSL: ${:.2}\nTPs: {}\nChannel: {}",
+                    signal.pair.as_deref().unwrap_or("?"), entry, sl,
+                    signal.take_profits.iter().map(|t| format!("${:.2}", t)).collect::<Vec<_>>().join(", "),
+                    channel_name
+                )).await;
+                info!("[AUDIT] Signal entered: {} @ ${:.2} from {}", signal.pair.as_deref().unwrap_or("?"), entry, channel_name);
+            }
+            Err(reason) => {
+                info!("Signal skipped ({}): {}", channel_name, reason);
+                self.log_audit_trade(signal, channel_name, "rejected_position", 0.0, &reason);
+                self.notify(&format!(
+                    "⚠️ Signal skipped: {}\n{}\nChannel: {}",
+                    signal.pair.as_deref().unwrap_or("?"), reason, channel_name
+                )).await;
+            }
+        }
     }
 
     async fn handle_close(&self, signal: &ParsedSignal, channel_name: &str) {
