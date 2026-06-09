@@ -6,6 +6,9 @@ use crate::strategy::{Strategy, TickContext, StrategyStatus};
 use crate::connector::types::{OrderRequest, Fill, OrderTypeReq, TimeInForceReq};
 use async_trait::async_trait;
 use anyhow::Result;
+use serde::{Serialize, Deserialize};
+use std::fs;
+use tracing::warn;
 
 /// Direction from EMA cross + price position.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -31,7 +34,7 @@ pub struct SignalScores {
 }
 
 /// Take-profit level with close percentage
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TpLevel {
     pub price: f64,
     pub close_pct: f64,
@@ -39,7 +42,7 @@ pub struct TpLevel {
 }
 
 /// A trend position with direction-aware trailing stop.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TrendPosition {
     pub side: OrderSide,
     pub entry_price: f64,
@@ -62,6 +65,13 @@ impl TrendPosition {
             TpLevel { price: entry_price + risk * risk_reward_ratio, close_pct: tp3_close, filled: false },
         ]
     }
+}
+
+/// Persisted state for trend strategy (position + PnL tracking).
+#[derive(Serialize, Deserialize)]
+struct TrendPositionState {
+    position: TrendPosition,
+    realized_pnl: f64,
 }
 
 pub struct TrendStrategy {
@@ -90,7 +100,7 @@ pub struct TrendStrategy {
 impl TrendStrategy {
     pub fn new(pair: &str, config: &TrendConfig) -> Self {
         let capital = config.capital;
-        Self {
+        let mut me = Self {
             pair: pair.to_string(),
             config: TrendConfig {
                 ema_fast: config.ema_fast,
@@ -131,7 +141,9 @@ impl TrendStrategy {
             last_bar_count: 0,
             initial_capital: capital,
             realized_pnl: 0.0,
-        }
+        };
+        me.load_position();
+        me
     }
 
     pub fn update_indicators(&mut self, bar: &Bar) {
@@ -256,6 +268,43 @@ impl TrendStrategy {
     }
 
     pub fn position(&self) -> Option<&TrendPosition> { self.position.as_ref() }
+
+    fn position_file_path(pair: &str) -> std::path::PathBuf {
+        std::path::PathBuf::from(format!("data/{}_trend_position.json", pair.replace("-", "_")))
+    }
+
+    fn save_position(&self) {
+        let path = Self::position_file_path(&self.pair);
+        if let Some(pos) = &self.position {
+            let state = TrendPositionState {
+                position: pos.clone(),
+                realized_pnl: self.realized_pnl,
+            };
+            match serde_json::to_string_pretty(&state) {
+                Ok(json) => { let _ = fs::write(&path, json); }
+                Err(e) => warn!("Failed to serialize trend position for {}: {}", self.pair, e),
+            }
+        } else {
+            let _ = fs::remove_file(&path);
+        }
+    }
+
+    fn load_position(&mut self) {
+        let path = Self::position_file_path(&self.pair);
+        if !path.exists() { return; }
+        match fs::read_to_string(&path) {
+            Ok(content) => {
+                match serde_json::from_str::<TrendPositionState>(&content) {
+                    Ok(state) => {
+                        self.position = Some(state.position);
+                        self.realized_pnl = state.realized_pnl;
+                    }
+                    Err(e) => warn!("Failed to parse trend position for {}: {}", self.pair, e),
+                }
+            }
+            Err(e) => warn!("Failed to read trend position for {}: {}", self.pair, e),
+        }
+    }
 }
 
 #[async_trait]
@@ -302,6 +351,7 @@ impl Strategy for TrendStrategy {
                     order_type: OrderTypeReq::Limit, price: Some(current_price),
                     quantity: qty, time_in_force: Some(TimeInForceReq::Gtc), client_order_id: None,
                 });
+                self.save_position();
                 return Ok(orders);
             }
 
@@ -319,7 +369,7 @@ impl Strategy for TrendStrategy {
                             order_type: OrderTypeReq::Limit, price: Some(current_price),
                             quantity: sell_qty, time_in_force: Some(TimeInForceReq::Gtc), client_order_id: None,
                         });
-                        if pos.remaining_qty <= 0.0001 { self.position = None; return Ok(orders); }
+                        if pos.remaining_qty <= 0.0001 { self.position = None; self.save_position(); return Ok(orders); }
                     }
                 }
             }
@@ -353,6 +403,7 @@ impl Strategy for TrendStrategy {
                             order_type: OrderTypeReq::Limit, price: Some(current_price),
                             quantity: qty, time_in_force: Some(TimeInForceReq::Gtc), client_order_id: None,
                         });
+                        self.save_position();
                         return Ok(orders);
                     }
                 }
@@ -371,10 +422,14 @@ impl Strategy for TrendStrategy {
                         order_type: OrderTypeReq::Limit, price: Some(current_price),
                         quantity: qty, time_in_force: Some(TimeInForceReq::Gtc), client_order_id: None,
                     });
+                    self.save_position();
                     return Ok(orders);
                 }
             }
         }
+
+        // Persist any trailing stop / TP updates from this tick
+        self.save_position();
 
         // ── No position: check for entry ──
         if self.position.is_none() && self.should_activate(current_price) {
@@ -402,6 +457,7 @@ impl Strategy for TrendStrategy {
                     trailing_stop: None, highest_since_entry: fill.price,
                     lowest_since_entry: fill.price, tp_levels,
                 });
+                self.save_position();
             }
             OrderSide::Sell => {
                 if let Some(mut pos) = self.position.take() {
@@ -409,6 +465,7 @@ impl Strategy for TrendStrategy {
                     if pos.remaining_qty <= 0.0001 { self.position = None; }
                     else { self.position = Some(pos); }
                 }
+                self.save_position();
             }
         }
         Ok(Vec::new())
