@@ -39,6 +39,14 @@ grid:
   capital_usdt: 10000         # Claude: keep equal 10K until out-of-sample evidence
   min_usdt_reserve: 100       # Always keep this in reserve
   order_refresh_time: 60      # Seconds between order refresh
+  # Regime gate thresholds (tuned for current market conditions)
+  adx_range_max: 25.0         # ADX below this = no strong trend (was 22, widened)
+  chop_range_min: 50.0        # Choppiness above this = ranging (was 55, lowered)
+  natr_floor: 0.005           # Min normalized ATR for grid to capture profit
+  natr_ceil: 0.04             # Max normalized ATR — above this, risk too high
+  fill_cooldown_secs: 60      # Per-level fill cooldown (prevents churn loop)
+  ml_trending_block_threshold: 0.75  # Block grid when ML Trending confidence >= this (was 0.55)
+  ml_danger_block_threshold: 0.55    # Block grid when ML Danger confidence >= this
 
 # ── Indicator Settings ────────────────────────────────────────────
 indicators:
@@ -86,12 +94,13 @@ dashboard:
 trend:
   enabled: true
   capital: 10000                # Claude: keep equal 10K until out-of-sample evidence
-  ema_fast: 30  # 12 is fine — fast enough for 1h without overfitting
+  ema_fast: 12                  # Was 30 — 30/40 too close, almost no crossovers; 12/40 gives proper signals
   ema_slow: 40
   ema_trend: 200
   rsi_period: 14
-  rsi_min: 50  # Reverted from 50 (was swept on XRP only) — standard 40
-  rsi_max: 60
+  rsi_long_max: 65              # Explicit — replaces confusing rsi_max (which was 60)
+  rsi_short_min: 35
+  trade_shorts: false           # Set true to enable short trades on Direction::Down
   min_signal_score: 3
   confirmation_ticks: 1
   risk_per_trade_pct: 2.0
@@ -99,7 +108,7 @@ trend:
   max_positions: 2
   max_total_positions: 2        # Claude: 3×2%=6% > 5% daily limit — reduced to 2
   exit_signal_threshold: 2      # Close position when signal score drops below this
-  entry_score_threshold: 5      # Min score (0-9) to enter: ADX(0-3) + CHOP(0-2) + VOL(0-2) + MACD(0-1) + RSI(0-1)
+  entry_score_threshold: 4      # Was 5 — lowered to allow entries with moderate signals
   trailing_stop_atr_mult: 2.5   # ATR-based Chandelier Exit
   trailing_activation_pct: 3.0  # Claude: must be > trail distance to avoid immediate stop-out
   rr_ratio: 2.0

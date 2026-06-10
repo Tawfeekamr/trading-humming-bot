@@ -176,16 +176,24 @@ impl Engine {
 
             let balances = self.connector.get_balances().await.unwrap_or_default();
 
+            let (regime, regime_confidence) = self.regime_cache.get(&pair).await
+                .map(|(r, c)| {
+                    let regime = match r {
+                        0 => MarketRegime::Ranging,
+                        1 => MarketRegime::Trending,
+                        _ => MarketRegime::Danger,
+                    };
+                    (Some(regime), c)
+                })
+                .unwrap_or((None, 0.0));
+
             let ctx = TickContext {
                 order_book,
                 recent_bars: self.bar_buffers.get(&pair, 500).await,
                 balances,
                 open_orders: Vec::new(),
-                regime: self.regime_cache.get(&pair).await.map(|(r, _c)| match r {
-                    0 => MarketRegime::Ranging,
-                    1 => MarketRegime::Trending,
-                    _ => MarketRegime::Danger,
-                }),
+                regime,
+                regime_confidence,
                 timestamp: chrono::Utc::now().timestamp_millis(),
             };
 
@@ -287,6 +295,7 @@ impl Engine {
                             balances: balances.clone(),
                             open_orders: vec![],
                             regime: None, // No regime during warmup replay
+                            regime_confidence: 0.0,
                             timestamp: bar.timestamp,
                         };
                         let _ = strategy.on_tick(&ctx).await;

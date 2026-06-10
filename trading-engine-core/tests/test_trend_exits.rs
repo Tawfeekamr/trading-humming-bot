@@ -33,6 +33,7 @@ fn default_trend_config() -> TrendConfig {
         rsi_long_max: 65.0,
         rsi_short_min: 35.0,
         atr_trailing_mult: 3.0,
+        trade_shorts: false,
     }
 }
 
@@ -55,6 +56,7 @@ fn make_tick(price: f64, bars: &mut Vec<Bar>) -> TickContext {
         balances: HashMap::from([("USDT".to_string(), 10000.0)]),
         open_orders: vec![],
         regime: None,
+        regime_confidence: 0.0,
         timestamp: 0,
     }
 }

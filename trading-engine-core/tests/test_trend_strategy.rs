@@ -29,6 +29,7 @@ fn default_trend_config() -> TrendConfig {
         rsi_long_max: 65.0,
         rsi_short_min: 35.0,
         atr_trailing_mult: 3.0,
+        trade_shorts: false,
     }
 }
 

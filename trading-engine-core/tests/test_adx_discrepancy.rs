@@ -31,6 +31,7 @@ fn make_config() -> TrendConfig {
         rsi_long_max: 70.0,
         rsi_short_min: 30.0,
         atr_trailing_mult: 0.0,
+        trade_shorts: false,
     }
 }
 
@@ -58,6 +59,7 @@ fn make_ctx(bars: Vec<Bar>) -> TickContext {
         balances: std::collections::HashMap::new(),
         open_orders: vec![],
         regime: None,
+        regime_confidence: 0.0,
         timestamp: 1640995200000,
     }
 }

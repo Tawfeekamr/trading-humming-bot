@@ -104,9 +104,34 @@ pub struct GridConfig {
     pub min_reserve: f64,
     #[serde(default = "default_1_5")]
     pub spacing_multiplier: f64,
+    // Configurable grid gate thresholds (defaults match old hard-coded constants)
+    #[serde(default = "default_22")]
+    pub adx_range_max: f64,
+    #[serde(default = "default_55")]
+    pub chop_range_min: f64,
+    #[serde(default = "default_005")]
+    pub natr_floor: f64,
+    #[serde(default = "default_04")]
+    pub natr_ceil: f64,
+    #[serde(default = "default_60")]
+    pub fill_cooldown_secs: i64,
+    /// Block grid when ML regime=Trending AND confidence >= this threshold.
+    /// Default 0.75 (was hard-coded 0.55 which blocked everything).
+    #[serde(default = "default_075")]
+    pub ml_trending_block_threshold: f64,
+    /// Block grid when ML regime=Danger AND confidence >= this threshold.
+    #[serde(default = "default_055")]
+    pub ml_danger_block_threshold: f64,
 }
 
 fn default_1_5() -> f64 { 1.5 }
+fn default_22() -> f64 { 22.0 }
+fn default_55() -> f64 { 55.0 }
+fn default_005() -> f64 { 0.005 }
+fn default_04() -> f64 { 0.04 }
+fn default_60() -> i64 { 60 }
+fn default_075() -> f64 { 0.75 }
+fn default_055() -> f64 { 0.55 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct TrendConfig {
@@ -152,7 +177,7 @@ pub struct TrendConfig {
     pub choppiness_threshold: f64,
     #[serde(default = "default_1_2")]
     pub volume_ratio_threshold: f64,
-    #[serde(default = "default_5_u8")]
+    #[serde(default = "default_4_u8")]
     pub entry_score_threshold: u8,
     #[serde(default = "default_65")]
     pub rsi_long_max: f64,
@@ -160,6 +185,9 @@ pub struct TrendConfig {
     pub rsi_short_min: f64,
     #[serde(default = "default_3")]
     pub atr_trailing_mult: f64,
+    /// Allow short trades. Default false (long-only). When true, Direction::Down generates sell entries.
+    #[serde(default)]
+    pub trade_shorts: bool,
 }
 
 fn default_10k() -> f64 { 10000.0 }
@@ -170,6 +198,7 @@ fn default_2_5() -> f64 { 2.5 }
 fn default_38() -> f64 { 38.0 }
 fn default_1_2() -> f64 { 1.2 }
 fn default_5_u8() -> u8 { 5 }
+fn default_4_u8() -> u8 { 4 }
 fn default_65() -> f64 { 65.0 }
 fn default_35() -> f64 { 35.0 }
 fn default_20() -> f64 { 20.0 }

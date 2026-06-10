@@ -10,6 +10,13 @@ fn default_grid_config() -> GridConfig {
         capital_usdt: 500.0,
         min_reserve: 50.0,
         spacing_multiplier: 1.5,
+        adx_range_max: 22.0,
+        chop_range_min: 55.0,
+        natr_floor: 0.005,
+        natr_ceil: 0.04,
+        fill_cooldown_secs: 60,
+        ml_trending_block_threshold: 0.75,
+        ml_danger_block_threshold: 0.55,
     }
 }
 

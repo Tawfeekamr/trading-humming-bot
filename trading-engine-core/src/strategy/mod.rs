@@ -17,6 +17,9 @@ pub struct TickContext {
     pub balances: HashMap<String, f64>,
     pub open_orders: Vec<OrderRequest>,
     pub regime: Option<MarketRegime>,
+    /// Real ML regime confidence (0.0–1.0). Passed through from regime_cache
+    /// instead of being fabricated per-regime. 0.0 when no regime data available.
+    pub regime_confidence: f64,
     pub timestamp: i64,
 }
 

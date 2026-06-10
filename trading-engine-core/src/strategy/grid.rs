@@ -2,18 +2,10 @@ use std::collections::HashMap;
 use crate::config::GridConfig;
 use crate::models::order::OrderSide;
 use crate::indicators::{SupportResistance, LevelKind, Adx, Choppiness, Atr};
+use tracing::{info, debug, warn};
 
 const MIN_NOTIONAL: f64 = 5.0;
 const SIZE_FACTOR: f64 = 0.08;
-
-// ── Grid deploy gate thresholds ──
-// Grid bots profit in RANGING markets; these detect range and safe volatility.
-// ⚠️ NATR_FLOOR and NATR_CEIL are placeholders — TUNE PER ASSET/TIMEFRAME.
-const ADX_RANGE_MAX: f64 = 22.0;     // ADX below this → no strong trend
-const CHOP_RANGE_MIN: f64 = 55.0;    // Choppiness above this → ranging confirmed
-const NATR_FLOOR: f64 = 0.005;       // Min normalized ATR for grid to capture profit
-const NATR_CEIL: f64 = 0.04;         // Max normalized ATR — above this, risk too high
-const FILL_COOLDOWN_SECS: i64 = 60;  // Prevent re-placement at same levels after fill
 
 #[derive(Debug, Clone)]
 pub struct GridLevel {
@@ -57,8 +49,9 @@ pub struct GridStrategy {
     sr: SupportResistance,
     last_bar_count: usize,
     pause_reason: String,
-    // Fill cooldown — prevents order churn loop
-    last_fill_time: Option<i64>,  // epoch millis of most recent fill
+    // Per-level fill cooldown — prevents order churn loop
+    // Key: level identity like "buy_2" or "sell_0", Value: epoch millis of fill
+    level_cooldowns: HashMap<String, i64>,
     // Diagnostic values
     diag_price: f64,
     diag_rsi: f64,
@@ -85,18 +78,13 @@ impl GridStrategy {
     pub fn new(pair: &str, config: &GridConfig, tick_size: f64, step_size: f64) -> Self {
         Self {
             pair: pair.to_string(),
-            config: GridConfig {
-                levels: config.levels,
-                capital_usdt: config.capital_usdt,
-                min_reserve: config.min_reserve,
-                spacing_multiplier: config.spacing_multiplier,
-            },
+            config: config.clone(),
             tick_size,
             step_size,
             state: GridState::Paused,
             grid_layout: None,
             orders: HashMap::new(),
-            last_fill_time: None,
+            level_cooldowns: HashMap::new(),
             total_pnl: 0.0,
             peak_equity: config.capital_usdt,
             initial_capital: config.capital_usdt,
@@ -224,13 +212,13 @@ impl GridStrategy {
     /// Regime-based grid deployment gate.
     /// Returns (should_deploy: bool, reason_if_not: String).
     fn should_deploy_grid(&self, price: f64, ml_regime: Option<i32>, ml_confidence: f64) -> (bool, String) {
-        // 1. ML Danger / Trending → block regardless
+        // 1. ML Danger / Trending → block if confidence exceeds threshold
         if let Some(regime) = ml_regime {
-            if regime == 2 && ml_confidence >= 0.55 {
-                return (false, format!("ML regime=Danger (conf={:.2})", ml_confidence));
+            if regime == 2 && ml_confidence >= self.config.ml_danger_block_threshold {
+                return (false, format!("ML regime=Danger (conf={:.2}>={:.2})", ml_confidence, self.config.ml_danger_block_threshold));
             }
-            if regime == 1 && ml_confidence >= 0.55 {
-                return (false, format!("ML regime=Trending (conf={:.2})", ml_confidence));
+            if regime == 1 && ml_confidence >= self.config.ml_trending_block_threshold {
+                return (false, format!("ML regime=Trending (conf={:.2}>={:.2})", ml_confidence, self.config.ml_trending_block_threshold));
             }
         } else {
             // Unknown regime → block (not safe to assume ranging)
@@ -253,23 +241,23 @@ impl GridStrategy {
         // 3. Range condition: ADX low AND Choppiness high
         let adx_val = self.diag_adx;
         let chop_val = self.diag_chop;
-        let adx_ok = adx_val < ADX_RANGE_MAX;
-        let chop_ok = chop_val > CHOP_RANGE_MIN;
+        let adx_ok = adx_val < self.config.adx_range_max;
+        let chop_ok = chop_val > self.config.chop_range_min;
 
         if !adx_ok {
-            return (false, format!("Trending, ADX={:.1} (>={:.0})", adx_val, ADX_RANGE_MAX));
+            return (false, format!("Trending, ADX={:.1} (>={:.0})", adx_val, self.config.adx_range_max));
         }
         if !chop_ok {
-            return (false, format!("Not choppy enough, CHOP={:.1} (<{:.0})", chop_val, CHOP_RANGE_MIN));
+            return (false, format!("Not choppy enough, CHOP={:.1} (<{:.0})", chop_val, self.config.chop_range_min));
         }
 
-        // 4. Volatility band: NATR_FLOOR <= ATR/close <= NATR_CEIL
+        // 4. Volatility band: natr_floor <= ATR/close <= natr_ceil
         let natr = self.diag_natr;
-        if natr < NATR_FLOOR {
-            return (false, format!("Volatility too low, NATR={:.4} (<{:.3})", natr, NATR_FLOOR));
+        if natr < self.config.natr_floor {
+            return (false, format!("Volatility too low, NATR={:.4} (<{:.3})", natr, self.config.natr_floor));
         }
-        if natr > NATR_CEIL {
-            return (false, format!("Volatility too high, NATR={:.4} (>{:.3})", natr, NATR_CEIL));
+        if natr > self.config.natr_ceil {
+            return (false, format!("Volatility too high, NATR={:.4} (>{:.3})", natr, self.config.natr_ceil));
         }
 
         // All conditions met
@@ -294,15 +282,22 @@ impl GridStrategy {
             GridState::Paused | GridState::Disabled => {
                 let (deploy, reason) = self.should_deploy_grid(price, ml_regime, ml_confidence);
                 if deploy {
+                    info!("[{}] Grid ACTIVATED | ADX={:.1} CHOP={:.0} NATR={:.4} regime={:?} conf={:.2}",
+                        self.pair, self.diag_adx, self.diag_chop, self.diag_natr, ml_regime, ml_confidence);
                     self.state = GridState::Active;
                     self.pause_reason.clear();
                 } else {
-                    self.pause_reason = reason;
+                    // Only log on reason change to avoid spam
+                    if self.pause_reason != reason {
+                        debug!("[{}] Grid stays paused: {}", self.pair, reason);
+                        self.pause_reason = reason;
+                    }
                 }
             }
             GridState::Active => {
                 let (deploy, reason) = self.should_deploy_grid(price, ml_regime, ml_confidence);
                 if !deploy {
+                    warn!("[{}] Grid DEACTIVATED: {}", self.pair, reason);
                     self.state = GridState::Paused;
                     self.pause_reason = reason;
                 }
@@ -356,14 +351,6 @@ impl GridStrategy {
     /// Calculate auto-compound growth ratio
     pub fn growth_ratio(&self) -> f64 {
         self.current_capital / self.initial_capital
-    }
-
-    /// Check whether the fill cooldown is still active at the given time
-    pub fn is_on_cooldown(&self, now_ms: i64) -> bool {
-        match self.last_fill_time {
-            Some(last) => now_ms.saturating_sub(last) < FILL_COOLDOWN_SECS * 1000,
-            None => false,
-        }
     }
 }
 
@@ -455,11 +442,11 @@ impl Strategy for GridStrategy {
             };
             self.diag_rsi = rsi;
 
-            // Map ML regime to int (None = unknown → block deployment)
+            // Map ML regime to int — use REAL confidence from TickContext
             let (ml_regime, ml_confidence) = match ctx.regime {
-                Some(MarketRegime::Danger) => (Some(2), 0.8),
-                Some(MarketRegime::Trending) => (Some(1), 0.6),
-                Some(MarketRegime::Ranging) => (Some(0), 0.0),
+                Some(MarketRegime::Danger) => (Some(2), ctx.regime_confidence),
+                Some(MarketRegime::Trending) => (Some(1), ctx.regime_confidence),
+                Some(MarketRegime::Ranging) => (Some(0), ctx.regime_confidence),
                 None => (None, 0.0),
             };
 
@@ -506,21 +493,17 @@ impl Strategy for GridStrategy {
             return Ok(Vec::new());
         }
 
-        // Fill cooldown: prevent re-placement at same levels after a fill
-        // (stops paper-trading churn loop where fill → remove → re-place → fill)
-        if let Some(last_fill) = self.last_fill_time {
-            let cooldown_ms = FILL_COOLDOWN_SECS * 1000;
-            if ctx.timestamp.saturating_sub(last_fill) < cooldown_ms {
-                return Ok(Vec::new());
-            }
-            // Cooldown expired — clear it
-            self.last_fill_time = None;
-        }
-
         let mut orders = Vec::new();
+        let cooldown_ms = self.config.fill_cooldown_secs * 1000;
 
-        // Place buy limit orders and track them
+        // Place buy limit orders — skip levels on cooldown
         for (i, level) in layout.buy_levels.iter().enumerate() {
+            let level_key = format!("buy_{}", i);
+            if let Some(&last_fill) = self.level_cooldowns.get(&level_key) {
+                if ctx.timestamp.saturating_sub(last_fill) < cooldown_ms {
+                    continue; // this level on cooldown, try others
+                }
+            }
             let id = format!("grid_{}_buy_{}", self.pair, i);
             let req = OrderRequest {
                 symbol: self.pair.replace("-", ""),
@@ -541,8 +524,14 @@ impl Strategy for GridStrategy {
             orders.push(req);
         }
 
-        // Place sell limit orders and track them
+        // Place sell limit orders — skip levels on cooldown
         for (i, level) in layout.sell_levels.iter().enumerate() {
+            let level_key = format!("sell_{}", i);
+            if let Some(&last_fill) = self.level_cooldowns.get(&level_key) {
+                if ctx.timestamp.saturating_sub(last_fill) < cooldown_ms {
+                    continue;
+                }
+            }
             let id = format!("grid_{}_sell_{}", self.pair, i);
             let req = OrderRequest {
                 symbol: self.pair.replace("-", ""),
@@ -562,6 +551,10 @@ impl Strategy for GridStrategy {
             });
             orders.push(req);
         }
+
+        // Clean up expired cooldowns to prevent unbounded map growth
+        let now = ctx.timestamp;
+        self.level_cooldowns.retain(|_, t| now.saturating_sub(*t) < self.config.fill_cooldown_secs * 1000);
 
         // Update state based on ML regime
         if let Some(regime) = ctx.regime {
@@ -584,8 +577,12 @@ impl Strategy for GridStrategy {
         // Remove the filled order from tracking
         self.orders.retain(|_, o| o.order_id != fill.order_id);
 
-        // Record fill timestamp for cooldown (prevents churn loop)
-        self.last_fill_time = Some(fill.timestamp);
+        // Set per-level cooldown from order_id (e.g., "grid_DOGE-USDT_buy_2" → "buy_2")
+        if let Some(idx) = fill.order_id.rfind("_buy_").or_else(|| fill.order_id.rfind("_sell_")) {
+            let level_key = &fill.order_id[idx + 1..]; // "buy_2" or "sell_0"
+            info!("[{}] Grid fill: {} @ ${:.2} (level={})", self.pair, level_key, fill.price, level_key);
+            self.level_cooldowns.insert(level_key.to_string(), fill.timestamp);
+        }
 
         // Calculate rough PnL estimate from fill
         let pnl = match fill.side {
@@ -689,6 +686,13 @@ mod tests {
             capital_usdt: 10000.0,
             min_reserve: 500.0,
             spacing_multiplier: 1.5,
+            adx_range_max: 22.0,
+            chop_range_min: 55.0,
+            natr_floor: 0.005,
+            natr_ceil: 0.04,
+            fill_cooldown_secs: 60,
+            ml_trending_block_threshold: 0.75,
+            ml_danger_block_threshold: 0.55,
         }
     }
 
@@ -735,9 +739,26 @@ mod tests {
         grid.diag_bars_count = 50;
         warm_adx(&mut grid);
 
-        let (deploy, reason) = grid.should_deploy_grid(100.0, Some(1), 0.7);
+        // Confidence 0.8 exceeds the new threshold of 0.75
+        let (deploy, reason) = grid.should_deploy_grid(100.0, Some(1), 0.8);
         assert!(!deploy);
         assert!(reason.contains("Trending"), "Expected 'Trending' in reason, got: {}", reason);
+    }
+
+    #[test]
+    fn test_gate_ml_trending_passes_moderate_confidence() {
+        let mut grid = make_grid();
+        grid.diag_adx = 15.0;
+        grid.diag_chop = 65.0;
+        grid.diag_natr = 0.02;
+        grid.diag_bars_count = 50;
+        warm_adx(&mut grid);
+        warm_chop(&mut grid);
+        warm_atr(&mut grid);
+
+        // Confidence 0.6 is below the new 0.75 threshold — should pass ML gate
+        let (deploy, reason) = grid.should_deploy_grid(100.0, Some(1), 0.6);
+        assert!(deploy, "Should deploy with moderate trending confidence, reason: {}", reason);
     }
 
     #[test]
@@ -833,27 +854,41 @@ mod tests {
     }
 
     #[test]
-    fn test_cooldown_blocks_after_fill() {
+    fn test_per_level_cooldown_blocks_filled_level() {
         let mut grid = make_grid();
-        // Simulate a fill at t=1_000_000_000_000 ms
-        grid.last_fill_time = Some(1_000_000_000_000);
+        // Simulate a fill on buy_0 at t=1_000_000_000_000 ms
+        grid.level_cooldowns.insert("buy_0".to_string(), 1_000_000_000_000);
 
-        // 30 s later — still on cooldown
-        assert!(grid.is_on_cooldown(1_000_000_030_000));
+        // 30s later — buy_0 still on cooldown
+        let cooldown_ms = grid.config.fill_cooldown_secs * 1000;
+        let elapsed = 1_000_000_030_000_i64.saturating_sub(1_000_000_000_000);
+        assert!(elapsed < cooldown_ms, "buy_0 should be on cooldown");
     }
 
     #[test]
-    fn test_cooldown_expires_after_60s() {
+    fn test_per_level_cooldown_expires_after_60s() {
         let mut grid = make_grid();
-        grid.last_fill_time = Some(1_000_000_000_000);
+        grid.level_cooldowns.insert("buy_0".to_string(), 1_000_000_000_000);
 
-        // 61 s later — cooldown expired
-        assert!(!grid.is_on_cooldown(1_000_000_061_000));
+        // 61s later — cooldown expired, cleanup should remove it
+        let now: i64 = 1_000_000_061_000;
+        grid.level_cooldowns.retain(|_, t| now.saturating_sub(*t) < grid.config.fill_cooldown_secs * 1000);
+        assert!(grid.level_cooldowns.is_empty(), "Cooldown should have expired");
+    }
+
+    #[test]
+    fn test_per_level_cooldown_allows_other_levels() {
+        let mut grid = make_grid();
+        // Fill on buy_0 at t=0
+        grid.level_cooldowns.insert("buy_0".to_string(), 0);
+
+        // buy_1 should NOT be on cooldown
+        assert!(!grid.level_cooldowns.contains_key("buy_1"), "buy_1 should not be blocked by buy_0 fill");
     }
 
     #[test]
     fn test_no_cooldown_when_no_fills() {
         let grid = make_grid();
-        assert!(!grid.is_on_cooldown(0));
+        assert!(grid.level_cooldowns.is_empty());
     }
 }

@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use anyhow::Result;
 use serde::{Serialize, Deserialize};
 use std::fs;
-use tracing::warn;
+use tracing::{warn, debug};
 
 /// Direction from EMA cross + price position.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -17,9 +17,6 @@ pub enum Direction {
     Down,  // -1: EMA fast < slow AND close < slow
     Flat,  //  0: mixed signals
 }
-
-/// Spot long-only: dir=Down exits longs and blocks new entries, never shorts.
-const TRADE_SHORTS: bool = false;
 
 /// Weighted signal scores (0–9 total).
 /// ADX(0-3) + CHOP(0-2) + VOL(0-2) + MACD(0-1) + RSI(0-1) = max 9.
@@ -128,6 +125,7 @@ impl TrendStrategy {
                 rsi_long_max: config.rsi_long_max,
                 rsi_short_min: config.rsi_short_min,
                 atr_trailing_mult: config.atr_trailing_mult,
+                trade_shorts: config.trade_shorts,
             },
             ema_fast: Ema::new(config.ema_fast),
             ema_slow: Ema::new(config.ema_slow),
@@ -229,7 +227,7 @@ impl TrendStrategy {
     /// Activate — enter when score meets threshold AND direction is clear.
     fn should_activate(&self, price: f64) -> bool {
         let dir = self.direction(price);
-        if TRADE_SHORTS {
+        if self.config.trade_shorts {
             if dir == Direction::Flat { return false; }
         } else {
             if dir != Direction::Up { return false; }
@@ -432,15 +430,29 @@ impl Strategy for TrendStrategy {
         self.save_position();
 
         // ── No position: check for entry ──
-        if self.position.is_none() && self.should_activate(current_price) {
-            let stop_loss = self.calculate_stop_loss(current_price);
-            let quantity = self.calculate_quantity(current_price, stop_loss);
-            if quantity > 0.0 {
-                orders.push(OrderRequest {
-                    symbol: self.pair.clone(), side: OrderSide::Buy,
-                    order_type: OrderTypeReq::Limit, price: Some(current_price),
-                    quantity, time_in_force: Some(TimeInForceReq::Gtc), client_order_id: None,
-                });
+        if self.position.is_none() {
+            if self.should_activate(current_price) {
+                let stop_loss = self.calculate_stop_loss(current_price);
+                let quantity = self.calculate_quantity(current_price, stop_loss);
+                if quantity > 0.0 {
+                    orders.push(OrderRequest {
+                        symbol: self.pair.clone(), side: OrderSide::Buy,
+                        order_type: OrderTypeReq::Limit, price: Some(current_price),
+                        quantity, time_in_force: Some(TimeInForceReq::Gtc), client_order_id: None,
+                    });
+                }
+            } else {
+                // Log WHY entry was skipped — score breakdown, direction, threshold
+                let dir = self.direction(current_price);
+                let scores = self.compute_score(dir);
+                let threshold = if self.config.entry_score_threshold > 0 { self.config.entry_score_threshold } else { 5 };
+                debug!(
+                    "[{}] Entry skipped: dir={:?} score={}/{} need≥={} | ADX={:.1} CHOP={:.0} VOL={:.2} MACD={} RSI={:.1}",
+                    self.pair, dir, scores.total, 9, threshold,
+                    self.adx.adx(), self.choppiness.value(),
+                    self.volume_sma.volume_ratio(),
+                    scores.macd, self.rsi.value()
+                );
             }
         }
         Ok(orders)
@@ -501,7 +513,7 @@ impl Strategy for TrendStrategy {
             let threshold = if self.config.entry_score_threshold > 0 { self.config.entry_score_threshold } else { 5 };
             let dir_str = match dir { Direction::Up => "+1", Direction::Down => "-1", Direction::Flat => "0" };
             let reason = if dir == Direction::Flat { "Mixed direction".to_string() }
-                         else if dir == Direction::Down && !TRADE_SHORTS { "dir=-1 blocks longs".to_string() }
+                         else if dir == Direction::Down && !self.config.trade_shorts { "dir=-1 blocks longs".to_string() }
                          else if scores.total < threshold { format!("Need {} more", threshold - scores.total) }
                          else { "Ready".to_string() };
             (
