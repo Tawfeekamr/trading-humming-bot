@@ -17,6 +17,8 @@ venv/
 /data/
 trading-engine-core/data/
 backtest/data_cache/
+backtest/results/
+models/*.pkl
 logs/
 reports/
 
