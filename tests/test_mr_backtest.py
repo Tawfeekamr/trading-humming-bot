@@ -121,3 +121,14 @@ def test_build_report_honest_is_oos_distinction(tmp_path):
     content = summary_path.read_text()
     assert "Best IS (walk-forward)" in content
     assert "drop=0.05" in content  # From walk-forward is_best, NOT full-period best (0.06)
+
+
+def test_ml_gated_with_perfect_oracle_filters_losers():
+    # When the model assigns P=0 everywhere, ML-gating filters out ALL entries.
+    from backtest.mean_reversion.backtest import run_single_ml
+    bars = _bars([100.0] * 30 + [94.0, 90.0])  # flush then stop (a loser)
+    f = compute_features(bars, bar="1s")
+    proba = pd.Series([0.0] * len(bars), index=bars.index)
+    r = run_single_ml(bars, f, drop_thr=0.05, tp=0.02, stop=0.04, base_size=100,
+                      bar="1s", proba=proba, ml_threshold=0.5)
+    assert r is None  # gated out -> no trade

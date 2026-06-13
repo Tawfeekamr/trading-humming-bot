@@ -61,6 +61,37 @@ def run_single(bars: pd.DataFrame, features: pd.DataFrame, drop_thr: float,
     }
 
 
+def entry_signal_ml(features: pd.DataFrame, drop_thr: float, proba: pd.Series,
+                    ml_threshold: float = 0.5, enter_threshold: float = 2.0) -> pd.Series:
+    """Entry signal gated by model P(revert) >= ml_threshold at the flush bar."""
+    base = (features["drop_frac"] > drop_thr) & (features["score"] >= enter_threshold)
+    return base & (proba.reindex(base.index).fillna(0.0) >= ml_threshold)
+
+
+def run_single_ml(bars: pd.DataFrame, features: pd.DataFrame, drop_thr: float,
+                  tp: float, stop: float, base_size: float, bar: str,
+                  proba: pd.Series, ml_threshold: float = 0.5):
+    """Like run_single but only enters where the model P(revert) >= ml_threshold."""
+    import vectorbt as vbt
+    entries = entry_signal_ml(features, drop_thr, proba, ml_threshold)
+    if not entries.any():
+        return None
+    pf = vbt.Portfolio.from_signals(
+        close=bars["close"], entries=entries, sl_stop=stop, tp_stop=tp,
+        size=base_size, size_type="value", init_cash=INIT_CASH, fees=FEES,
+        slippage=SLIPPAGE, freq=bar,
+    )
+    stats = pf.stats()
+    return {
+        "drop_thr": drop_thr, "tp": tp, "stop": stop, "base_size": base_size,
+        "total_trades": int(stats.get("Total Trades", 0)),
+        "total_return_pct": float(stats.get("Total Return [%]", 0.0)),
+        "sharpe_ratio": float(stats.get("Sharpe Ratio", 0.0)),
+        "max_drawdown_pct": float(stats.get("Max Drawdown [%]", 0.0)),
+        "win_rate": float(stats.get("Win Rate [%]", 0.0)),
+    }
+
+
 def run_sweep(bars: pd.DataFrame, features: pd.DataFrame, bar: str = "1s") -> pd.DataFrame:
     """Run the full grid. Configs with no entries are skipped."""
     rows = []
