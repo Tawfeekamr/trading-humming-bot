@@ -41,14 +41,21 @@ async fn async_main() -> Result<()> {
 
     let connector: Arc<dyn trading_engine_core::connector::Connector> = if config.exchange.testnet {
         info!("Using PAPER TRADE engine with real Binance market data");
+        let fill_cooldown_ms: i64 = std::env::var("PAPER_FILL_COOLDOWN_MS")
+            .ok().and_then(|v| v.parse().ok())
+            .unwrap_or(5000);
+        info!("Paper fill cooldown: {}ms", fill_cooldown_ms);
         let mut balances = std::collections::HashMap::new();
         balances.insert("USDT".to_string(), config.grid.capital_usdt);
-        Arc::new(trading_engine_core::connector::paper::PaperTradeConnector::with_market_data(
-            balances,
-            &api_key,
-            &api_secret,
-            true, // testnet flag for BinanceRest
-        ))
+        Arc::new(
+            trading_engine_core::connector::paper::PaperTradeConnector::with_market_data(
+                balances,
+                &api_key,
+                &api_secret,
+                true, // testnet flag for BinanceRest
+            )
+            .with_fill_cooldown(fill_cooldown_ms),
+        )
     } else if config.exchange.name.contains("gate") {
         info!("Using LIVE Gate.io connector");
         Arc::new(trading_engine_core::connector::gateio_rest::GateioConnector::new(

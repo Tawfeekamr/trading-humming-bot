@@ -77,3 +77,37 @@ fn test_symbol_normalization() {
     let fills = engine.try_fill_at_price("BNBUSDT", 607.0);
     assert_eq!(fills.len(), 1, "dash-less symbol should match dashed order");
 }
+
+/// After a fill, the per-symbol cooldown suppresses an immediate refill —
+/// this is what breaks the paper instant-fill entry/exit churn loop.
+#[test]
+fn test_fill_cooldown_suppresses_rapid_refill() {
+    let mut engine = PaperTradeEngine::new(HashMap::new());
+    engine.set_fill_cooldown(10_000); // 10s cooldown
+
+    engine.place_order(&sell("XRP-USDT", 1.10, 100.0)).unwrap();
+    let fills1 = engine.try_fill_at_price("XRP-USDT", 1.15);
+    assert_eq!(fills1.len(), 1, "first fill should succeed");
+
+    // Another fillable order placed and checked immediately — must be suppressed.
+    engine.place_order(&sell("XRP-USDT", 1.10, 50.0)).unwrap();
+    let fills2 = engine.try_fill_at_price("XRP-USDT", 1.15);
+    assert!(fills2.is_empty(), "refill within cooldown must be suppressed");
+    assert_eq!(engine.open_order_count(), 1, "the second order stays open during cooldown");
+}
+
+/// Cooldown is per-symbol: a fill on XRP must not block a simultaneous BNB fill.
+#[test]
+fn test_fill_cooldown_is_per_symbol() {
+    let mut engine = PaperTradeEngine::new(HashMap::new());
+    engine.set_fill_cooldown(10_000);
+
+    engine.place_order(&sell("XRP-USDT", 1.10, 100.0)).unwrap();
+    engine.place_order(&sell("BNB-USDT", 600.0, 1.0)).unwrap();
+
+    let fills = engine.try_fill_at_price("XRP-USDT", 1.15);
+    assert_eq!(fills.len(), 1);
+    // BNB still fills on its own price check despite XRP's cooldown.
+    let fills = engine.try_fill_at_price("BNB-USDT", 605.0);
+    assert_eq!(fills.len(), 1, "BNB fill must not be blocked by XRP cooldown");
+}

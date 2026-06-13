@@ -20,6 +20,10 @@ pub struct PaperTradeEngine {
     open_orders: Vec<PaperOrder>,
     trade_history: Vec<Fill>,
     next_order_id: u64,
+    /// Minimum gap between fills on the same symbol (paper instant-fill churn
+    /// guard). 0 = disabled. See set_fill_cooldown.
+    fill_cooldown_ms: i64,
+    last_fill_ms: HashMap<String, i64>,
 }
 
 impl PaperTradeEngine {
@@ -29,7 +33,16 @@ impl PaperTradeEngine {
             open_orders: Vec::new(),
             trade_history: Vec::new(),
             next_order_id: 1,
+            fill_cooldown_ms: 0,
+            last_fill_ms: HashMap::new(),
         }
+    }
+
+    /// Set the per-symbol fill cooldown. After a fill on a symbol, further
+    /// fills on that symbol are suppressed for this many milliseconds — this
+    /// keeps paper mode from instantly re-filling entry/exit loops.
+    pub fn set_fill_cooldown(&mut self, ms: i64) {
+        self.fill_cooldown_ms = ms.max(0);
     }
 
     pub fn place_order(&mut self, req: &OrderRequest) -> Result<OrderResponse> {
@@ -70,6 +83,18 @@ impl PaperTradeEngine {
     /// are left untouched so they don't fill against an unrelated price.
     pub fn try_fill_at_price(&mut self, symbol: &str, market_price: f64) -> Vec<Fill> {
         let sym_norm = symbol.replace("-", "");
+
+        // Per-symbol cooldown: if this pair filled very recently, leave its
+        // orders in the book so entry/exit can't instantly refuel a churn loop.
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        if self.fill_cooldown_ms > 0 {
+            if let Some(&last) = self.last_fill_ms.get(&sym_norm) {
+                if now_ms - last < self.fill_cooldown_ms {
+                    return Vec::new();
+                }
+            }
+        }
+
         let mut fills = Vec::new();
         let mut remaining = Vec::new();
 
@@ -141,6 +166,9 @@ impl PaperTradeEngine {
         }
 
         self.open_orders = remaining;
+        if !fills.is_empty() && self.fill_cooldown_ms > 0 {
+            self.last_fill_ms.insert(sym_norm, now_ms);
+        }
         fills
     }
 
@@ -184,6 +212,14 @@ impl PaperTradeConnector {
             engine: std::sync::Mutex::new(PaperTradeEngine::new(balances)),
             market_data: Some(BinanceRest::new(api_key, api_secret, testnet)),
         }
+    }
+
+    /// Set the per-symbol fill cooldown (ms). Call after constructing.
+    pub fn with_fill_cooldown(mut self, ms: i64) -> Self {
+        if let Ok(mut engine) = self.engine.lock() {
+            engine.set_fill_cooldown(ms);
+        }
+        self
     }
 }
 
