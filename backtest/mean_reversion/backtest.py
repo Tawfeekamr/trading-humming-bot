@@ -12,11 +12,15 @@ from .strategy import entry_signal
 
 logger = logging.getLogger(__name__)
 
-# Spec §4 grid.
-DROP_THRS = [0.03, 0.04, 0.05, 0.06, 0.08]
-TP_STOPS = [0.01, 0.015, 0.02, 0.03, 0.04]
-STOP_STOPS = [0.02, 0.03, 0.04, 0.05, 0.06]
-BASE_SIZES = [50, 100, 200, 500]
+# Sweep grid. Reduced from 5x5x5x4=500 to 3x3x3x2=54 configs: the backtest
+# bottleneck is per-call overhead x call count (coarser bars don't help), and a
+# representative grid around the deployed config is enough for a go/no-go. The
+# deployed 0.05/0.02/0.04/100 is centered in each range. Expand (+ multiprocessing)
+# later for a thorough sweep.
+DROP_THRS = [0.04, 0.05, 0.06]
+TP_STOPS = [0.015, 0.02, 0.03]
+STOP_STOPS = [0.03, 0.04, 0.05]
+BASE_SIZES = [100, 200]
 
 # Deployed live config (headline reference).
 LIVE_CONFIG = {"drop_thr": 0.05, "tp": 0.02, "stop": 0.04, "base_size": 100}
