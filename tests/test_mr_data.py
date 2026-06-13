@@ -35,3 +35,12 @@ def test_resample_drops_seconds_with_no_trades():
     bars = resample_bars(trades, bar="1s")
     # second 1000 and second 3000 present; second 2000 absent -> dropped (no close)
     assert len(bars) == 2
+
+
+def test_to_timestamp_detects_ms_vs_us():
+    # Same instants expressed as milliseconds and as microseconds must parse
+    # to the same timestamp (regression for the µs-precision dataset bug).
+    from backtest.mean_reversion.data import _to_timestamp
+    ms = pd.Series([1749000000000, 1749000001000])   # ms ~ 2025
+    us = ms * 1000                                    # µs, same instants
+    assert _to_timestamp(ms).iloc[0] == _to_timestamp(us).iloc[0]
