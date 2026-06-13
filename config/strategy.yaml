@@ -157,3 +157,7 @@ signal_copy:
 
   # Telethon
   session_name: "signal_listener"   # Session file name (saved in data/)
+
+# ── Mean Reversion (retuned + enabled 2026-06-14) ──────────────────
+mean_reversion:
+  enabled: true                     # Backtest-validated at 2% threshold (85% win, +1.8% / 6mo)
