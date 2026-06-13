@@ -54,12 +54,6 @@ def _make_session() -> requests.Session:
 
 
 _SESSION = _make_session()
-# agg_id, price, quantity, first_id, last_id, transact_time(ms), is_buyer_maker, <trailing bool>
-# (the 8th column is an undocumented extra — kept as "ignore" so the 7 we care
-# about land in the right positions; ts_ms must be transact_time, is_buyer_maker
-# the trade-direction flag). Older 7-column files would mis-parse here.
-AGG_COLUMNS = ["agg_id", "price", "quantity", "first_id", "last_id", "ts_ms",
-               "is_buyer_maker", "ignore"]
 
 
 def _to_timestamp(s: pd.Series) -> pd.Series:
