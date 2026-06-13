@@ -59,11 +59,14 @@ pub struct TrendPosition {
 impl TrendPosition {
     pub fn calculate_tp_levels(entry_price: f64, stop_loss: f64, risk_reward_ratio: f64, runner_pct: f64) -> Vec<TpLevel> {
         let risk = entry_price - stop_loss;
+        // Guard: a missing/zero RR would place TP3 at the entry price, making it
+        // fire instantly. Fall back to 2:1 so the position always has real targets.
+        let rr = if risk_reward_ratio > 0.0 { risk_reward_ratio } else { 2.0 };
         let tp3_close = if runner_pct > 0.0 { 1.0 - runner_pct } else { 1.0 };
         vec![
             TpLevel { price: entry_price + risk * 1.0, close_pct: 0.33, filled: false },
             TpLevel { price: entry_price + risk * 1.5, close_pct: 0.50, filled: false },
-            TpLevel { price: entry_price + risk * risk_reward_ratio, close_pct: tp3_close, filled: false },
+            TpLevel { price: entry_price + risk * rr, close_pct: tp3_close, filled: false },
         ]
     }
 }

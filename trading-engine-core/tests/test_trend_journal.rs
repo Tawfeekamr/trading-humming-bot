@@ -210,3 +210,15 @@ fn test_migration_adds_pair_to_legacy_table() {
 
     let _ = std::fs::remove_file(&db_path);
 }
+
+/// A zero/missing RR must NOT place TP3 at the entry price. The guard falls
+/// back to 2:1 so the position always has a real target above entry.
+#[test]
+fn test_tp3_guard_when_rr_zero() {
+    let tps = TrendPosition::calculate_tp_levels(100.0, 98.0, 0.0, 0.10);
+    // With the guard, RR=0 → 2.0, so TP3 = 100 + (2*2) = 104, NOT 100 (entry).
+    assert!(tps[2].price > 100.0, "TP3 must be above entry even with RR=0, got {}", tps[2].price);
+    assert!((tps[2].price - 104.0).abs() < 0.001, "TP3 should be 104 (2:1), got {}", tps[2].price);
+    // TP1/TP2 unaffected and ascending.
+    assert!(tps[0].price > 100.0 && tps[1].price > tps[0].price);
+}

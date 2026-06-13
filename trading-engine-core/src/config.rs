@@ -151,7 +151,7 @@ pub struct TrendConfig {
     pub min_signal_score: u8,
     #[serde(default)]
     pub confirmation_ticks: u8,
-    #[serde(default)]
+    #[serde(default = "default_2", alias = "rr_ratio")]
     pub risk_reward_ratio: f64,
     #[serde(default = "default_10k")]
     pub capital: f64,
