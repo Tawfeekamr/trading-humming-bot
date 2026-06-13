@@ -163,5 +163,10 @@ def load_bars(symbol: str, start: date, end: date, bar: str = "1s") -> pd.DataFr
         return pd.read_parquet(cache_path)
     trades = load_aggtrades(symbol, start, end)
     bars = resample_bars(trades, bar)
+    if bars.empty:
+        # Don't cache a no-data result, and avoid requiring a parquet engine on
+        # the empty path (CI has no pyarrow). Real (non-empty) runs use
+        # requirements-sweep.txt which includes pyarrow.
+        return bars
     bars.to_parquet(cache_path)
     return bars
