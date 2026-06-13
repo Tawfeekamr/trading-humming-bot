@@ -61,6 +61,9 @@ ort = { version = "2.0.0-rc.12", features = ["load-dynamic"] }
 
 # Signal engine
 rusqlite = { version = "0.34", features = ["bundled"] }
+# 2.0.0 pairs with rusqlite 0.34 (same libsqlite3-sys 0.32). Newer 2.x needs
+# rusqlite 0.40, which would force a conflicting libsqlite3-sys.
+rusqlite_migration = "=2.0.0"
 
 # Collections
 rustc-hash = "2"

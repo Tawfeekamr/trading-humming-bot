@@ -3,6 +3,7 @@ use crate::indicators::{Ema, Rsi, Atr, Adx, Choppiness, Macd, VolumeSma};
 use crate::models::bar::Bar;
 use crate::models::order::OrderSide;
 use crate::strategy::{Strategy, TickContext, StrategyStatus};
+use crate::strategy::trend_journal::TrendJournal;
 use crate::connector::types::{OrderRequest, Fill, OrderTypeReq, TimeInForceReq};
 use async_trait::async_trait;
 use anyhow::Result;
@@ -50,6 +51,9 @@ pub struct TrendPosition {
     pub highest_since_entry: f64,
     pub lowest_since_entry: f64,
     pub tp_levels: Vec<TpLevel>,
+    /// Unix-seconds timestamp of the opening fill (serde default keeps old state files loadable).
+    #[serde(default)]
+    pub entry_time: i64,
 }
 
 impl TrendPosition {
@@ -92,10 +96,24 @@ pub struct TrendStrategy {
     // Capital tracking
     initial_capital: f64,
     realized_pnl: f64,
+    // Trade journal (fail-soft: None if the DB cannot be opened)
+    journal: Option<TrendJournal>,
 }
 
 impl TrendStrategy {
     pub fn new(pair: &str, config: &TrendConfig) -> Self {
+        let journal = match TrendJournal::new() {
+            Ok(j) => Some(j),
+            Err(e) => {
+                warn!("Trend journal disabled for {}: {}", pair, e);
+                None
+            }
+        };
+        Self::new_with_journal(pair, config, journal)
+    }
+
+    /// Construct with an explicit journal (used by tests; production uses `new`).
+    pub fn new_with_journal(pair: &str, config: &TrendConfig, journal: Option<TrendJournal>) -> Self {
         let capital = config.capital;
         let mut me = Self {
             pair: pair.to_string(),
@@ -139,9 +157,38 @@ impl TrendStrategy {
             last_bar_count: 0,
             initial_capital: capital,
             realized_pnl: 0.0,
+            journal,
         };
         me.load_position();
         me
+    }
+
+    /// Log a close event to the journal (no-op if the journal is unavailable).
+    #[allow(clippy::too_many_arguments)]
+    fn log_close(
+        &self,
+        side: OrderSide,
+        entry_price: f64,
+        exit_price: f64,
+        amount: f64,
+        pnl: f64,
+        stop_loss: f64,
+        take_profit: f64,
+        exit_reason: &str,
+        now_ts: i64,
+        entry_time: i64,
+    ) {
+        if let Some(j) = &self.journal {
+            let duration = if now_ts > 0 && entry_time > 0 {
+                ((now_ts - entry_time) / 60).max(0)
+            } else {
+                0
+            };
+            j.log_trade(
+                &self.pair, side, entry_price, exit_price, amount, pnl,
+                stop_loss, take_profit, exit_reason, duration,
+            );
+        }
     }
 
     pub fn update_indicators(&mut self, bar: &Bar) {
@@ -335,6 +382,15 @@ impl Strategy for TrendStrategy {
         if current_price <= 0.0 { return Ok(orders); }
 
         // ── If in position: check exits ──
+        // Snapshot entry metadata for journaling (all fields Copy; fixed at entry,
+        // so valid for the whole tick). Captured before the mutable borrow below.
+        let snap = self.position.as_ref().map(|p| (
+            p.side,
+            p.entry_price,
+            p.stop_loss,
+            p.tp_levels.last().map(|t| t.price).unwrap_or(p.entry_price),
+            p.entry_time,
+        ));
         if let Some(pos) = &mut self.position {
             if current_price > pos.highest_since_entry { pos.highest_since_entry = current_price; }
             if current_price < pos.lowest_since_entry { pos.lowest_since_entry = current_price; }
@@ -342,8 +398,12 @@ impl Strategy for TrendStrategy {
             // Stop-loss
             if current_price <= pos.stop_loss {
                 let qty = pos.remaining_qty;
-                self.realized_pnl += (current_price - pos.entry_price) * qty;
+                let pnl = (current_price - pos.entry_price) * qty;
+                self.realized_pnl += pnl;
                 self.position = None;
+                if let Some((s, ep, sl, tp3, et)) = snap {
+                    self.log_close(s, ep, current_price, qty, pnl, sl, tp3, "stop_loss", ctx.timestamp, et);
+                }
                 orders.push(OrderRequest {
                     symbol: self.pair.clone(), side: OrderSide::Sell,
                     order_type: OrderTypeReq::Limit, price: Some(current_price),
@@ -353,24 +413,35 @@ impl Strategy for TrendStrategy {
                 return Ok(orders);
             }
 
-            // TP partial exits
-            for tp in &mut pos.tp_levels {
+            // TP partial exits — collect events to journal after the mutable borrow ends.
+            let mut tp_exits: Vec<(f64, f64, &'static str)> = Vec::new();
+            for (idx, tp) in pos.tp_levels.iter_mut().enumerate() {
                 if tp.filled { continue; }
                 if current_price >= tp.price {
                     let sell_qty = pos.remaining_qty * tp.close_pct;
                     if sell_qty > 0.0 {
                         tp.filled = true;
                         pos.remaining_qty -= sell_qty;
-                        self.realized_pnl += (current_price - pos.entry_price) * sell_qty;
+                        let pnl = (current_price - pos.entry_price) * sell_qty;
+                        self.realized_pnl += pnl;
+                        let reason = match idx { 0 => "tp1", 1 => "tp2", _ => "tp3" };
+                        tp_exits.push((sell_qty, pnl, reason));
                         orders.push(OrderRequest {
                             symbol: self.pair.clone(), side: OrderSide::Sell,
                             order_type: OrderTypeReq::Limit, price: Some(current_price),
                             quantity: sell_qty, time_in_force: Some(TimeInForceReq::Gtc), client_order_id: None,
                         });
-                        if pos.remaining_qty <= 0.0001 { self.position = None; self.save_position(); return Ok(orders); }
+                        if pos.remaining_qty <= 0.0001 { self.position = None; self.save_position(); break; }
                     }
                 }
             }
+            // Journal TP fills now that `pos` is no longer borrowed.
+            for (qty, pnl, reason) in &tp_exits {
+                if let Some((s, ep, sl, tp3, et)) = snap {
+                    self.log_close(s, ep, current_price, *qty, *pnl, sl, tp3, reason, ctx.timestamp, et);
+                }
+            }
+            if self.position.is_none() { return Ok(orders); }
 
             // ATR trailing stop (Chandelier Exit)
             if let Some(pos) = &mut self.position {
@@ -394,8 +465,12 @@ impl Strategy for TrendStrategy {
                     };
                     if hit {
                         let qty = pos.remaining_qty;
-                        self.realized_pnl += (current_price - pos.entry_price) * qty;
+                        let pnl = (current_price - pos.entry_price) * qty;
+                        self.realized_pnl += pnl;
                         self.position = None;
+                        if let Some((s, ep, sl, tp3, et)) = snap {
+                            self.log_close(s, ep, current_price, qty, pnl, sl, tp3, "trailing_stop", ctx.timestamp, et);
+                        }
                         orders.push(OrderRequest {
                             symbol: self.pair.clone(), side: OrderSide::Sell,
                             order_type: OrderTypeReq::Limit, price: Some(current_price),
@@ -413,8 +488,12 @@ impl Strategy for TrendStrategy {
                 let (exit, _reason) = self.should_exit_signal(current_price, entry_dir);
                 if exit {
                     let qty = pos.remaining_qty;
-                    self.realized_pnl += (current_price - pos.entry_price) * qty;
+                    let pnl = (current_price - pos.entry_price) * qty;
+                    self.realized_pnl += pnl;
                     self.position = None;
+                    if let Some((s, ep, sl, tp3, et)) = snap {
+                        self.log_close(s, ep, current_price, qty, pnl, sl, tp3, "signal_exit", ctx.timestamp, et);
+                    }
                     orders.push(OrderRequest {
                         symbol: self.pair.clone(), side: OrderSide::Sell,
                         order_type: OrderTypeReq::Limit, price: Some(current_price),
@@ -468,6 +547,7 @@ impl Strategy for TrendStrategy {
                     quantity: fill.quantity, remaining_qty: fill.quantity,
                     trailing_stop: None, highest_since_entry: fill.price,
                     lowest_since_entry: fill.price, tp_levels,
+                    entry_time: fill.timestamp,
                 });
                 self.save_position();
             }

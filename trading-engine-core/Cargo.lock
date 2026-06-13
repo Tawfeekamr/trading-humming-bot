@@ -1533,6 +1533,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rusqlite_migration"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ad5c6b56a977875727f3d3a8d1baa8d875ed914719529ddc8b9330afaa8f0fda"
+dependencies = [
+ "log",
+ "rusqlite",
+]
+
+[[package]]
 name = "rustc-hash"
 version = "2.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2175,6 +2185,7 @@ dependencies = [
  "pyo3",
  "reqwest",
  "rusqlite",
+ "rusqlite_migration",
  "rustc-hash",
  "serde",
  "serde_json",
