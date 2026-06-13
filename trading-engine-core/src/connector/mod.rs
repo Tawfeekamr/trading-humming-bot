@@ -20,9 +20,10 @@ pub trait Connector: Send + Sync {
     async fn get_order_book(&self, symbol: &str, limit: u16) -> Result<OrderBook>;
     async fn get_klines(&self, symbol: &str, interval: &str, limit: u16) -> Result<Vec<crate::models::bar::Bar>>;
 
-    /// Attempt to fill open paper orders at the given market price.
-    /// Returns fills if any orders matched. Default: no-op (real exchanges fill server-side).
-    async fn try_fill_at_price(&self, _market_price: f64) -> Vec<types::Fill> {
+    /// Attempt to fill open paper orders for `symbol` at the given market price.
+    /// Only orders matching `symbol` are evaluated — orders for other pairs must
+    /// not fill against this price. Default: no-op (real exchanges fill server-side).
+    async fn try_fill_at_price(&self, _symbol: &str, _market_price: f64) -> Vec<types::Fill> {
         Vec::new()
     }
 }

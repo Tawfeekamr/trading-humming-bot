@@ -28,11 +28,11 @@ fn test_limit_buy_fills_when_price_drops() {
     assert_eq!(engine.open_order_count(), 1);
 
     // Market price at 51000 — should NOT fill
-    let fills = engine.try_fill_at_price(51000.0);
+    let fills = engine.try_fill_at_price("BTCUSDT", 51000.0);
     assert!(fills.is_empty());
 
     // Market price drops to 49900 — should fill
-    let fills = engine.try_fill_at_price(49900.0);
+    let fills = engine.try_fill_at_price("BTCUSDT", 49900.0);
     assert_eq!(fills.len(), 1);
     assert_eq!(fills[0].price, 50000.0);
     assert_eq!(fills[0].quantity, 0.1);
@@ -53,10 +53,10 @@ fn test_limit_sell_fills_when_price_rises() {
 
     engine.place_order(&req).unwrap();
 
-    let fills = engine.try_fill_at_price(54000.0);
+    let fills = engine.try_fill_at_price("BTCUSDT", 54000.0);
     assert!(fills.is_empty());
 
-    let fills = engine.try_fill_at_price(55100.0);
+    let fills = engine.try_fill_at_price("BTCUSDT", 55100.0);
     assert_eq!(fills.len(), 1);
     assert_eq!(fills[0].price, 55000.0);
 }
@@ -75,7 +75,7 @@ fn test_market_order_fills_immediately() {
     };
 
     engine.place_order(&req).unwrap();
-    let fills = engine.try_fill_at_price(50000.0);
+    let fills = engine.try_fill_at_price("BTCUSDT", 50000.0);
     assert_eq!(fills.len(), 1);
     assert_eq!(fills[0].price, 50000.0);
 }
@@ -94,7 +94,7 @@ fn test_balance_updates_on_fill() {
     };
 
     engine.place_order(&req).unwrap();
-    engine.try_fill_at_price(49900.0);
+    engine.try_fill_at_price("BTCUSDT", 49900.0);
 
     let balances = engine.balances();
     assert_eq!(*balances.get("BTC").unwrap(), 0.6);       // 0.5 + 0.1
@@ -141,11 +141,11 @@ async fn test_connector_try_fill_at_price() {
     connector.place_order(&req).await.unwrap();
 
     // Price too high — no fills
-    let fills = connector.try_fill_at_price(51000.0).await;
+    let fills = connector.try_fill_at_price("BTCUSDT", 51000.0).await;
     assert!(fills.is_empty());
 
     // Price drops below limit — should fill
-    let fills = connector.try_fill_at_price(49000.0).await;
+    let fills = connector.try_fill_at_price("BTCUSDT", 49000.0).await;
     assert_eq!(fills.len(), 1);
     assert_eq!(fills[0].price, 50000.0);
 }

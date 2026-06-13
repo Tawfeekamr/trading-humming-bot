@@ -313,7 +313,7 @@ impl Engine {
         let mut fills_by_pair: Vec<(String, Fill)> = Vec::new();
         for (symbol, ob) in &self.order_books {
             if let Some(mid_price) = ob.mid_price() {
-                let pair_fills = self.connector.try_fill_at_price(mid_price).await;
+                let pair_fills = self.connector.try_fill_at_price(symbol, mid_price).await;
                 for fill in pair_fills {
                     fills_by_pair.push((symbol.clone(), fill));
                 }
@@ -329,14 +329,15 @@ impl Engine {
                 fill.side, fill.quantity, fill.symbol, fill.price);
         }
 
-        // Dispatch fills to strategies — collect resulting orders first to avoid borrow conflict
+        // Dispatch each fill to the strategy that owns its symbol only.
+        // (A fill's symbol is the order's real pair; routing by the orderbook
+        // pair as well previously delivered fills to the wrong strategy.)
         let mut all_orders = Vec::new();
-        for (ob_symbol, fill) in &fills_by_pair {
-            let ob_norm = ob_symbol.replace("-", "");
+        for (_ob_symbol, fill) in &fills_by_pair {
             let fill_norm = fill.symbol.replace("-", "");
             for strategy in &mut self.strategies {
                 let strategy_norm = strategy.trading_pair().replace("-", "");
-                if strategy_norm == fill_norm || strategy_norm == ob_norm {
+                if strategy_norm == fill_norm {
                     match strategy.on_fill(fill).await {
                         Ok(orders) => all_orders.extend(orders),
                         Err(e) => warn!("Strategy {} fill error: {}", strategy.name(), e),

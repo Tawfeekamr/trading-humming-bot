@@ -65,12 +65,22 @@ impl PaperTradeEngine {
         Ok(())
     }
 
-    /// Try to fill open orders at the given market price
-    pub fn try_fill_at_price(&mut self, market_price: f64) -> Vec<Fill> {
+    /// Try to fill open orders for `symbol` at the given market price.
+    /// Only orders whose symbol matches are evaluated — orders for other pairs
+    /// are left untouched so they don't fill against an unrelated price.
+    pub fn try_fill_at_price(&mut self, symbol: &str, market_price: f64) -> Vec<Fill> {
+        let sym_norm = symbol.replace("-", "");
         let mut fills = Vec::new();
         let mut remaining = Vec::new();
 
         for order in self.open_orders.drain(..) {
+            // Skip orders for other pairs — a BNB order must not fill just
+            // because the XRP orderbook price crossed its limit.
+            if order.symbol.replace("-", "") != sym_norm {
+                remaining.push(order);
+                continue;
+            }
+
             let should_fill = match (order.side, order.price) {
                 (OrderSide::Buy, Some(limit_price)) => market_price <= limit_price,
                 (OrderSide::Sell, Some(limit_price)) => market_price >= limit_price,
@@ -223,8 +233,8 @@ impl crate::connector::Connector for PaperTradeConnector {
         }
     }
 
-    async fn try_fill_at_price(&self, market_price: f64) -> Vec<Fill> {
+    async fn try_fill_at_price(&self, symbol: &str, market_price: f64) -> Vec<Fill> {
         let mut engine = self.engine.lock().unwrap();
-        engine.try_fill_at_price(market_price)
+        engine.try_fill_at_price(symbol, market_price)
     }
 }
