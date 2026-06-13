@@ -3,6 +3,7 @@ import pandas as pd
 import pytest
 
 from backtest.mean_reversion.features import compute_features, ENTER_THRESHOLD
+from backtest.mean_reversion.strategy import entry_signal
 
 
 def _bars(prices, buy=1.0, sell=1.0):
@@ -29,3 +30,21 @@ def test_flush_outscores_flat():
     flush = compute_features(_bars([100.0] * 30 + [94.0]), bar="1s")
     assert flush["score"].iloc[-1] > flat["score"].iloc[-1]
     assert flush["drop_frac"].iloc[-1] > flat["drop_frac"].iloc[-1]
+
+
+def test_entry_signal_fires_on_flush_and_not_before():
+    # Mirrors the Rust flush-entry scenario: 30 flat bars, then a 6% flush.
+    bars = _bars([100.0] * 30 + [94.0])
+    f = compute_features(bars, bar="1s")
+    sig = entry_signal(f, drop_thr=0.05)
+    assert sig.sum() == 1
+    assert sig.iloc[-1] == True
+    assert sig.iloc[:-1].sum() == 0
+
+
+def test_entry_signal_respects_drop_threshold():
+    # A 4% flush must NOT trigger at drop_thr=0.05, but does at 0.03.
+    bars = _bars([100.0] * 30 + [96.0])
+    f = compute_features(bars, bar="1s")
+    assert entry_signal(f, drop_thr=0.05).sum() == 0
+    assert entry_signal(f, drop_thr=0.03).sum() == 1
