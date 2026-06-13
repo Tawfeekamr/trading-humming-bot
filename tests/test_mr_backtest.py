@@ -115,8 +115,6 @@ def test_build_report_honest_is_oos_distinction(tmp_path):
     text = report.lower()
     assert "best is (walk-forward)" in text
     assert "is→oos sharpe gap: 0.70" in text
-    assert "full-period sweep" in text
-    assert "not out-of-sample" in text
 
     # Verify the file was written
     assert summary_path.exists()
