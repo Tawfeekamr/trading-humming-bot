@@ -37,14 +37,14 @@ jobs:
 
       - name: Run backtest
         run: |
-          python -m backtest.mean_reversion.backtest \
+          python -u -m backtest.mean_reversion.backtest \
             --pairs "${{ inputs.pairs }}" \
             --months "${{ inputs.months }}" \
             --bar "${{ inputs.bar }}"
 
       - name: Run ML pilot (ETH GO/NO-GO)
         if: always()
-        run: python -m src.ml.run_eth_pilot 2>&1 | tee ml_pilot.log
+        run: python -u -m src.ml.run_eth_pilot 2>&1 | tee ml_pilot.log
 
       - name: Upload results
         if: always()
