@@ -13,6 +13,8 @@ pub struct AppConfig {
     pub risk: RiskConfig,
     #[serde(default)]
     pub telegram: TelegramConfig,
+    #[serde(default)]
+    pub mean_reversion: MeanReversionConfig,
     pub ml: Option<MlConfig>,
     #[serde(default, alias = "signal_copy")]
     pub signal: Option<SignalConfig>,
@@ -304,3 +306,66 @@ impl AppConfig {
         Ok(config)
     }
 }
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct MeanReversionConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Flush trigger: enter when price drops more than this fraction in the 30s window.
+    /// Configurable so backtest sweep recommendations can be applied to the live bot.
+    #[serde(default = "default_drop_thr")]
+    pub drop_thr: f64,
+    #[serde(default)]
+    pub classifier: ClassifierCfg,
+}
+
+impl Default for MeanReversionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            drop_thr: default_drop_thr(),
+            classifier: ClassifierCfg::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ClassifierCfg {
+    #[serde(default = "default_w_retrace")]
+    pub w_retrace: f64,
+    #[serde(default = "default_w_refill")]
+    pub w_refill: f64,
+    #[serde(default = "default_w_exhaust")]
+    pub w_exhaust: f64,
+    #[serde(default = "default_w_liq")]
+    pub w_liq: f64,
+    #[serde(default = "default_w_corr")]
+    pub w_corr: f64,
+    #[serde(default = "default_enter_threshold")]
+    pub enter_threshold: f64,
+    #[serde(default = "default_full_size_margin")]
+    pub full_size_margin: f64,
+}
+
+impl Default for ClassifierCfg {
+    fn default() -> Self {
+        Self {
+            w_retrace: default_w_retrace(),
+            w_refill: default_w_refill(),
+            w_exhaust: default_w_exhaust(),
+            w_liq: default_w_liq(),
+            w_corr: default_w_corr(),
+            enter_threshold: default_enter_threshold(),
+            full_size_margin: default_full_size_margin(),
+        }
+    }
+}
+
+fn default_w_retrace() -> f64 { 1.0 }
+fn default_w_refill() -> f64 { 1.0 }
+fn default_w_exhaust() -> f64 { 1.0 }
+fn default_w_liq() -> f64 { 0.5 }
+fn default_w_corr() -> f64 { 1.5 }
+fn default_enter_threshold() -> f64 { 2.0 }
+fn default_full_size_margin() -> f64 { 1.5 }
+fn default_drop_thr() -> f64 { 0.05 }

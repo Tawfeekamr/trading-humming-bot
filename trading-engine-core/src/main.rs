@@ -38,6 +38,7 @@ async fn async_main() -> Result<()> {
         .collect();
     let grid_cfg = config.grid.clone();
     let trend_cfg = config.trend.clone();
+    let mr_cfg = config.mean_reversion.clone();
 
     let connector: Arc<dyn trading_engine_core::connector::Connector> = if config.exchange.testnet {
         info!("Using PAPER TRADE engine with real Binance market data");
@@ -85,7 +86,7 @@ async fn async_main() -> Result<()> {
     let bar_cache = trading_engine_core::bar_cache::BarCache::new();
     let status_cache = trading_engine_core::strategy::status_cache::StrategyStatusCache::new();
     let regime_cache = trading_engine_core::strategy::regime_cache::RegimeCache::new("data/regime_cache.json", 180_000); // 3min TTL = 3×60s poll
-    let mut engine = trading_engine_core::engine::Engine::new(config, connector.clone(), risk, telegram, bar_cache.clone(), status_cache.clone(), regime_cache.clone());
+    let mut engine = trading_engine_core::engine::Engine::new(config, connector.clone(), risk, telegram.clone_for_signal(), bar_cache.clone(), status_cache.clone(), regime_cache.clone());
 
     // Add strategies for each enabled pair
     for (symbol, pc) in &pair_configs {
@@ -104,6 +105,14 @@ async fn async_main() -> Result<()> {
             &trend_cfg,
         );
         engine.add_strategy(Box::new(trend));
+
+        // Mean Reversion strategy per pair
+        let mean_reversion = trading_engine_core::strategy::mean_reversion::MeanReversionStrategy::new(
+            symbol,
+            &mr_cfg,
+            telegram.clone_for_signal(),
+        );
+        engine.add_strategy(Box::new(mean_reversion));
     }
 
     // Spawn HTTP API server
