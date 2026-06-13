@@ -79,9 +79,15 @@ def walk_forward(bars: pd.DataFrame, features: pd.DataFrame, bar: str = "1s",
                  oos_frac: float = 1 / 3):
     """Sweep on the in-sample slice; re-evaluate the best (by Sharpe) on out-of-sample.
 
-    Features are computed once on the full series and sliced by position, so the
-    rolling windows are continuous across the split (negligible over millions of
-    bars; the OOS slice loses its own warmup of ~30 bars).
+    Features are computed once on the full series and sliced by position. This is
+    intentional and is NOT lookahead bias: every OOS decision at bar t uses only
+    features[t], which depends solely on close[t-30..t] — all past bars, no future
+    data. The rolling window legitimately carries history across the IS/OOS
+    boundary because a deployed strategy always has its last 30 bars (this matches
+    the existing grid/trend walk_forward.py, which also slices and evaluates on the
+    test window). Recomputing features on the OOS slice alone would discard 30 real
+    bars to a NaN warmup gap, making the test *less* faithful. At real scale
+    (millions of OOS bars) the 30 boundary bars are also statistically negligible.
     """
     n = len(bars)
     split = int(n * (1 - oos_frac))
