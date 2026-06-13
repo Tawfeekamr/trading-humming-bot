@@ -21,6 +21,9 @@ FULL_SIZE_MARGIN = 1.5
 EPS = 1e-9
 WINDOW_SECONDS = 30
 
+# BUG-12: EMA regime filter threshold (approximation of live ML regime gate)
+REGIME_THR = 0.002
+
 
 def bar_seconds(bar: str) -> int:
     bar = bar.strip()
@@ -38,6 +41,22 @@ def window_bars_for(bar: str, window_seconds: int = WINDOW_SECONDS) -> int:
 
 
 def compute_features(bars: pd.DataFrame, bar: str = "1s") -> pd.DataFrame:
+    """Compute trade-flow features for mean-reversion entry logic.
+
+    Returns DataFrame with:
+    - drop_frac: price decline over window (0-1)
+    - bid_refill_ratio: buy-pressure restoration (0-3)
+    - sell_flow_decay: sell-exhaustion indicator (0-1)
+    - liq_cascade_score: liquidation spike (0-3)
+    - score: weighted classifier score
+    - size_mult: position size multiplier (0-1)
+    - regime_trending: EMA-based regime filter (bool)
+
+    Note: regime_trending is an EMA approximation of the live ML regime gate.
+    The live Rust strategy uses a MarketRegime::Trending classifier that has no
+    historical per-second equivalent. This EMA-based approximation provides a
+    conservative filter that reduces false entries during strong trends.
+    """
     w = window_bars_for(bar)
     smooth = max(1, w // 6)  # ~5s smoothing for a 30s window
     close = bars["close"]
@@ -46,6 +65,8 @@ def compute_features(bars: pd.DataFrame, bar: str = "1s") -> pd.DataFrame:
 
     # Faithful to live (oldest.price - mid) / oldest.price, ~30s ago.
     drop_frac = (close.shift(w) - close) / close.shift(w)
+    # BUG-5: Fill NaN with 0 to avoid carrying into score/entry
+    drop_frac = drop_frac.fillna(0.0)
 
     # Buy-pressure restoration proxy for live bid_depth / oldest_bid_depth.
     buy_smooth = buy_vol.rolling(smooth, min_periods=1).mean()
@@ -56,9 +77,10 @@ def compute_features(bars: pd.DataFrame, bar: str = "1s") -> pd.DataFrame:
     sell_flow_decay = (sell_smooth / (sell_vol.rolling(w, min_periods=1).max() + EPS)).clip(0, 1)
 
     # Liquidation-cascade spike: peak vs mean per-bar sell volume.
+    # BUG-6: Cap at (0, 3) so max contribution is 0.5*3 = 1.5 (cannot solo-clear ENTER_THRESHOLD=2.0)
     liq_cascade_score = (
         sell_vol.rolling(w, min_periods=1).max() / (sell_vol.rolling(w, min_periods=1).mean() + EPS)
-    ).clip(0, 10)
+    ).clip(0, 3)
 
     score = (
         W_RETRACE * drop_frac
@@ -69,6 +91,11 @@ def compute_features(bars: pd.DataFrame, bar: str = "1s") -> pd.DataFrame:
     )
     size_mult = ((score - ENTER_THRESHOLD) / FULL_SIZE_MARGIN).clip(0, 1)
 
+    # BUG-12: EMA-based regime filter (approximation of live ML regime gate)
+    ema_fast = close.ewm(span=60, min_periods=1).mean()
+    ema_slow = close.ewm(span=300, min_periods=1).mean()
+    regime_trending = ((ema_fast - ema_slow).abs() / ema_slow > REGIME_THR).fillna(False).astype(bool)
+
     return pd.DataFrame(
         {
             "drop_frac": drop_frac,
@@ -77,6 +104,7 @@ def compute_features(bars: pd.DataFrame, bar: str = "1s") -> pd.DataFrame:
             "liq_cascade_score": liq_cascade_score,
             "score": score,
             "size_mult": size_mult,
+            "regime_trending": regime_trending,
         },
         index=bars.index,
     )
