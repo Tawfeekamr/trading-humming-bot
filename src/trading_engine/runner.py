@@ -397,8 +397,8 @@ class TradingRunner:
                     config=signal_cfg,
                     btc_regime_fn=regime_manager.get_regime_fn("BTC-USDT"),
                     telegram_send_fn=lambda msg: logger.info("Signal TG: %s", msg),
-                    buy_fn=lambda symbol, amount, price: self._signal_trade(adapter, "buy", symbol, amount, price),
-                    sell_fn=lambda symbol, amount, price: self._signal_trade(adapter, "sell", symbol, amount, price),
+                    buy_fn=lambda symbol, amount, price, order_type="MARKET": self._signal_trade(adapter, "buy", symbol, amount, price, order_type),
+                    sell_fn=lambda symbol, amount, price, order_type="MARKET": self._signal_trade(adapter, "sell", symbol, amount, price, order_type),
                     get_price_fn=lambda symbol: self._get_signal_price(adapter, symbol),
                 )
                 signal_engine.start_listener()
@@ -586,7 +586,8 @@ class TradingRunner:
         """Signal the runner to stop."""
         self._running = False
 
-    def _signal_trade(self, adapter, side: str, symbol: str, amount: float, price: float):
+    def _signal_trade(self, adapter, side: str, symbol: str, amount: float, price: float,
+                      order_type: str = "LIMIT"):
         """Execute a signal trade via the adapter."""
         try:
             from src.trading_engine.adapter.base import Order
@@ -594,13 +595,14 @@ class TradingRunner:
             order = Order(
                 instrument_id=symbol,
                 side=order_side,
-                order_type="LIMIT",
+                order_type=order_type,
                 price=price,
                 quantity=amount,
                 client_order_id=f"sig_{symbol}_{int(time.time())}",
             )
             result = adapter.submit_order(order)
-            logger.info("Signal trade executed: %s %s %s @ %.4f → %s", side, amount, symbol, price, result)
+            logger.info("Signal trade executed: %s %s %s @ %.4f (%s) → %s",
+                        side, amount, symbol, price, order_type, result)
             return result
         except Exception as e:
             logger.error("Signal trade failed: %s %s @ %.4f — %s", side, symbol, price, e)

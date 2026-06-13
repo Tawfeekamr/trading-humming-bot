@@ -72,13 +72,18 @@ class RustEngineAdapter(ExecutionAdapter):
         # Convert instrument format: "BTC-USDT" → "BTCUSDT" for exchange
         symbol = order.instrument_id.replace("-", "")
 
+        # MARKET orders must not carry a price or time-in-force: Binance/Gate
+        # reject a MARKET order with price set, and GTC is invalid for market.
+        # Send null so the Rust API maps price/tif to None and the connector
+        # omits them. (OrderRequest.price/tif are Option in the Rust API.)
+        is_market = order.order_type.upper() == "MARKET"
         payload = {
             "symbol": symbol,
             "side": order.side.upper(),
             "order_type": order.order_type.capitalize(),
-            "price": float(order.price),
+            "price": None if is_market else float(order.price),
             "quantity": float(order.quantity),
-            "time_in_force": "Gtc",
+            "time_in_force": None if is_market else "Gtc",
             "client_order_id": order.client_order_id or None,
         }
 

@@ -55,6 +55,11 @@ class SignalPositionManager:
         self._lock = threading.Lock()
         self._load_state()
 
+    @property
+    def max_positions(self) -> int:
+        """Max concurrent signal positions (read accessor for pre-trade checks)."""
+        return self._max_positions
+
     def has_open_position(self, symbol: str) -> bool:
         with self._lock:
             pos = self._positions.get(symbol)
