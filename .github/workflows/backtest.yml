@@ -1,0 +1,51 @@
+name: Mean-Reversion Backtest
+
+# On-demand tick-replay backtest for the mean-reversion strategy. Runs on an
+# isolated GitHub Actions runner (no prod impact). Results are uploaded as an
+# artifact (report.md + JSON) — nothing is committed to main, so no deploy fires.
+on:
+  workflow_dispatch:
+    inputs:
+      pairs:
+        description: "Comma-separated pairs (e.g. BNBUSDT,DOGEUSDT,ETHUSDT,XRPUSDT)"
+        default: "BNBUSDT,DOGEUSDT,ETHUSDT,XRPUSDT"
+        required: true
+      months:
+        description: "Months of history"
+        default: "6"
+        required: true
+      bar:
+        description: "Bar size — 1s = max fidelity (slowest); 5s ~5x faster"
+        default: "5s"
+        required: true
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backtest/requirements-sweep.txt
+
+      - name: Install backtest deps
+        run: pip install -r backtest/requirements-sweep.txt
+
+      - name: Run backtest
+        run: |
+          python -m backtest.mean_reversion.backtest \
+            --pairs "${{ inputs.pairs }}" \
+            --months "${{ inputs.months }}" \
+            --bar "${{ inputs.bar }}"
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mean-reversion-backtest
+          path: backtest/results/mean_reversion/
+          if-no-files-found: error

@@ -2,6 +2,7 @@
 """aggTrade download + bar resample + cache for the mean-reversion backtest."""
 import io
 import logging
+import shutil
 import zipfile
 from datetime import date, timedelta
 from pathlib import Path
@@ -169,4 +170,8 @@ def load_bars(symbol: str, start: date, end: date, bar: str = "1s") -> pd.DataFr
         # requirements-sweep.txt which includes pyarrow.
         return bars
     bars.to_parquet(cache_path)
+    # Free the raw aggTrades (build input) now that bars (the product) are
+    # cached — keeps peak disk low on constrained runners (CI / small hosts),
+    # so the full multi-pair range fits without filling the disk.
+    shutil.rmtree(RAW_DIR / symbol, ignore_errors=True)
     return bars
