@@ -1,8 +1,9 @@
 # tests/test_mr_backtest.py
+import json
 import pandas as pd
 import pytest
 
-from backtest.mean_reversion.backtest import run_single, run_sweep, walk_forward
+from backtest.mean_reversion.backtest import run_single, run_sweep, walk_forward, run_pair
 from backtest.mean_reversion.features import compute_features
 
 
@@ -55,3 +56,11 @@ def test_walk_forward_returns_is_best_and_oos():
     assert wf is not None
     assert "is_best" in wf and "oos" in wf
     assert "sharpe_ratio" in wf["is_best"]
+
+
+def test_run_pair_writes_summary_and_per_symbol_json(tmp_path):
+    bars = _bars([100.0] * 30 + [90.0, 92.0, 88.0, 95.0] * 20)
+    summary = run_pair("TESTUSDT", bars, bar="1s", results_dir=tmp_path)
+    assert (tmp_path / "TESTUSDT_sweep.json").exists()
+    assert "live_config" in summary and "best" in summary and "walk_forward" in summary
+    json.dumps(summary, default=str)  # serializable
