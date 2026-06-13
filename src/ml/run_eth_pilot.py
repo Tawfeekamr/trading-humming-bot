@@ -23,14 +23,25 @@ from src.ml.flush_reversion_model import (
 
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="ML flush-reversion pilot (per-pair GO/NO-GO)")
+    parser.add_argument("--symbol", default="ETHUSDT")
+    parser.add_argument("--months", type=int, default=6)
+    parser.add_argument("--bar", default="5s")
+    parser.add_argument("--drop_thr", type=float, default=0.05)
+    parser.add_argument("--tp", type=float, default=0.02)
+    parser.add_argument("--stop", type=float, default=0.04)
+    parser.add_argument("--ml_threshold", type=float, default=0.5)
+    args = parser.parse_args()
+
     end = date.today()
-    start = end - timedelta(days=30 * 6)
-    bars = load_bars("ETHUSDT", start, end, "5s")
-    feats = compute_features(bars, "5s")
+    start = end - timedelta(days=30 * args.months)
+    bars = load_bars(args.symbol, start, end, args.bar)
+    feats = compute_features(bars, args.bar)
     labels = label_flushes(
         bars, feats,
-        drop_thr=LIVE_CONFIG["drop_thr"], tp=LIVE_CONFIG["tp"],
-        stop=LIVE_CONFIG["stop"], max_hold=180,
+        drop_thr=args.drop_thr, tp=args.tp,
+        stop=args.stop, max_hold=180,
     )
     if labels.empty:
         print("No flush events in the period — cannot train. VERDICT: NO-GO (no data).")
@@ -47,10 +58,11 @@ def main():
     # Informational full-period comparison (in-sample-biased).
     clf = FlushReversionClassifier()
     clf.fit(ds, ds["label"])
-    clf.save("models/flush_reversion_ETH-USDT.pkl")
+    clf.save(f"models/flush_reversion_{args.symbol}.pkl")
     proba = pd.Series(clf.predict_proba(ds).tolist(), index=ds["ts"])
-    no_ml = run_single(bars, feats, bar="5s", **LIVE_CONFIG)
-    ml = run_single_ml(bars, feats, bar="5s", proba=proba, ml_threshold=0.5, **LIVE_CONFIG)
+    cfg = {"drop_thr": args.drop_thr, "tp": args.tp, "stop": args.stop, "base_size": 100}
+    no_ml = run_single(bars, feats, bar=args.bar, **cfg)
+    ml = run_single_ml(bars, feats, bar=args.bar, proba=proba, ml_threshold=args.ml_threshold, **cfg)
     print("no-ML (info, full period):", no_ml)
     print("ML-gated (info, IN-SAMPLE-biased):", ml)
 

@@ -12,15 +12,15 @@ from .strategy import entry_signal
 
 logger = logging.getLogger(__name__)
 
-# Sweep grid. Reduced from 5x5x5x4=500 to 3x3x3x2=54 configs: the backtest
-# bottleneck is per-call overhead x call count (coarser bars don't help), and a
-# representative grid around the deployed config is enough for a go/no-go. The
-# deployed 0.05/0.02/0.04/100 is centered in each range. Expand (+ multiprocessing)
-# later for a thorough sweep.
-DROP_THRS = [0.04, 0.05, 0.06]
-TP_STOPS = [0.015, 0.02, 0.03]
-STOP_STOPS = [0.03, 0.04, 0.05]
-BASE_SIZES = [100, 200]
+# Retune grid: lowered to the tradeable range. The diagnostic showed 0 flushes
+# at 5% (deployed) but events at 1-3% (DOGE: 7@3%, 38@2%, 222@1%). Drop the
+# threshold to 1-3% where the signal fires, sweep TP/stop 2-4% to find the best
+# exit structure (the +2%/-4% is negative-RR; this finds better). Size omitted
+# (doesn't affect % edge).
+DROP_THRS = [0.01, 0.015, 0.02, 0.025, 0.03]
+TP_STOPS = [0.02, 0.03, 0.04]
+STOP_STOPS = [0.02, 0.03, 0.04]
+BASE_SIZES = [100]
 
 # Deployed live config (headline reference).
 LIVE_CONFIG = {"drop_thr": 0.05, "tp": 0.02, "stop": 0.04, "base_size": 100}
