@@ -157,21 +157,46 @@ def resample_bars(trades: pd.DataFrame, bar: str = "1s") -> pd.DataFrame:
 
 
 def load_bars(symbol: str, start: date, end: date, bar: str = "1s") -> pd.DataFrame:
-    """Download + resample + cache bars for a symbol range."""
+    """Download + resample (per-day) + cache bars for a symbol range.
+
+    Streams one day at a time: resample each day's trades to bars, then concat.
+    Avoids holding ALL raw trades in RAM at once (10s of GB on large ranges) —
+    peak memory is one day's trades. The per-day bar grid is aligned to midnight,
+    so concatenated bars are identical to a full resample.
+    """
     BARS_DIR.mkdir(parents=True, exist_ok=True)
     cache_path = BARS_DIR / f"{symbol}_{start.isoformat()}_{end.isoformat()}_{bar}.parquet"
     if cache_path.exists():
         return pd.read_parquet(cache_path)
-    trades = load_aggtrades(symbol, start, end)
-    bars = resample_bars(trades, bar)
+
+    bar_frames = []
+    for day in _date_range(start, end):
+        try:
+            raw_path = download_day(symbol, day)
+            try:
+                day_trades = pd.read_parquet(raw_path)
+            except Exception:
+                logger.warning("Corrupt cache for %s %s, re-downloading", symbol, day)
+                raw_path.unlink(missing_ok=True)
+                raw_path = download_day(symbol, day, overwrite=True)
+                day_trades = pd.read_parquet(raw_path)
+        except FileNotFoundError:
+            continue
+        except requests.RequestException as e:
+            logger.warning("Failed to download %s %s after retries: %s", symbol, day, e)
+            continue
+        day_bars = resample_bars(day_trades, bar)
+        if not day_bars.empty:
+            bar_frames.append(day_bars)
+
+    if not bar_frames:
+        return pd.DataFrame()
+    bars = pd.concat(bar_frames)
+    bars = bars[~bars.index.duplicated(keep="first")].sort_index()
+
+    # Free the raw aggTrades (build input) now that bars (the product) are built.
+    shutil.rmtree(RAW_DIR / symbol, ignore_errors=True)
     if bars.empty:
-        # Don't cache a no-data result, and avoid requiring a parquet engine on
-        # the empty path (CI has no pyarrow). Real (non-empty) runs use
-        # requirements-sweep.txt which includes pyarrow.
         return bars
     bars.to_parquet(cache_path)
-    # Free the raw aggTrades (build input) now that bars (the product) are
-    # cached — keeps peak disk low on constrained runners (CI / small hosts),
-    # so the full multi-pair range fits without filling the disk.
-    shutil.rmtree(RAW_DIR / symbol, ignore_errors=True)
     return bars

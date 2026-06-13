@@ -10,6 +10,9 @@ fn enabled_config() -> MeanReversionConfig {
     MeanReversionConfig {
         enabled: true,
         drop_thr: 0.05,
+        tp_pct: 0.02,
+        stop_pct: 0.04,
+        regime_gate: false,
         classifier: ClassifierCfg::default(),
     }
 }

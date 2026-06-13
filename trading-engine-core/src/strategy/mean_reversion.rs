@@ -107,7 +107,7 @@ impl Strategy for MeanReversionStrategy {
             }
         }
 
-        let regime_safe = ctx.regime != Some(MarketRegime::Trending);
+        let regime_safe = !self.config.regime_gate || ctx.regime != Some(MarketRegime::Trending);
 
         // 2. Core Logic
         if !self.in_position && regime_safe && self.tick_history.len() > 10 {
@@ -147,7 +147,7 @@ impl Strategy for MeanReversionStrategy {
             }
         } else if self.in_position {
             // Layer 2 Active Stop & Take profit
-            if mid >= self.entry_price * 1.02 { 
+            if mid >= self.entry_price * (1.0 + self.config.tp_pct) {
                 info!("📈 MeanReversion TP hit at {}", mid);
                 self.in_position = false;
                 orders.push(OrderRequest {
@@ -155,7 +155,7 @@ impl Strategy for MeanReversionStrategy {
                     order_type: OrderTypeReq::Market, price: None, quantity: self.position_qty,
                     time_in_force: None, client_order_id: Some(format!("mr_exit_{}", now)),
                 });
-            } else if mid <= self.entry_price * 0.96 { // 4% Bot stop (Layer 2)
+            } else if mid <= self.entry_price * (1.0 - self.config.stop_pct) {
                 warn!("⚠️ MeanReversion Layer 2 Stop hit at {}", mid);
                 self.in_position = false;
                 orders.push(OrderRequest {
