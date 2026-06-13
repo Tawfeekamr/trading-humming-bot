@@ -312,9 +312,18 @@ pub struct MeanReversionConfig {
     #[serde(default)]
     pub enabled: bool,
     /// Flush trigger: enter when price drops more than this fraction in the 30s window.
-    /// Configurable so backtest sweep recommendations can be applied to the live bot.
     #[serde(default = "default_drop_thr")]
     pub drop_thr: f64,
+    /// Take-profit fraction above entry (default 2% — the high-win config from the backtest).
+    #[serde(default = "default_tp_pct")]
+    pub tp_pct: f64,
+    /// Stop-loss fraction below entry (default 3%).
+    #[serde(default = "default_stop_pct")]
+    pub stop_pct: f64,
+    /// If true, skip entries during Trending regime (default false — the backtest showed
+    /// the regime filter blocked 97% of flushes; relaxed gates give a real edge at 2%).
+    #[serde(default)]
+    pub regime_gate: bool,
     #[serde(default)]
     pub classifier: ClassifierCfg,
 }
@@ -324,6 +333,9 @@ impl Default for MeanReversionConfig {
         Self {
             enabled: false,
             drop_thr: default_drop_thr(),
+            tp_pct: default_tp_pct(),
+            stop_pct: default_stop_pct(),
+            regime_gate: false,
             classifier: ClassifierCfg::default(),
         }
     }
@@ -366,6 +378,8 @@ fn default_w_refill() -> f64 { 1.0 }
 fn default_w_exhaust() -> f64 { 1.0 }
 fn default_w_liq() -> f64 { 0.5 }
 fn default_w_corr() -> f64 { 1.5 }
-fn default_enter_threshold() -> f64 { 2.0 }
+fn default_enter_threshold() -> f64 { 0.0 }
 fn default_full_size_margin() -> f64 { 1.5 }
-fn default_drop_thr() -> f64 { 0.05 }
+fn default_drop_thr() -> f64 { 0.02 }
+fn default_tp_pct() -> f64 { 0.02 }
+fn default_stop_pct() -> f64 { 0.03 }
