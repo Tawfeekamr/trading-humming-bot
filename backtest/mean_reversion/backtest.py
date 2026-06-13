@@ -132,26 +132,27 @@ def _hodl_return(close: pd.Series) -> float:
 
 def run_pair(symbol: str, bars: pd.DataFrame, bar: str = "1s",
              results_dir: Path = RESULTS_DIR) -> dict:
-    """Full pipeline for one symbol: features, live-config, sweep, walk-forward, write JSON."""
+    """Full pipeline for one symbol: features, live-config, walk-forward, write JSON.
+
+    The redundant full-period sweep was removed — it duplicated the walk-forward
+    IS sweep and was ~half the from_signals calls (the main runtime cost; the
+    backtest was timing out at 90 min on the full call count). The honest 'best'
+    is the walk-forward in-sample best; the go/no-go is its OOS result.
+    """
     results_dir.mkdir(parents=True, exist_ok=True)
     features = compute_features(bars, bar)
 
     live = run_single(bars, features, bar=bar, **LIVE_CONFIG)
-    sweep = run_sweep(bars, features, bar)
-    wf = walk_forward(bars, bar)  # BUG-8: no longer passes features
-
-    best = (sweep.sort_values("sharpe_ratio", ascending=False).iloc[0].to_dict()
-            if not sweep.empty else None)
+    wf = walk_forward(bars, bar)
 
     per_symbol = {
         "symbol": symbol,
         "bar": bar,
         "hodl_return_pct": _hodl_return(bars["close"]),
         "live_config": _to_jsonable(live),
-        "best": _to_jsonable(best),
+        "best": _to_jsonable(wf["is_best"]) if wf else None,
         "walk_forward": {"is_best": _to_jsonable(wf["is_best"]),
                          "oos": _to_jsonable(wf["oos"])} if wf else None,
-        "sweep": sweep.to_dict(orient="records"),
     }
     with open(results_dir / f"{symbol}_sweep.json", "w") as f:
         json.dump(per_symbol, f, indent=2, default=str)
@@ -166,7 +167,6 @@ def build_report(per_pair: list, summary_path: Path) -> str:
         wf = p.get("walk_forward") or {}
         is_best = wf.get("is_best") or {}
         oos = wf.get("oos") or {}
-        best_full = p.get("best") or {}
         lines.append(f"## {p['symbol']}")
         lines.append(f"- HODL: {p.get('hodl_return_pct', 0):.1f}%")
         lines.append(f"- Live (+2%/-4%): trades={live.get('total_trades',0)} "
@@ -185,11 +185,6 @@ def build_report(per_pair: list, summary_path: Path) -> str:
             gap = float(is_best.get('sharpe_ratio', 0)) - float(oos.get('sharpe_ratio', 0))
             flag = " ⚠️ overfit?" if gap > 1.0 else ""
             lines.append(f"- IS→OOS Sharpe gap: {gap:.2f}{flag}")
-        if best_full:
-            lines.append(f"- (info, optimistic — full-period sweep) best: "
-                         f"drop={best_full.get('drop_thr')} tp={best_full.get('tp')} "
-                         f"stop={best_full.get('stop')} sharpe={best_full.get('sharpe_ratio',0):.2f} "
-                         "— NOT out-of-sample")
         lines.append("")
     text = "\n".join(lines)
     with open(summary_path, "w") as f:
