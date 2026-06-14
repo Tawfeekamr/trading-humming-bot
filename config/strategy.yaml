@@ -94,7 +94,7 @@ dashboard:
 trend:
   enabled: true
   capital: 10000                # Claude: keep equal 10K until out-of-sample evidence
-  ema_fast: 12                  # Was 30 — 30/40 too close, almost no crossovers; 12/40 gives proper signals
+  ema_fast: 30  # Was 30 — 30/40 too close, almost no crossovers; 12/40 gives proper signals
   ema_slow: 40
   ema_trend: 200
   rsi_period: 14
