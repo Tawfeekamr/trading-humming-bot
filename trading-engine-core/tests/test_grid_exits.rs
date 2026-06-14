@@ -20,10 +20,19 @@ fn default_grid_config() -> GridConfig {
     }
 }
 
+/// Isolated temp state dir (unique per test) so on_fill writes don't pollute
+/// other tests or load stale data/*.json.
+fn isolated_state_dir(tag: &str) -> String {
+    let dir = std::env::temp_dir().join(format!("test_grid_exits_{}_{}", tag, std::process::id()));
+    let _ = std::fs::remove_file(dir.join("BTCUSDT_grid_state.json"));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir.to_str().unwrap().to_string()
+}
+
 #[tokio::test]
 async fn test_buy_fill_records_negative_pnl() {
     let config = default_grid_config();
-    let mut strategy = GridStrategy::new("BTCUSDT", &config, 0.01, 0.00001);
+    let mut strategy = GridStrategy::new_with_state_dir("BTCUSDT", &config, 0.01, 0.00001, &isolated_state_dir("buy"));
     let initial_capital = strategy.current_capital();
 
     let fill = Fill {
@@ -60,7 +69,7 @@ async fn test_buy_fill_records_negative_pnl() {
 #[tokio::test]
 async fn test_sell_fill_records_positive_pnl() {
     let config = default_grid_config();
-    let mut strategy = GridStrategy::new("BTCUSDT", &config, 0.01, 0.00001);
+    let mut strategy = GridStrategy::new_with_state_dir("BTCUSDT", &config, 0.01, 0.00001, &isolated_state_dir("sell"));
 
     // First simulate a buy to have inventory
     let buy_fill = Fill {

@@ -81,7 +81,10 @@ fn test_indicators_not_ready_initially() {
 fn test_realized_pnl_accessor_default_zero() {
     let config = default_trend_config();
     let telegram = trading_engine_core::notifications::TelegramBot::new("", "");
-    let strategy = TrendStrategy::new("BTCUSDT", &config, telegram);
+    // Use a pair with no persisted position file so the strategy is genuinely fresh
+    // (test_trend_journal writes data/BTCUSDT_trend_position.json and would otherwise
+    // be loaded, restoring a non-zero realized_pnl).
+    let strategy = TrendStrategy::new("FRESHPAIR-USDT", &config, telegram);
     use trading_engine_core::strategy::Strategy;
     assert_eq!(strategy.realized_pnl(), 0.0, "fresh strategy has zero realized PnL");
 }
