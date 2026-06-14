@@ -1,4 +1,6 @@
-use trading_engine_core::connector::types::{OrderRequest, OrderTypeReq, TimeInForceReq};
+use std::collections::HashMap;
+use trading_engine_core::connector::types::{OrderRequest, OrderTypeReq, TimeInForceReq, OrderBook};
+use trading_engine_core::engine::Engine;
 use trading_engine_core::models::order::OrderSide;
 use trading_engine_core::risk::circuit_breaker::CircuitBreaker;
 use trading_engine_core::risk::{RiskManager, PositionGuard};
@@ -60,6 +62,37 @@ fn test_record_equity_halts_at_drawdown_threshold() {
     rm.record_equity(8900.0); // 11% drawdown
     assert!(rm.circuit_breaker.is_halted_raw(), "halted after 11% drawdown");
     assert!(rm.check_trading_allowed().is_err(), "trading blocked once halted");
+}
+
+#[test]
+fn test_portfolio_equity_mtm() {
+    let mut balances = HashMap::new();
+    balances.insert("USDT".to_string(), 5000.0);
+    balances.insert("BNB".to_string(), 10.0);
+    let mut obs = HashMap::new();
+    obs.insert("BNB-USDT".to_string(), OrderBook {
+        symbol: "BNB-USDT".to_string(),
+        bids: vec![(599.0, 1.0)],
+        asks: vec![(601.0, 1.0)],
+        timestamp: 0,
+    });
+    // MTM = 5000 USDT + 10 BNB × 600 (mid of 599/601) = 11000.
+    // A grid buy (USDT down, BNB up at same price) leaves this unchanged.
+    let eq = Engine::portfolio_equity_mtm(&balances, &obs);
+    assert!((eq - 11000.0).abs() < 0.01, "MTM = USDT + base*mid, got {}", eq);
+}
+
+#[test]
+fn test_load_state_resets_stale_realized_peak() {
+    let dir = std::env::temp_dir().join("test_risk_state_migrate");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("risk_state_migrate.json");
+    // Legacy (pre-MTM) state: inflated realized-based peak + halted, old metric.
+    std::fs::write(&path, r#"{"peak_equity":44707.0,"start_of_day_equity":20000.0,"halted":true,"halted_at_unix":1700000000,"last_reset_date":"2026-06-14","metric":"realized"}"#).unwrap();
+    let mut cb = CircuitBreaker::new(10.0, 5.0);
+    trading_engine_core::risk::load_state(&mut cb, path.to_str().unwrap(), 11000.0);
+    assert!((cb.peak_equity() - 11000.0).abs() < 1e-6, "stale realized peak reset to current MTM equity");
+    assert!(!cb.is_halted_raw(), "halt cleared on metric migration");
 }
 
 #[test]

@@ -26,7 +26,6 @@ pub struct Engine {
     order_books: HashMap<String, OrderBook>,
     status_cache: StrategyStatusCache,
     regime_cache: RegimeCache,
-    breaker_baseline_capital: f64,
 }
 
 impl Engine {
@@ -50,14 +49,11 @@ impl Engine {
             order_books: HashMap::new(),
             status_cache,
             regime_cache,
-            breaker_baseline_capital: 0.0,
         };
         // Init signal engine after self.config is set
         engine.signal = engine.config.signal.as_ref().filter(|s| s.enabled).map(|sc| {
             SignalEngine::new(sc, Some(telegram.clone_for_signal()))
         });
-        // Baseline equity for the portfolio circuit breaker (grid + trend capital).
-        engine.breaker_baseline_capital = engine.config.grid.capital_usdt + engine.config.trend.capital;
         engine
     }
 
@@ -124,7 +120,9 @@ impl Engine {
 
         // Restore circuit-breaker state (peak equity, daily baseline, halt) across restarts.
         let risk_path = std::env::var("RISK_STATE_PATH").unwrap_or_else(|_| "data/risk_state.json".to_string());
-        crate::risk::load_state(&mut self.risk.circuit_breaker, &risk_path, self.breaker_baseline_capital);
+        let boot_balances = self.connector.get_balances().await.unwrap_or_default();
+        let boot_equity = Self::portfolio_equity_mtm(&boot_balances, &self.order_books);
+        crate::risk::load_state(&mut self.risk.circuit_breaker, &risk_path, boot_equity);
         info!("Circuit breaker loaded: peak={:.0} sod={:.0} halted={}",
             self.risk.circuit_breaker.peak_equity(),
             self.risk.circuit_breaker.start_of_day_equity(),
@@ -145,7 +143,7 @@ impl Engine {
                     });
                     self.tick_strategies().await?;
                     self.process_paper_fills().await?;
-                    self.feed_breaker();
+                    self.feed_breaker().await;
                 }
                 WsEvent::Kline { symbol, bar, is_closed } => {
                     if is_closed {
@@ -239,10 +237,30 @@ impl Engine {
         rest.split('#').next()?.parse().ok()
     }
 
-    /// Feed realized portfolio equity to the circuit breaker + persist state.
-    fn feed_breaker(&mut self) {
-        let realized: f64 = self.strategies.iter().map(|s| s.realized_pnl()).sum();
-        let equity = self.breaker_baseline_capital + realized;
+    /// Mark-to-market portfolio equity: USDT balance + Σ (base × mid) across
+    /// order books. A grid buy (cash → inventory at the same price) is net-zero
+    /// here, so it doesn't falsely look like a drawdown the way realized-PnL
+    /// (cash-flow) accounting would.
+    pub fn portfolio_equity_mtm(
+        balances: &HashMap<String, f64>,
+        order_books: &HashMap<String, OrderBook>,
+    ) -> f64 {
+        let mut equity = balances.get("USDT").copied().unwrap_or(0.0);
+        for (pair, ob) in order_books {
+            if let Some(mid) = ob.mid_price() {
+                let base = pair.split('-').next().unwrap_or("");
+                if !base.is_empty() {
+                    equity += balances.get(base).copied().unwrap_or(0.0) * mid;
+                }
+            }
+        }
+        equity
+    }
+
+    /// Feed mark-to-market portfolio equity to the circuit breaker + persist.
+    async fn feed_breaker(&mut self) {
+        let balances = self.connector.get_balances().await.unwrap_or_default();
+        let equity = Self::portfolio_equity_mtm(&balances, &self.order_books);
         self.risk.record_equity(equity);
         // Daily reset at UTC midnight.
         let today = chrono::Utc::now().format("%Y-%m-%d").to_string();

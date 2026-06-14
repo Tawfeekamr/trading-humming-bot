@@ -54,6 +54,11 @@ struct RiskState {
     halted: bool,
     halted_at_unix: Option<i64>,
     last_reset_date: String,
+    /// Equity metric this state was recorded under. Older state (realized-PnL
+    /// based, pre-MTM) has no/empty metric and is discarded on load so an
+    /// inflated legacy peak can't trigger a false drawdown halt.
+    #[serde(default)]
+    metric: String,
 }
 
 /// Persist breaker state atomically (temp write + rename).
@@ -64,6 +69,7 @@ pub fn save_state(cb: &CircuitBreaker, path: &str) {
         halted: cb.is_halted_raw(),
         halted_at_unix: cb.halted_at_unix(),
         last_reset_date: cb.last_reset_date().to_string(),
+        metric: "mtm".to_string(),
     };
     let p = std::path::PathBuf::from(path);
     if let Some(parent) = p.parent() {
@@ -77,20 +83,26 @@ pub fn save_state(cb: &CircuitBreaker, path: &str) {
     }
 }
 
-/// Load breaker state. On missing/corrupt file, initialize from `current_equity`.
+/// Load breaker state. On missing/corrupt file, or a state recorded under an
+/// older equity metric (realized-PnL based), initialize fresh from
+/// `current_equity` so a stale/inflated peak can't cause a false halt.
 pub fn load_state(cb: &mut CircuitBreaker, path: &str, current_equity: f64) {
     if let Ok(content) = std::fs::read_to_string(path) {
         if let Ok(s) = serde_json::from_str::<RiskState>(&content) {
-            cb.set_peak_equity(if s.peak_equity > 0.0 { s.peak_equity } else { current_equity });
-            cb.set_start_of_day_equity(if s.start_of_day_equity > 0.0 { s.start_of_day_equity } else { current_equity });
-            cb.set_halted_state(s.halted, s.halted_at_unix);
-            cb.set_last_reset_date(s.last_reset_date);
-            return;
+            if s.metric == "mtm" {
+                cb.set_peak_equity(if s.peak_equity > 0.0 { s.peak_equity } else { current_equity });
+                cb.set_start_of_day_equity(if s.start_of_day_equity > 0.0 { s.start_of_day_equity } else { current_equity });
+                cb.set_halted_state(s.halted, s.halted_at_unix);
+                cb.set_last_reset_date(s.last_reset_date);
+                return;
+            }
+            // metric mismatch (legacy realized-based state) — discard, re-init below.
         } else {
             warn!("Corrupt risk_state.json — initializing fresh");
         }
     }
     cb.set_peak_equity(current_equity);
     cb.set_start_of_day_equity(current_equity);
+    cb.set_halted_state(false, None);
     cb.set_last_reset_date(chrono::Utc::now().format("%Y-%m-%d").to_string());
 }
