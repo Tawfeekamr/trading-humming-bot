@@ -262,3 +262,42 @@ async fn test_direction_flip_exit() {
         "Direction flip should trigger sell order, got {:?}", orders
     );
 }
+
+/// Test 6: A position restored from disk must NOT be liquidated by a catch-up
+/// burst of TP/exit orders on the first live tick. TPs already below the
+/// current price are reconciled as filled; the bot resumes managing the position.
+#[tokio::test]
+async fn test_restored_position_skips_catchup_exit_burst() {
+    let config = default_trend_config();
+    let pair = "RESTORE-USDT"; // unique pair → isolated state file
+
+    // 1. Enter + persist a position (on_fill writes data/RESTORE_USDT_trend_position.json).
+    let tg1 = trading_engine_core::notifications::TelegramBot::new("", "");
+    let mut s1 = TrendStrategy::new(pair, &config, tg1);
+    warmup(&mut s1, 50000.0);
+    enter_position(&mut s1, 50000.0, 0.1).await;
+    drop(s1);
+
+    // 2. Fresh instance loads it (simulates a restart).
+    let tg2 = trading_engine_core::notifications::TelegramBot::new("", "");
+    let mut s2 = TrendStrategy::new(pair, &config, tg2);
+    assert!(s2.position().is_some(), "position restored from disk");
+    warmup(&mut s2, 50000.0);
+
+    // 3. Tick at a price well above ALL TP levels.
+    let sl = s2.calculate_stop_loss(50000.0);
+    let tp_levels = TrendPosition::calculate_tp_levels(50000.0, sl, config.risk_reward_ratio, 0.10);
+    let high_price = tp_levels[2].price + 5000.0;
+    let mut bars = Vec::new();
+    let ctx = make_tick(high_price, &mut bars);
+    let orders = s2.on_tick(&ctx).await.unwrap();
+
+    // 4. No catch-up burst: no sells, position survives, overdue TPs reconciled as filled.
+    assert!(orders.is_empty(), "restored position must not fire catch-up exits, got {:?}", orders);
+    assert!(s2.position().is_some(), "restored position must survive the restart tick");
+    let pos = s2.position().unwrap();
+    assert!(pos.tp_levels.iter().all(|tp| tp.filled), "overdue TPs reconciled as filled");
+
+    // cleanup the isolated state file
+    let _ = std::fs::remove_file(format!("data/{}_trend_position.json", pair.replace("-", "_")));
+}

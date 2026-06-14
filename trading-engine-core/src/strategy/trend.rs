@@ -55,6 +55,10 @@ pub struct TrendPosition {
     /// Unix-seconds timestamp of the opening fill (serde default keeps old state files loadable).
     #[serde(default)]
     pub entry_time: i64,
+    /// True when the position was just loaded from disk. The first on_tick after
+    /// load reconciles overdue TPs without firing a catch-up exit burst.
+    #[serde(default)]
+    pub restored: bool,
 }
 
 impl TrendPosition {
@@ -347,7 +351,9 @@ impl TrendStrategy {
             Ok(content) => {
                 match serde_json::from_str::<TrendPositionState>(&content) {
                     Ok(state) => {
-                        self.position = Some(state.position);
+                        let mut pos = state.position;
+                        pos.restored = true; // reconcile on the first on_tick after load
+                        self.position = Some(pos);
                         self.realized_pnl = state.realized_pnl;
                     }
                     Err(e) => warn!("Failed to parse trend position for {}: {}", self.pair, e),
@@ -409,6 +415,28 @@ impl Strategy for TrendStrategy {
             p.tp_levels.last().map(|t| t.price).unwrap_or(p.entry_price),
             p.entry_time,
         ));
+        // Restore reconciliation: a position just loaded from disk may have TP
+        // levels already below the current price (they "happened" while we were
+        // down). Mark those TPs filled WITHOUT re-firing notifications/orders,
+        // and skip exit evaluation for this one tick — a restart must not
+        // liquidate the position with a catch-up burst.
+        let mut skip_exits_for_restore = false;
+        if let Some(pos) = &mut self.position {
+            if pos.restored {
+                for tp in pos.tp_levels.iter_mut() {
+                    if !tp.filled && current_price >= tp.price {
+                        tp.filled = true;
+                    }
+                }
+                pos.restored = false;
+                skip_exits_for_restore = true;
+            }
+        }
+        if skip_exits_for_restore {
+            self.save_position();
+            return Ok(orders);
+        }
+
         if let Some(pos) = &mut self.position {
             if current_price > pos.highest_since_entry { pos.highest_since_entry = current_price; }
             if current_price < pos.lowest_since_entry { pos.lowest_since_entry = current_price; }
@@ -570,6 +598,7 @@ impl Strategy for TrendStrategy {
                     trailing_stop: None, highest_since_entry: fill.price,
                     lowest_since_entry: fill.price, tp_levels,
                     entry_time: fill.timestamp,
+                    restored: false,
                 });
                 self.save_position();
             }
