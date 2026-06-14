@@ -136,6 +136,7 @@ signal_copy:
   # Position management
   max_positions: 5                  # Max concurrent signal positions (was 3; raised 2026-06-14)
   per_trade_risk_pct: 3.0           # Risk per trade (% of signal budget)
+  max_position_pct: 25              # Max notional per signal (% of budget); risk-based sizing deploys up to this on favorable R:R
   capital_pct: 100.0                # % of total capital for signal trades
   max_capital_usdt: 10000           # Claude: keep equal 10K until out-of-sample evidence
   min_rr_ratio: 1.0                 # Minimum risk:reward (vs TP3)

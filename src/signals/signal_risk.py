@@ -19,6 +19,7 @@ class SignalRiskGuard:
         self._max_capital = config.get("max_capital_usdt", 1000)
         self._max_positions = config.get("max_positions", 3)
         self._per_trade_pct = config.get("per_trade_risk_pct", 3.0)
+        self._max_position_pct = config.get("max_position_pct", 25.0)
         self._daily_loss_limit_pct = config.get("daily_loss_limit_pct", 5.0)
         self._max_trades_per_day = config.get("max_trades_per_day", 10)
         self._cooldown_seconds = config.get("cooldown_minutes", 5) * 60
@@ -53,13 +54,21 @@ class SignalRiskGuard:
         mult = conf_multiplier.get(signal.confidence, 0.33)
         risk_amount = total_budget * self._per_trade_pct / 100 * mult
 
+        # Per-trade notional cap: the most capital deployed into a single
+        # signal. Replaces the old total_budget/max_positions flat slice so a
+        # favorable risk:reward can deploy up to max_position_pct of the budget.
+        # (risk_amount / sl_distance still bounds the $ loss at per_trade_risk_pct
+        # of capital on a stop-out — raising this cap deploys more notional at
+        # the same $ risk, it does not increase the loss if stopped.)
+        max_notional = total_budget * self._max_position_pct / 100
+
         if signal.stop_loss and signal.entry_high:
             sl_distance_pct = (signal.entry_high - signal.stop_loss) / signal.entry_high
             if sl_distance_pct > 0:
                 position_size = risk_amount / sl_distance_pct
-                return min(position_size, total_budget / self._max_positions)
+                return min(position_size, max_notional)
 
-        return total_budget / self._max_positions
+        return max_notional
 
     def record_trade_opened(self):
         self._trades_today += 1
