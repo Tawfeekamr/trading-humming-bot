@@ -103,6 +103,45 @@ async fn test_adx_gate_blocks_entry_when_threshold_unreachable() {
     );
 }
 
+/// No live order book (e.g. during bar replay on restart) must NOT trade off a
+/// stale bar close. That fallback produced phantom TP exits at historical
+/// prices (ETH "exits" at $1832.52 from a cached bar while real ETH was ~$1.6k),
+/// inflating the realized-PnL journal. With no live quote, the strategy holds.
+#[tokio::test]
+async fn test_no_trade_without_live_orderbook() {
+    let config = default_trend_config();
+    let mut strategy = TrendStrategy::new_with_journal(
+        "GATEUSDT", &config, None, TelegramBot::disabled(),
+    );
+    strategy.on_start().await.unwrap();
+    warmup_uptrend(&mut strategy, 50000.0); // strong uptrend -> would normally enter
+
+    // Tick with an EMPTY order book (as during bar replay) but recent_bars
+    // carrying a high close. current_price must be 0 -> no trade.
+    let mut bars = Vec::new();
+    bars.push(make_bar(50600.0));
+    let ctx = TickContext {
+        order_book: OrderBook {
+            symbol: "GATEUSDT".to_string(),
+            bids: vec![],
+            asks: vec![],
+            timestamp: 0,
+        },
+        recent_bars: bars,
+        balances: HashMap::from([("USDT".to_string(), 10000.0)]),
+        open_orders: vec![],
+        regime: None,
+        regime_confidence: 0.0,
+        timestamp: 0,
+    };
+    let orders = strategy.on_tick(&ctx).await.unwrap();
+    assert!(
+        orders.is_empty(),
+        "must NOT trade without a live order-book price (would use a stale bar close); got {} orders",
+        orders.len()
+    );
+}
+
 /// A stop-loss exit must be a MARKET order so it fills even if price gaps
 /// through it. A LIMIT stop can sit unfilled in a fast crash.
 #[tokio::test]

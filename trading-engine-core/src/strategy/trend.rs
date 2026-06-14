@@ -407,9 +407,14 @@ impl Strategy for TrendStrategy {
 
         if !self.indicators_ready() { return Ok(orders); }
 
-        let current_price = ctx.order_book.mid_price().unwrap_or_else(|| {
-            ctx.recent_bars.last().map(|b| b.close).unwrap_or(0.0)
-        });
+        // Require a live order-book quote. The previous fallback to
+        // recent_bars.last().close let the strategy trade at a stale bar close
+        // when the order book was empty — most importantly during bar-replay
+        // warmup on restart, where the replay ctx has an empty order book, so
+        // every historical bar's close became "current_price" and fired phantom
+        // TP exits at prices the live market never reached (ETH "exits" at
+        // $1832.52 while real ETH was ~$1.6k). No live quote => hold.
+        let current_price = ctx.order_book.mid_price().unwrap_or(0.0);
         if current_price <= 0.0 { return Ok(orders); }
 
         // ── If in position: check exits ──
