@@ -134,7 +134,7 @@ signal_copy:
   ai_model: "deepseek-chat"          # DeepSeek model for signal parsing
 
   # Position management
-  max_positions: 3                  # Max concurrent signal positions
+  max_positions: 5                  # Max concurrent signal positions (was 3; raised 2026-06-14)
   per_trade_risk_pct: 3.0           # Risk per trade (% of signal budget)
   capital_pct: 100.0                # % of total capital for signal trades
   max_capital_usdt: 10000           # Claude: keep equal 10K until out-of-sample evidence
