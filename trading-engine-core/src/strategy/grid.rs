@@ -656,6 +656,16 @@ impl Strategy for GridStrategy {
         };
 
         self.record_pnl(pnl);
+
+        // Journal the fill + persist summary state so it survives restart.
+        if let Some(ref journal) = self.journal {
+            let level = fill.order_id
+                .rfind("_buy_").map(|i| &fill.order_id[i + 1..])
+                .or_else(|| fill.order_id.rfind("_sell_").map(|i| &fill.order_id[i + 1..]))
+                .unwrap_or("?");
+            journal.log_fill(&self.pair, fill.side, level, fill.price, fill.quantity, fill.fee, pnl, self.total_pnl);
+        }
+        self.save_state_internal();
         Ok(Vec::new())
     }
 
