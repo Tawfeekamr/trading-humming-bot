@@ -12,6 +12,7 @@ fn buy(symbol: &str, price: f64, qty: f64) -> OrderRequest {
         quantity: qty,
         time_in_force: Some(TimeInForceReq::Gtc),
         client_order_id: None,
+        reduce_only: false,
     }
 }
 
@@ -24,6 +25,7 @@ fn sell(symbol: &str, price: f64, qty: f64) -> OrderRequest {
         quantity: qty,
         time_in_force: Some(TimeInForceReq::Gtc),
         client_order_id: None,
+        reduce_only: false,
     }
 }
 

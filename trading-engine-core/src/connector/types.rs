@@ -10,6 +10,10 @@ pub struct OrderRequest {
     pub quantity: f64,
     pub time_in_force: Option<TimeInForceReq>,
     pub client_order_id: Option<String>,
+    /// True for orders that only reduce existing exposure (exits). These bypass
+    /// the circuit breaker so a halt can't trap open positions.
+    #[serde(default)]
+    pub reduce_only: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]

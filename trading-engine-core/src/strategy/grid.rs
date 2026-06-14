@@ -584,6 +584,7 @@ impl Strategy for GridStrategy {
                 quantity: level.quantity,
                 time_in_force: Some(TimeInForceReq::Gtc),
                 client_order_id: Some(id.clone()),
+                reduce_only: false,
             };
             self.orders.insert(id.clone(), GridOrder {
                 order_id: id,
@@ -608,6 +609,7 @@ impl Strategy for GridStrategy {
                 quantity: level.quantity,
                 time_in_force: Some(TimeInForceReq::Gtc),
                 client_order_id: Some(id.clone()),
+                reduce_only: true,
             };
             self.orders.insert(id.clone(), GridOrder {
                 order_id: id,

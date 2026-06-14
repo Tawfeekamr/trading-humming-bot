@@ -145,6 +145,7 @@ impl Strategy for MeanReversionStrategy {
                         quantity: qty,
                         time_in_force: None,
                         client_order_id: Some(format!("mr_entry_{}", now)),
+                        reduce_only: false,
                     });
                 }
             }
@@ -157,6 +158,7 @@ impl Strategy for MeanReversionStrategy {
                     symbol: self.pair.replace("-", ""), side: OrderSide::Sell,
                     order_type: OrderTypeReq::Market, price: None, quantity: self.position_qty,
                     time_in_force: None, client_order_id: Some(format!("mr_exit_{}", now)),
+                    reduce_only: true,
                 });
             } else if mid <= self.entry_price * (1.0 - self.config.stop_pct) {
                 warn!("⚠️ MeanReversion Layer 2 Stop hit at {}", mid);
@@ -165,6 +167,7 @@ impl Strategy for MeanReversionStrategy {
                     symbol: self.pair.replace("-", ""), side: OrderSide::Sell,
                     order_type: OrderTypeReq::Market, price: None, quantity: self.position_qty,
                     time_in_force: None, client_order_id: Some(format!("mr_exit_{}", now)),
+                    reduce_only: true,
                 });
             }
         }

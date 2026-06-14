@@ -424,7 +424,7 @@ impl Strategy for TrendStrategy {
                 }
                 self.notify_exit(current_price, pnl, "stop_loss");
                 orders.push(OrderRequest {
-                    symbol: self.pair.clone(), side: OrderSide::Sell,
+                    symbol: self.pair.clone(), side: OrderSide::Sell, reduce_only: true,
                     order_type: OrderTypeReq::Limit, price: Some(current_price),
                     quantity: qty, time_in_force: Some(TimeInForceReq::Gtc), client_order_id: None,
                 });
@@ -446,7 +446,7 @@ impl Strategy for TrendStrategy {
                         let reason = match idx { 0 => "tp1", 1 => "tp2", _ => "tp3" };
                         tp_exits.push((sell_qty, pnl, reason));
                         orders.push(OrderRequest {
-                            symbol: self.pair.clone(), side: OrderSide::Sell,
+                            symbol: self.pair.clone(), side: OrderSide::Sell, reduce_only: true,
                             order_type: OrderTypeReq::Limit, price: Some(current_price),
                             quantity: sell_qty, time_in_force: Some(TimeInForceReq::Gtc), client_order_id: None,
                         });
@@ -493,7 +493,7 @@ impl Strategy for TrendStrategy {
                         }
                         self.notify_exit(current_price, pnl, "trailing_stop");
                         orders.push(OrderRequest {
-                            symbol: self.pair.clone(), side: OrderSide::Sell,
+                            symbol: self.pair.clone(), side: OrderSide::Sell, reduce_only: true,
                             order_type: OrderTypeReq::Limit, price: Some(current_price),
                             quantity: qty, time_in_force: Some(TimeInForceReq::Gtc), client_order_id: None,
                         });
@@ -517,7 +517,7 @@ impl Strategy for TrendStrategy {
                     }
                     self.notify_exit(current_price, pnl, "signal_exit");
                     orders.push(OrderRequest {
-                        symbol: self.pair.clone(), side: OrderSide::Sell,
+                        symbol: self.pair.clone(), side: OrderSide::Sell, reduce_only: true,
                         order_type: OrderTypeReq::Limit, price: Some(current_price),
                         quantity: qty, time_in_force: Some(TimeInForceReq::Gtc), client_order_id: None,
                     });
@@ -537,7 +537,7 @@ impl Strategy for TrendStrategy {
                 let quantity = self.calculate_quantity(current_price, stop_loss);
                 if quantity > 0.0 {
                     orders.push(OrderRequest {
-                        symbol: self.pair.clone(), side: OrderSide::Buy,
+                        symbol: self.pair.clone(), side: OrderSide::Buy, reduce_only: false,
                         order_type: OrderTypeReq::Limit, price: Some(current_price),
                         quantity, time_in_force: Some(TimeInForceReq::Gtc), client_order_id: None,
                     });

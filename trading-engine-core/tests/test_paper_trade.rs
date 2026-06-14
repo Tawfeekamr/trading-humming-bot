@@ -22,6 +22,7 @@ fn test_limit_buy_fills_when_price_drops() {
         quantity: 0.1,
         time_in_force: Some(TimeInForceReq::Gtc),
         client_order_id: Some("test_buy_1".to_string()),
+        reduce_only: false,
     };
 
     engine.place_order(&req).unwrap();
@@ -49,6 +50,7 @@ fn test_limit_sell_fills_when_price_rises() {
         quantity: 0.1,
         time_in_force: Some(TimeInForceReq::Gtc),
         client_order_id: Some("test_sell_1".to_string()),
+        reduce_only: false,
     };
 
     engine.place_order(&req).unwrap();
@@ -72,6 +74,7 @@ fn test_market_order_fills_immediately() {
         quantity: 0.1,
         time_in_force: None,
         client_order_id: Some("test_market_1".to_string()),
+        reduce_only: false,
     };
 
     engine.place_order(&req).unwrap();
@@ -91,6 +94,7 @@ fn test_balance_updates_on_fill() {
         quantity: 0.1,
         time_in_force: Some(TimeInForceReq::Gtc),
         client_order_id: Some("test_balance".to_string()),
+        reduce_only: false,
     };
 
     engine.place_order(&req).unwrap();
@@ -113,6 +117,7 @@ fn test_cancel_order() {
         quantity: 0.1,
         time_in_force: Some(TimeInForceReq::Gtc),
         client_order_id: Some("test_cancel".to_string()),
+        reduce_only: false,
     };
 
     let order = engine.place_order(&req).unwrap();
@@ -137,6 +142,7 @@ async fn test_connector_try_fill_at_price() {
         quantity: 0.1,
         time_in_force: Some(TimeInForceReq::Gtc),
         client_order_id: Some("test_connector_fill".to_string()),
+        reduce_only: false,
     };
     connector.place_order(&req).await.unwrap();
 
