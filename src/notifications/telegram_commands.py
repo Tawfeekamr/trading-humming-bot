@@ -1567,7 +1567,22 @@ class TelegramCommandHandler:
             update.message.reply_text("Usage: /signal_inject <signal message text>")
             return
 
-        connector = self.strategy.connectors.get(self.strategy.signal_exchange) if hasattr(self.strategy, 'connectors') else None
+        # Resolve the signal connector defensively. The hybrid RunnerProxy's
+        # __getattr__ returns {} for legacy Hummingbot attributes (connectors /
+        # signal_exchange), so a naive `connectors.get(signal_exchange)` becomes
+        # `{}.get({})` → "unhashable type: 'dict'" and the whole command crashes
+        # before inject runs. When no real connector is wired, pass None — the
+        # signal engine then uses its _get_price_fn / Gate.io REST fallback for
+        # price, max_capital_usdt for equity, and the _buy_fn callback to place
+        # the order (none of which need this connector object).
+        connector = None
+        try:
+            conns = getattr(self.strategy, 'connectors', None)
+            exch = getattr(self.strategy, 'signal_exchange', None)
+            if isinstance(conns, dict) and isinstance(exch, str):
+                connector = conns.get(exch)
+        except Exception:
+            connector = None
         try:
             signal = engine.inject_signal(signal_text, connector)
             reply = (
