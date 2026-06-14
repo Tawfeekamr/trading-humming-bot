@@ -1,6 +1,7 @@
 use trading_engine_core::connector::types::{OrderRequest, OrderTypeReq, TimeInForceReq};
 use trading_engine_core::models::order::OrderSide;
 use trading_engine_core::risk::circuit_breaker::CircuitBreaker;
+use trading_engine_core::risk::{RiskManager, PositionGuard};
 
 #[test]
 fn test_breaker_trips_on_drawdown_and_persists_fields() {
@@ -48,6 +49,17 @@ fn test_risk_state_missing_initializes_from_equity() {
     trading_engine_core::risk::load_state(&mut cb, "/nonexistent/risk_state.json", 9000.0);
     assert_eq!(cb.peak_equity(), 9000.0, "no file -> peak = current equity");
     assert_eq!(cb.start_of_day_equity(), 9000.0);
+}
+
+#[test]
+fn test_record_equity_halts_at_drawdown_threshold() {
+    let mut rm = RiskManager::new(PositionGuard::new(80.0, 100.0, 10000.0), CircuitBreaker::new(10.0, 5.0));
+    rm.circuit_breaker.set_start_of_day_equity(10000.0);
+    rm.record_equity(10000.0); // establishes peak
+    assert!(rm.check_trading_allowed().is_ok(), "not halted at baseline");
+    rm.record_equity(8900.0); // 11% drawdown
+    assert!(rm.circuit_breaker.is_halted_raw(), "halted after 11% drawdown");
+    assert!(rm.check_trading_allowed().is_err(), "trading blocked once halted");
 }
 
 #[test]

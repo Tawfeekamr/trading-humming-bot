@@ -26,6 +26,7 @@ pub struct Engine {
     order_books: HashMap<String, OrderBook>,
     status_cache: StrategyStatusCache,
     regime_cache: RegimeCache,
+    breaker_baseline_capital: f64,
 }
 
 impl Engine {
@@ -49,11 +50,14 @@ impl Engine {
             order_books: HashMap::new(),
             status_cache,
             regime_cache,
+            breaker_baseline_capital: 0.0,
         };
         // Init signal engine after self.config is set
         engine.signal = engine.config.signal.as_ref().filter(|s| s.enabled).map(|sc| {
             SignalEngine::new(sc, Some(telegram.clone_for_signal()))
         });
+        // Baseline equity for the portfolio circuit breaker (grid + trend capital).
+        engine.breaker_baseline_capital = engine.config.grid.capital_usdt + engine.config.trend.capital;
         engine
     }
 
@@ -118,6 +122,14 @@ impl Engine {
         self.regime_cache.load_from_file().await;
         info!("Regime cache loaded from file");
 
+        // Restore circuit-breaker state (peak equity, daily baseline, halt) across restarts.
+        let risk_path = std::env::var("RISK_STATE_PATH").unwrap_or_else(|_| "data/risk_state.json".to_string());
+        crate::risk::load_state(&mut self.risk.circuit_breaker, &risk_path, self.breaker_baseline_capital);
+        info!("Circuit breaker loaded: peak={:.0} sod={:.0} halted={}",
+            self.risk.circuit_breaker.peak_equity(),
+            self.risk.circuit_breaker.start_of_day_equity(),
+            self.risk.circuit_breaker.is_halted_raw());
+
         // Main event loop
         while let Some(event) = ws_rx.recv().await {
             match event {
@@ -133,6 +145,7 @@ impl Engine {
                     });
                     self.tick_strategies().await?;
                     self.process_paper_fills().await?;
+                    self.feed_breaker();
                 }
                 WsEvent::Kline { symbol, bar, is_closed } => {
                     if is_closed {
@@ -224,6 +237,21 @@ impl Engine {
         let cid = fill.client_order_id.as_deref()?;
         let rest = cid.strip_prefix("owner:")?;
         rest.split('#').next()?.parse().ok()
+    }
+
+    /// Feed realized portfolio equity to the circuit breaker + persist state.
+    fn feed_breaker(&mut self) {
+        let realized: f64 = self.strategies.iter().map(|s| s.realized_pnl()).sum();
+        let equity = self.breaker_baseline_capital + realized;
+        self.risk.record_equity(equity);
+        // Daily reset at UTC midnight.
+        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        if self.risk.circuit_breaker.last_reset_date() != today {
+            self.risk.circuit_breaker.set_start_of_day_equity(equity);
+            self.risk.circuit_breaker.set_last_reset_date(today);
+        }
+        let path = std::env::var("RISK_STATE_PATH").unwrap_or_else(|_| "data/risk_state.json".to_string());
+        crate::risk::save_state(&self.risk.circuit_breaker, &path);
     }
 
     async fn submit_orders(&self, orders: Vec<OrderRequest>) -> Result<()> {

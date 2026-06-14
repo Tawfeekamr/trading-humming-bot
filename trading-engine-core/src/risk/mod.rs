@@ -38,6 +38,12 @@ impl RiskManager {
     pub fn record_pnl(&mut self, pnl: f64, current_equity: f64) -> bool {
         self.circuit_breaker.record_pnl(pnl, current_equity)
     }
+
+    /// Feed current portfolio equity to the breaker (called every tick by the engine).
+    pub fn record_equity(&mut self, current_equity: f64) {
+        self.circuit_breaker.update_peak(current_equity);
+        let _ = self.circuit_breaker.check(current_equity) || self.circuit_breaker.check_daily(current_equity);
+    }
 }
 
 /// Persisted circuit-breaker state (loaded on startup, saved on changes).

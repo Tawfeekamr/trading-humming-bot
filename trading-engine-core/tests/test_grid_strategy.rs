@@ -17,10 +17,18 @@ fn default_grid_config() -> GridConfig {
     }
 }
 
+/// Isolated temp state dir so unit tests don't load stale data/*.json state.
+fn isolated_state_dir() -> String {
+    let dir = std::env::temp_dir().join(format!("test_grid_strategy_state_{}", std::process::id()));
+    let _ = std::fs::remove_file(dir.join("BTCUSDT_grid_state.json"));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir.to_str().unwrap().to_string()
+}
+
 #[test]
 fn test_calculate_grid_levels() {
     let config = default_grid_config();
-    let strategy = GridStrategy::new("BTCUSDT", &config, 0.01, 0.00001);
+    let strategy = GridStrategy::new_with_state_dir("BTCUSDT", &config, 0.01, 0.00001, &isolated_state_dir());
 
     let layout = strategy.calculate_levels(50000.0, 500.0, 48000.0, 52000.0);
 
@@ -43,7 +51,7 @@ fn test_calculate_grid_levels() {
 #[test]
 fn test_grid_levels_respect_min_notional() {
     let config = default_grid_config();
-    let strategy = GridStrategy::new("BTCUSDT", &config, 0.01, 0.00001);
+    let strategy = GridStrategy::new_with_state_dir("BTCUSDT", &config, 0.01, 0.00001, &isolated_state_dir());
 
     let layout = strategy.calculate_levels(50000.0, 500.0, 48000.0, 52000.0);
 
@@ -56,7 +64,7 @@ fn test_grid_levels_respect_min_notional() {
 #[test]
 fn test_sell_spacing_tighter_than_buy() {
     let config = default_grid_config();
-    let strategy = GridStrategy::new("BTCUSDT", &config, 0.01, 0.00001);
+    let strategy = GridStrategy::new_with_state_dir("BTCUSDT", &config, 0.01, 0.00001, &isolated_state_dir());
 
     let layout = strategy.calculate_levels(50000.0, 500.0, 48000.0, 52000.0);
 
@@ -67,7 +75,7 @@ fn test_sell_spacing_tighter_than_buy() {
 #[test]
 fn test_grid_activates_with_ranging_regime() {
     let config = default_grid_config();
-    let mut strategy = GridStrategy::new("BTCUSDT", &config, 0.01, 0.00001);
+    let mut strategy = GridStrategy::new_with_state_dir("BTCUSDT", &config, 0.01, 0.00001, &isolated_state_dir());
 
     assert_eq!(strategy.state(), trading_engine_core::strategy::grid::GridState::Paused);
 
@@ -80,7 +88,7 @@ fn test_grid_activates_with_ranging_regime() {
 #[test]
 fn test_grid_blocks_on_unknown_regime() {
     let config = default_grid_config();
-    let mut strategy = GridStrategy::new("BTCUSDT", &config, 0.01, 0.00001);
+    let mut strategy = GridStrategy::new_with_state_dir("BTCUSDT", &config, 0.01, 0.00001, &isolated_state_dir());
 
     // Unknown regime (None) → should always block
     strategy.evaluate_state_with_ml(50000.0, 48000.0, 51500.0, None, 0.0);
@@ -90,7 +98,7 @@ fn test_grid_blocks_on_unknown_regime() {
 #[test]
 fn test_grid_pauses_in_danger_regime() {
     let config = default_grid_config();
-    let mut strategy = GridStrategy::new("BTCUSDT", &config, 0.01, 0.00001);
+    let mut strategy = GridStrategy::new_with_state_dir("BTCUSDT", &config, 0.01, 0.00001, &isolated_state_dir());
 
     // First activate with Ranging regime
     strategy.evaluate_state_with_ml(50000.0, 48000.0, 51500.0, Some(0), 0.0);
@@ -103,7 +111,7 @@ fn test_grid_pauses_in_danger_regime() {
 #[test]
 fn test_auto_compound_increases_capital() {
     let config = default_grid_config();
-    let mut strategy = GridStrategy::new("BTCUSDT", &config, 0.01, 0.00001);
+    let mut strategy = GridStrategy::new_with_state_dir("BTCUSDT", &config, 0.01, 0.00001, &isolated_state_dir());
 
     let initial_capital = strategy.current_capital();
 
@@ -117,7 +125,7 @@ fn test_auto_compound_increases_capital() {
 #[test]
 fn test_peak_equity_tracks_high_water_mark() {
     let config = default_grid_config();
-    let mut strategy = GridStrategy::new("BTCUSDT", &config, 0.01, 0.00001);
+    let mut strategy = GridStrategy::new_with_state_dir("BTCUSDT", &config, 0.01, 0.00001, &isolated_state_dir());
 
     strategy.record_pnl(50.0);
     assert_eq!(strategy.peak_equity(), config.capital_usdt + 50.0);
