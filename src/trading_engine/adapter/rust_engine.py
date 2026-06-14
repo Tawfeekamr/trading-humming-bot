@@ -96,6 +96,12 @@ class RustEngineAdapter(ExecutionAdapter):
         data = resp.json()
 
         order_id = data.get("orderId", data.get("order_id", ""))
+        if not order_id:
+            # Rust API returned 2xx but no orderId — the order didn't actually
+            # place (exchange rejected the pair/size, or an internal error).
+            # Raise with the response body so the failure is diagnosable in the
+            # signal-listener logs instead of a silent empty-string "no_order_id".
+            raise RuntimeError(f"Rust API returned no orderId for {symbol}: {data}")
         # Track submitted order
         tracked = Order(
             instrument_id=order.instrument_id,

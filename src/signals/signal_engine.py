@@ -240,6 +240,8 @@ class SignalEngine:
             parsed_action=signal.action.value,
             parsed_pair=signal.pair or "",
             parse_reasoning=signal.parse_reasoning,
+            quality_score=signal.quality_score,
+            quality_reason=signal.quality_reason,
         )
 
         if signal.action == SignalAction.NOT_A_SIGNAL:

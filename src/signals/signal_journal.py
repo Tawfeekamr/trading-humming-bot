@@ -61,7 +61,9 @@ class SignalJournal:
                     text          TEXT,
                     parsed_action TEXT,
                     parsed_pair   TEXT,
-                    parse_reasoning TEXT
+                    parse_reasoning TEXT,
+                    quality_score INTEGER DEFAULT 0,
+                    quality_reason TEXT DEFAULT ''
                 )
             """)
             conn.execute("""
@@ -90,19 +92,34 @@ class SignalJournal:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_st_timestamp ON signal_trades(timestamp)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_st_channel ON signal_trades(channel_name)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_rm_timestamp ON raw_messages(timestamp)")
+            # Migration: persist the DeepSeek quality score so /signal_history
+            # can show it. CREATE TABLE above only adds these on a brand-new DB;
+            # this ALTERs the existing EC2 database idempotently (SQLite has no
+            # "ADD COLUMN IF NOT EXISTS", so guard with PRAGMA table_info).
+            self._ensure_column(conn, "raw_messages", "quality_score", "INTEGER DEFAULT 0")
+            self._ensure_column(conn, "raw_messages", "quality_reason", "TEXT DEFAULT ''")
+
+    @staticmethod
+    def _ensure_column(conn, table: str, column: str, definition: str):
+        """Idempotently add a column to an existing table (no-op if present)."""
+        existing = {r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        if column not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
     def log_raw_message(self, channel_id: int, channel_name: str,
                         message_id: int, text: str,
                         parsed_action: str, parsed_pair: str,
-                        parse_reasoning: str = ""):
+                        parse_reasoning: str = "",
+                        quality_score: int = 0, quality_reason: str = ""):
         with self._lock:
             try:
                 with self._conn() as conn:
                     conn.execute(
-                        "INSERT INTO raw_messages (timestamp, channel_id, channel_name, message_id, text, parsed_action, parsed_pair, parse_reasoning) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        "INSERT INTO raw_messages (timestamp, channel_id, channel_name, message_id, text, parsed_action, parsed_pair, parse_reasoning, quality_score, quality_reason) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (datetime.now(timezone.utc).isoformat(), channel_id, channel_name,
-                         message_id, text, parsed_action, parsed_pair, parse_reasoning),
+                         message_id, text, parsed_action, parsed_pair, parse_reasoning,
+                         quality_score, quality_reason),
                     )
             except Exception as e:
                 logger.error(f"Signal journal write failed: {e}")
@@ -229,13 +246,14 @@ class SignalJournal:
         try:
             with self._conn() as conn:
                 rows = conn.execute(
-                    "SELECT timestamp, channel_name, parsed_action, parsed_pair, text "
+                    "SELECT timestamp, channel_name, parsed_action, parsed_pair, text, quality_score, quality_reason "
                     "FROM raw_messages ORDER BY id DESC LIMIT ?",
                     (limit,),
                 ).fetchall()
                 return [
                     {"timestamp": r[0], "channel": r[1], "action": r[2],
-                     "pair": r[3], "text": r[4][:100] if r[4] else ""}
+                     "pair": r[3], "text": r[4][:100] if r[4] else "",
+                     "quality_score": r[5] or 0, "quality_reason": r[6] or ""}
                     for r in rows
                 ]
         except Exception:

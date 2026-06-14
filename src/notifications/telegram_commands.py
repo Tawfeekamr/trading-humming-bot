@@ -1661,7 +1661,9 @@ class TelegramCommandHandler:
             action = s.get("action", "?")
             pair = s.get("pair", "?")
             text = s.get("text", "")[:60]
-            lines.append(f"{ts} [{action}] {pair}: {text}")
+            score = s.get("quality_score", 0)
+            score_str = f" Q{score}/10" if score else ""
+            lines.append(f"{ts} [{action}]{score_str} {pair}: {text}")
 
         update.message.reply_text("\n".join(lines), parse_mode="HTML")
 
