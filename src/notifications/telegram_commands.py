@@ -1301,7 +1301,10 @@ class TelegramCommandHandler:
 
             sign = "+" if total_pnl >= 0 else ""
             lines.append("•••")
-            lines.append(f"Total Unrealized P&L: {sign}${total_pnl:.2f}")
+            # "pnl" from Rust status() is realized P&L when flat, realized +
+            # unrealized when in a position — so the total is just "Total P&L",
+            # not "Unrealized" (which was wrong whenever the engine was flat).
+            lines.append(f"Total P&L: {sign}${total_pnl:.2f}")
             lines.append(f"Open positions: {open_positions}")
 
             update.message.reply_text("\n".join(lines), parse_mode="HTML")

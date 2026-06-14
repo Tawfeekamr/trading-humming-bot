@@ -289,6 +289,13 @@ impl TrendStrategy {
         } else {
             if dir != Direction::Up { return false; }
         }
+        // Trend-strength gate: never enter a pair with no real trend, even if
+        // the weighted score clears the threshold on volume/RSI alone. Without
+        // this a ranging pair (ADX≈0) enters then immediately trips the
+        // "ADX dying" exit → an entry/exit churn loop (XRP logged 1,807 such
+        // trades in one day on a no-trend pair).
+        let adx_gate = if self.config.adx_gate_threshold > 0.0 { self.config.adx_gate_threshold } else { 20.0 };
+        if self.adx.adx() < adx_gate { return false; }
         let threshold = if self.config.entry_score_threshold > 0 { self.config.entry_score_threshold } else { 5 };
         let scores = self.compute_score(dir);
         scores.total >= threshold
@@ -453,7 +460,7 @@ impl Strategy for TrendStrategy {
                 self.notify_exit(current_price, pnl, "stop_loss");
                 orders.push(OrderRequest {
                     symbol: self.pair.clone(), side: OrderSide::Sell, reduce_only: true,
-                    order_type: OrderTypeReq::Limit, price: Some(current_price),
+                    order_type: OrderTypeReq::Market, price: None,
                     quantity: qty, time_in_force: Some(TimeInForceReq::Gtc), client_order_id: None,
                 });
                 self.save_position();
