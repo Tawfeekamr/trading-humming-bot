@@ -1,7 +1,9 @@
 use std::collections::HashMap;
+use serde::{Serialize, Deserialize};
 use crate::config::GridConfig;
 use crate::models::order::OrderSide;
 use crate::indicators::{SupportResistance, LevelKind, Adx, Choppiness, Atr};
+use crate::strategy::grid_journal::GridJournal;
 use tracing::{info, debug, warn};
 
 const MIN_NOTIONAL: f64 = 5.0;
@@ -28,6 +30,14 @@ pub enum GridState {
     Active,
     Paused,
     Disabled,
+}
+
+/// Persisted grid summary state (loaded on startup, saved after each fill).
+#[derive(Serialize, Deserialize, Default)]
+struct GridStateSnapshot {
+    realized_pnl: f64,
+    peak_equity: f64,
+    level_cooldowns: HashMap<String, i64>,
 }
 
 pub struct GridStrategy {
@@ -63,6 +73,8 @@ pub struct GridStrategy {
     diag_bars_count: usize,
     diag_near_support: bool,
     diag_near_resistance: bool,
+    state_dir: String,
+    journal: Option<GridJournal>,
 }
 
 #[derive(Debug, Clone)]
@@ -72,7 +84,13 @@ struct GridOrder {
 
 impl GridStrategy {
     pub fn new(pair: &str, config: &GridConfig, tick_size: f64, step_size: f64) -> Self {
-        Self {
+        Self::new_with_state_dir(pair, config, tick_size, step_size, "data")
+    }
+
+    /// Construct with an explicit state directory (tests use a temp dir).
+    pub fn new_with_state_dir(pair: &str, config: &GridConfig, tick_size: f64, step_size: f64, state_dir: &str) -> Self {
+        let journal = GridJournal::new().ok();
+        let mut me = Self {
             pair: pair.to_string(),
             config: config.clone(),
             tick_size,
@@ -101,8 +119,63 @@ impl GridStrategy {
             diag_bars_count: 0,
             diag_near_support: false,
             diag_near_resistance: false,
+            state_dir: state_dir.to_string(),
+            journal,
+        };
+        me.load_state();
+        me
+    }
+
+    fn state_path(&self) -> std::path::PathBuf {
+        std::path::PathBuf::from(&self.state_dir)
+            .join(format!("{}_grid_state.json", self.pair.replace("-", "_")))
+    }
+
+    fn load_state(&mut self) {
+        let content = match std::fs::read_to_string(self.state_path()) {
+            Ok(c) => c,
+            Err(_) => return, // no file yet — fresh start
+        };
+        match serde_json::from_str::<GridStateSnapshot>(&content) {
+            Ok(s) => {
+                self.total_pnl = s.realized_pnl;
+                self.peak_equity = if s.peak_equity > 0.0 { s.peak_equity } else { self.config.capital_usdt };
+                self.level_cooldowns = s.level_cooldowns;
+                self.current_capital = self.initial_capital + self.total_pnl;
+            }
+            Err(e) => warn!("Corrupt grid state for {}: {} — starting fresh", self.pair, e),
         }
     }
+
+    fn save_state_internal(&self) {
+        self.save_state_to(&self.state_dir);
+    }
+
+    /// Save summary state to an explicit dir (production + tests).
+    pub fn save_state_to(&self, dir: &str) {
+        let path = std::path::PathBuf::from(dir)
+            .join(format!("{}_grid_state.json", self.pair.replace("-", "_")));
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let snapshot = GridStateSnapshot {
+            realized_pnl: self.total_pnl,
+            peak_equity: self.peak_equity,
+            level_cooldowns: self.level_cooldowns.clone(),
+        };
+        let tmp = path.with_extension("json.tmp");
+        if let Ok(json) = serde_json::to_string_pretty(&snapshot) {
+            if std::fs::write(&tmp, json).is_ok() {
+                let _ = std::fs::rename(&tmp, &path);
+            }
+        }
+    }
+
+    // --- diagnostics / test accessors ---
+    pub fn realized_pnl(&self) -> f64 { self.total_pnl }
+    pub fn peak_equity_pub(&self) -> f64 { self.peak_equity }
+    pub fn set_level_cooldown(&mut self, level: String, ts: i64) { self.level_cooldowns.insert(level, ts); }
+    pub fn has_level_cooldown(&self, level: &str) -> bool { self.level_cooldowns.contains_key(level) }
 
     /// Calculate grid levels based on BB center, ATR, and BB bounds.
     /// Snap buy levels away from resistance and sell levels away from support.
