@@ -935,7 +935,7 @@ class TelegramCommandHandler:
             # Try to fetch status from Rust engine API
             try:
                 import urllib.request
-                req = urllib.request.Request("http://localhost:3030/api/v1/status")
+                req = urllib.request.Request(os.environ.get("RUST_ENGINE_URL", "http://localhost:3030") + "/api/v1/strategies")
                 resp = urllib.request.urlopen(req, timeout=5)
                 data = json.loads(resp.read())
                 api_responsive = True
@@ -1648,7 +1648,7 @@ class TelegramCommandHandler:
             try:
                 import urllib.request
                 import json
-                req = urllib.request.Request("http://localhost:3030/api/v1/status")
+                req = urllib.request.Request(os.environ.get("RUST_ENGINE_URL", "http://localhost:3030") + "/api/v1/strategies")
                 resp = urllib.request.urlopen(req, timeout=5)
                 data = json.loads(resp.read())
 
