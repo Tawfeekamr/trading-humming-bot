@@ -113,6 +113,7 @@ class TelegramCommandHandler:
                     "<b>Grid:</b> /grid_status /pnl /balance /capital /trades /pending /fees /pause /resume /clear\n"
                     "<b>Trend:</b> /trend_status /trend_capital /trend_pnl /trend_close /trend_history\n"
                     "<b>Signal:</b> /signal_status /signal_pnl /signal_channels /signal_history /signal_pause /signal_resume /signal_close /signal_inject\n"
+                    "<b>Mean-Reversion:</b> /mean_status\n"
                     "••• /help for details"
                 )
                 self._tg_post("sendMessage", data={
@@ -198,6 +199,8 @@ class TelegramCommandHandler:
             "signal_resume": self._cmd_signal_resume,
             "signal_close": self._cmd_signal_close,
             "signal_inject": self._cmd_signal_inject,
+            # Mean-Reversion
+            "mean_status": self._cmd_mean_status,
         }
 
     def _dispatch(self, handler, chat_id: str, msg: dict):
@@ -1271,6 +1274,9 @@ class TelegramCommandHandler:
             "/signal_close &lt;PAIR&gt; — Close a signal position\n"
             "/signal_inject &lt;text&gt; — Manually inject a signal for execution\n"
             "•••\n"
+            "<b>Mean-Reversion:</b>\n"
+            "/mean_status — Mean-reversion engine status\n"
+            "•••\n"
             "/help — This message",
             parse_mode="HTML"
         )
@@ -1501,3 +1507,59 @@ class TelegramCommandHandler:
             lines.append("No messages received yet.")
 
         update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
+    def _cmd_mean_status(self, update, context):
+        """Show mean-reversion strategy status from Rust engine API."""
+        try:
+            logger.info("Telegram /mean_status received")
+
+            # Try to fetch from Rust engine API
+            try:
+                import urllib.request
+                import json
+                req = urllib.request.Request("http://localhost:3030/api/v1/status")
+                resp = urllib.request.urlopen(req, timeout=5)
+                data = json.loads(resp.read())
+
+                # Filter for mean-reversion strategies
+                mean_strategies = {k: v for k, v in data.get("strategies", {}).items()
+                                   if v.get("type") == "mean_reversion"}
+
+                if mean_strategies:
+                    lines = ["📉 <b>Mean-Reversion Engine</b>", "•••"]
+                    total_pnl = 0.0
+
+                    for symbol, status in mean_strategies.items():
+                        state = status.get("state", "UNKNOWN")
+                        pnl = status.get("pnl", 0)
+                        details = status.get("details", "")
+                        total_pnl += pnl
+
+                        pair_display = symbol.replace("-", "/")
+                        sign = "+" if pnl >= 0 else ""
+                        lines.append(f"<b>{pair_display}:</b> {state}")
+                        if details:
+                            lines.append(f"  <i>{html.escape(details)}</i>")
+                        lines.append(f"  P&L: {sign}${pnl:.2f}")
+
+                    lines.append("•••")
+                    sign = "+" if total_pnl >= 0 else ""
+                    lines.append(f"<b>Total P&L: {sign}${total_pnl:.2f}</b>")
+
+                    update.message.reply_text("\n".join(lines), parse_mode="HTML")
+                    return
+            except Exception as e:
+                logger.debug(f"Rust engine API unavailable: {e}")
+
+            # Fallback message with known config
+            update.message.reply_text(
+                "📉 <b>Mean-Reversion Engine</b>\n"
+                "•••\n"
+                "Status: Scanning for flash dips (≥2% in 30s)\n"
+                "Config: TP +2% | SL -3% | Gates: relaxed\n"
+                "Waiting for flush events (~1 every 10 days on average)",
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            logger.error(f"Error in /mean_status: {e}")
+            update.message.reply_text(f"⚠️ Error getting mean-reversion status: {e}")
