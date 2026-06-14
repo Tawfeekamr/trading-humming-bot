@@ -591,102 +591,96 @@ class TelegramCommandHandler:
             logger.error(f"Error in /balance: {e}")
             update.message.reply_text(f"⚠️ Error getting balance: {e}")
 
+    def _rust_api(self, path: str, timeout: float = 5.0):
+        """GET a JSON endpoint from the Rust engine API. Returns parsed JSON or None.
+
+        The hybrid runner keeps live state (orders, order books, strategies) in
+        the Rust engine; legacy Hummingbot attrs on the Python strategy proxy are
+        faked as {} and crash on attribute access. Commands read the Rust API
+        directly via this helper.
+        """
+        import urllib.request
+        url = os.environ.get("RUST_ENGINE_URL", "http://localhost:3030") + path
+        try:
+            with urllib.request.urlopen(url, timeout=timeout) as r:
+                return json.loads(r.read())
+        except Exception as e:
+            logger.warning(f"Rust API {path} failed: {e}")
+            return None
+
     def _cmd_capital(self, update, context):
         try:
-            text = update.message.text.strip()
-            parts = text.split()
-
-            if len(parts) < 2:
-                base = getattr(self.strategy, '_base_capital', self.strategy.capital_usdt)
-                update.message.reply_text(
-                    f"📐 Current base capital: ${base:,.0f}\n"
-                    f"Usage: /capital &lt;amount&gt;\n"
-                    f"Example: /capital 2000",
-                    parse_mode="HTML"
-                )
-                return
-
+            # Hybrid runner: capital lives in config/strategy.yaml (the Rust engine
+            # reads it at startup), not a runtime-mutable Python attr. The legacy
+            # strategy.capital_usdt / grid_manager attrs are faked as {} by
+            # RunnerProxy, so the old read/write path crashed. Show configured
+            # capitals read-only.
+            import yaml
+            grid_cap = trend_cap = sig_cap = "?"
             try:
-                new_capital = float(parts[1].replace(",", ""))
-            except ValueError:
-                update.message.reply_text("⚠️ Invalid amount. Example: /capital 2000")
-                return
-
-            if new_capital < 100:
-                update.message.reply_text("⚠️ Minimum capital is $100.")
-                return
-
-            old_capital = getattr(self.strategy, '_base_capital', self.strategy.capital_usdt)
-            self.strategy._base_capital = new_capital
-            self.strategy.capital_usdt = new_capital
-            self.strategy.grid_manager.capital_usdt = new_capital
-            self.strategy.position_guard.total_capital = new_capital
-            self.strategy._grid_dirty = True
-
-            self.event_log.log("capital_updated",
-                old_capital=old_capital,
-                new_capital=new_capital,
-                source="telegram",
-            )
-            logger.info(f"Telegram /capital: ${old_capital:,.0f} → ${new_capital:,.0f}")
+                with open("config/strategy.yaml") as f:
+                    cfg = yaml.safe_load(f) or {}
+                grid_cap = cfg.get("grid", {}).get("capital_usdt", "?")
+                trend_cap = cfg.get("trend", {}).get("capital", "?")
+                sig_cap = cfg.get("signal_copy", {}).get("max_capital_usdt", "?")
+            except Exception:
+                pass
 
             update.message.reply_text(
-                f"✅ <b>Capital Updated</b>\n"
+                f"📐 <b>Configured Capital</b> (config/strategy.yaml)\n"
                 f"•••\n"
-                f"Before: ${old_capital:,.0f}\n"
-                f"Now:    ${new_capital:,.0f}\n"
+                f"Grid:   ${grid_cap}\n"
+                f"Trend:  ${trend_cap}\n"
+                f"Signal: ${sig_cap}\n"
                 f"•••\n"
-                f"Grid will recalculate on next refresh.",
+                f"Config-managed — edit the YAML + redeploy to change.",
                 parse_mode="HTML"
             )
         except Exception as e:
             logger.error(f"Error in /capital: {e}")
-            update.message.reply_text(f"⚠️ Error updating capital: {e}")
+            update.message.reply_text(f"⚠️ Error: {e}")
 
     def _cmd_pause(self, update, context):
         try:
-            self.strategy.manual_pause = True
-            self.event_log.log("manual_pause", source="telegram")
-            logger.info("Telegram /pause — grid paused")
+            # Hybrid runner: no runtime pause switch. The legacy manual_pause attr
+            # isn't read by the Rust engine. Risk is auto-managed by the circuit
+            # breaker; to fully stop, stop the container.
             update.message.reply_text(
-                "⏸️ Grid manually paused. Use /resume to restart."
+                "⏸️ No runtime pause on the hybrid runner — grid/trend run continuously in the Rust engine.\n"
+                "Risk is auto-managed by the circuit breaker (halts new entries on drawdown).\n"
+                "To fully stop: docker compose stop trading-bot-rust on the EC2 host."
             )
         except Exception as e:
             logger.error(f"Error in /pause: {e}")
-            update.message.reply_text(f"⚠️ Error pausing: {e}")
+            update.message.reply_text(f"⚠️ Error: {e}")
 
     def _cmd_resume(self, update, context):
         try:
-            self.strategy.manual_pause = False
-            self.event_log.log("manual_resume", source="telegram")
-            logger.info("Telegram /resume — grid resumed")
             update.message.reply_text(
-                "🟢 Grid resumed. Will activate on next valid signal."
+                "▶️ The bot runs continuously — no paused state to resume.\n"
+                "If the circuit breaker has halted new entries, it self-clears when MTM equity recovers above the threshold."
             )
         except Exception as e:
             logger.error(f"Error in /resume: {e}")
-            update.message.reply_text(f"⚠️ Error resuming: {e}")
+            update.message.reply_text(f"⚠️ Error: {e}")
 
     def _cmd_reset(self, update, context):
         try:
-            indicators = self.strategy.get_indicators_snapshot()
-            # Multi-pair: use first pair's price
-            if isinstance(indicators, dict):
-                first = next((v for v in indicators.values() if v is not None), None)
-                price = first[4] if first else 0
-            else:
-                price = indicators[4] if indicators else 0
-            equity = self.strategy._estimate_equity(price
-            )
-            self.circuit_breaker.reset(equity)
-            self.event_log.log("circuit_breaker_reset", source="telegram", equity=round(equity, 2))
-            logger.info(f"Telegram /reset — circuit breaker reset, equity=${equity:.2f}")
+            # Hybrid runner: the circuit breaker lives in the Rust engine (in-memory,
+            # persisted to data/risk_state.json every tick). The Python side can't
+            # reset it directly — the Rust engine's in-memory state is authoritative
+            # and overwrites the file each tick. So this command can't force a reset
+            # from here.
             update.message.reply_text(
-                "🔄 Circuit breaker reset. Bot will resume on next tick."
+                "🔄 Circuit breaker is Rust-managed (in-memory + data/risk_state.json).\n"
+                "It self-clears when MTM equity recovers above ~$9.5k (5% daily limit).\n"
+                "To force a reset: restart the container with risk_state.json cleared — "
+                "the engine re-inits peak/sod from current equity on boot.\n"
+                "⚠️ If equity is still in drawdown, it re-trips on the next tick."
             )
         except Exception as e:
             logger.error(f"Error in /reset: {e}")
-            update.message.reply_text(f"⚠️ Error resetting: {e}")
+            update.message.reply_text(f"⚠️ Error: {e}")
 
     def _cmd_trades(self, update, context):
         try:
@@ -846,42 +840,27 @@ class TelegramCommandHandler:
     def _cmd_price(self, update, context=None):
         try:
             logger.info("Telegram /price received")
-            snapshot = self.strategy.get_indicators_snapshot()
-
-            # Multi-pair: snapshot is Dict[str, Optional[tuple]]
-            if isinstance(snapshot, dict):
-                args = getattr(context, 'args', None) or []
-                target_symbol = args[0].upper().replace("/", "-") if args else None
-
-                # If specific pair requested, show detail view
-                if target_symbol:
-                    data = snapshot.get(target_symbol)
-                    if data is None:
-                        update.message.reply_text(f"⚠️ No data for {target_symbol}")
-                        return
-                    self._send_price_detail(update, target_symbol, data)
-                    return
-
-                # Show all pairs summary
-                lines = ["💲 <b>Live Prices</b>\n•••"]
-                for symbol, data in snapshot.items():
-                    if data is not None:
-                        price = data[4]
-                        display = symbol.replace("-", "/")
-                        lines.append(f"<b>{display}</b>: ${price:,.2f}")
-                    else:
-                        display = symbol.replace("-", "/")
-                        lines.append(f"<b>{display}</b>: ⏳ loading")
-                update.message.reply_text("\n".join(lines), parse_mode="HTML")
+            # Hybrid runner: read live prices from the Rust engine order-book API
+            # (legacy get_indicators_snapshot() is faked as {} -> not callable).
+            strategies = self._rust_api("/api/v1/strategies") or []
+            pairs = sorted({s.get("pair") for s in strategies if s.get("pair")})
+            if not pairs:
+                update.message.reply_text("⚠️ No pairs available from engine.")
                 return
 
-            # Legacy single-pair: snapshot is a tuple
-            if not snapshot:
-                update.message.reply_text("⚠️ Could not fetch live price.")
-                return
-
-            display_pair = getattr(self.strategy, 'display_pair', 'Multi-pair')
-            self._send_price_detail(update, display_pair, snapshot)
+            lines = ["💲 <b>Live Prices</b>", "•••"]
+            for pair in pairs:
+                sym = pair.replace("-", "")
+                ob = self._rust_api(f"/api/v1/orderbook?symbol={sym}&limit=1") or {}
+                bids = ob.get("bids") or []
+                asks = ob.get("asks") or []
+                display = pair.replace("-", "/")
+                if bids and asks and bids[0] and asks[0]:
+                    mid = (float(bids[0][0]) + float(asks[0][0])) / 2
+                    lines.append(f"<b>{display}</b>: ${mid:,.4f}")
+                else:
+                    lines.append(f"<b>{display}</b>: ⏳ loading")
+            update.message.reply_text("\n".join(lines), parse_mode="HTML")
         except Exception as e:
             logger.error(f"Error in /price: {e}")
             update.message.reply_text(f"⚠️ Error getting price: {e}")
