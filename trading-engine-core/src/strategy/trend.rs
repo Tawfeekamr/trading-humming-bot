@@ -584,9 +584,10 @@ impl Strategy for TrendStrategy {
             };
             (
                 "POSITION".to_string(),
-                format!("{} {:.4} @ ${:.2} | SL: ${:.2}{} | ADX: {:.1} | dir: {}",
-                    side_str, pos.remaining_qty, pos.entry_price, pos.stop_loss, trail_str, self.adx.adx(), dir_str),
-                unrealized,
+                format!("{} {:.4} @ ${:.2} | SL: ${:.2}{} | ADX: {:.1} | dir: {}\nRealized: ${:.0} | Unrealized: ${:.2}",
+                    side_str, pos.remaining_qty, pos.entry_price, pos.stop_loss, trail_str, self.adx.adx(), dir_str,
+                    self.realized_pnl, unrealized),
+                self.realized_pnl + unrealized,
             )
         } else if !self.indicators_ready() {
             ("WAITING".to_string(), "⏳ All indicators warming up".to_string(), 0.0)
