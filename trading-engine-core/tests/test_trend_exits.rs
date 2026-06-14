@@ -90,7 +90,8 @@ async fn enter_position(strategy: &mut TrendStrategy, price: f64, qty: f64) {
 #[tokio::test]
 async fn test_stop_loss_triggers_exit() {
     let config = default_trend_config();
-    let mut strategy = TrendStrategy::new("BTCUSDT", &config);
+    let telegram = trading_engine_core::notifications::TelegramBot::new("", "");
+    let mut strategy = TrendStrategy::new("BTCUSDT", &config, telegram);
     warmup(&mut strategy, 50000.0);
 
     // Enter a position
@@ -120,7 +121,8 @@ async fn test_stop_loss_triggers_exit() {
 #[tokio::test]
 async fn test_tp1_partial_exit() {
     let config = default_trend_config();
-    let mut strategy = TrendStrategy::new("BTCUSDT", &config);
+    let telegram = trading_engine_core::notifications::TelegramBot::new("", "");
+    let mut strategy = TrendStrategy::new("BTCUSDT", &config, telegram);
     warmup(&mut strategy, 50000.0);
     enter_position(&mut strategy, 50000.0, 0.1).await;
 
@@ -155,7 +157,8 @@ async fn test_tp1_partial_exit() {
 #[tokio::test]
 async fn test_all_tp_levels_close_position() {
     let config = default_trend_config();
-    let mut strategy = TrendStrategy::new("BTCUSDT", &config);
+    let telegram = trading_engine_core::notifications::TelegramBot::new("", "");
+    let mut strategy = TrendStrategy::new("BTCUSDT", &config, telegram);
     warmup(&mut strategy, 50000.0);
     enter_position(&mut strategy, 50000.0, 0.1).await;
 
@@ -204,7 +207,8 @@ async fn test_all_tp_levels_close_position() {
 #[tokio::test]
 async fn test_trailing_stop_chandelier_exit() {
     let config = default_trend_config();
-    let mut strategy = TrendStrategy::new("BTCUSDT", &config);
+    let telegram = trading_engine_core::notifications::TelegramBot::new("", "");
+    let mut strategy = TrendStrategy::new("BTCUSDT", &config, telegram);
     warmup(&mut strategy, 50000.0);
     enter_position(&mut strategy, 50000.0, 0.1).await;
 
@@ -236,7 +240,8 @@ async fn test_trailing_stop_chandelier_exit() {
 #[tokio::test]
 async fn test_direction_flip_exit() {
     let config = default_trend_config();
-    let mut strategy = TrendStrategy::new("BTCUSDT", &config);
+    let telegram = trading_engine_core::notifications::TelegramBot::new("", "");
+    let mut strategy = TrendStrategy::new("BTCUSDT", &config, telegram);
     warmup(&mut strategy, 50000.0);
     enter_position(&mut strategy, 50000.0, 0.1).await;
 

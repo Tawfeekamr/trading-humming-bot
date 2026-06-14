@@ -40,7 +40,8 @@ fn make_bar(close: f64) -> Bar {
 #[test]
 fn test_stop_loss_and_take_profit_calculation() {
     let config = default_trend_config();
-    let mut strategy = TrendStrategy::new("BTCUSDT", &config);
+    let telegram = trading_engine_core::notifications::TelegramBot::new("", "");
+    let mut strategy = TrendStrategy::new("BTCUSDT", &config, telegram);
 
     for i in 0..250 {
         let price = 50000.0 + (i as f64 * 0.5);
@@ -64,7 +65,8 @@ fn test_stop_loss_and_take_profit_calculation() {
 #[test]
 fn test_indicators_not_ready_initially() {
     let config = default_trend_config();
-    let mut strategy = TrendStrategy::new("BTCUSDT", &config);
+    let telegram = trading_engine_core::notifications::TelegramBot::new("", "");
+    let mut strategy = TrendStrategy::new("BTCUSDT", &config, telegram);
 
     // Feed only a few bars — not enough to fully warm all indicators
     for _i in 0..5 {

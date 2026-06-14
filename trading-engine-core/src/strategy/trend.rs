@@ -5,6 +5,7 @@ use crate::models::order::OrderSide;
 use crate::strategy::{Strategy, TickContext, StrategyStatus};
 use crate::strategy::trend_journal::TrendJournal;
 use crate::connector::types::{OrderRequest, Fill, OrderTypeReq, TimeInForceReq};
+use crate::notifications::TelegramBot;
 use async_trait::async_trait;
 use anyhow::Result;
 use serde::{Serialize, Deserialize};
@@ -101,10 +102,11 @@ pub struct TrendStrategy {
     realized_pnl: f64,
     // Trade journal (fail-soft: None if the DB cannot be opened)
     journal: Option<TrendJournal>,
+    telegram: TelegramBot,
 }
 
 impl TrendStrategy {
-    pub fn new(pair: &str, config: &TrendConfig) -> Self {
+    pub fn new(pair: &str, config: &TrendConfig, telegram: TelegramBot) -> Self {
         let journal = match TrendJournal::new() {
             Ok(j) => Some(j),
             Err(e) => {
@@ -112,11 +114,11 @@ impl TrendStrategy {
                 None
             }
         };
-        Self::new_with_journal(pair, config, journal)
+        Self::new_with_journal(pair, config, journal, telegram)
     }
 
     /// Construct with an explicit journal (used by tests; production uses `new`).
-    pub fn new_with_journal(pair: &str, config: &TrendConfig, journal: Option<TrendJournal>) -> Self {
+    pub fn new_with_journal(pair: &str, config: &TrendConfig, journal: Option<TrendJournal>, telegram: TelegramBot) -> Self {
         let capital = config.capital;
         let mut me = Self {
             pair: pair.to_string(),
@@ -161,6 +163,7 @@ impl TrendStrategy {
             initial_capital: capital,
             realized_pnl: 0.0,
             journal,
+            telegram,
         };
         me.load_position();
         me
@@ -353,6 +356,13 @@ impl TrendStrategy {
             Err(e) => warn!("Failed to read trend position for {}: {}", self.pair, e),
         }
     }
+
+    async fn notify_exit(&self, exit_price: f64, pnl: f64, reason: &str) {
+        let emoji = if pnl >= 0.0 { "📈" } else { "⚠️" };
+        let _ = self.telegram.send(&format!(
+            "{} Trend {} {} @ ${:.2} | PnL: ${:+.2}", emoji, self.pair, reason, exit_price, pnl
+        )).await;
+    }
 }
 
 #[async_trait]
@@ -407,6 +417,7 @@ impl Strategy for TrendStrategy {
                 if let Some((s, ep, sl, tp3, et)) = snap {
                     self.log_close(s, ep, current_price, qty, pnl, sl, tp3, "stop_loss", ctx.timestamp, et);
                 }
+                self.notify_exit(current_price, pnl, "stop_loss").await;
                 orders.push(OrderRequest {
                     symbol: self.pair.clone(), side: OrderSide::Sell,
                     order_type: OrderTypeReq::Limit, price: Some(current_price),
@@ -443,6 +454,7 @@ impl Strategy for TrendStrategy {
                 if let Some((s, ep, sl, tp3, et)) = snap {
                     self.log_close(s, ep, current_price, *qty, *pnl, sl, tp3, reason, ctx.timestamp, et);
                 }
+                self.notify_exit(current_price, *pnl, reason).await;
             }
             if self.position.is_none() { return Ok(orders); }
 
@@ -474,6 +486,7 @@ impl Strategy for TrendStrategy {
                         if let Some((s, ep, sl, tp3, et)) = snap {
                             self.log_close(s, ep, current_price, qty, pnl, sl, tp3, "trailing_stop", ctx.timestamp, et);
                         }
+                        self.notify_exit(current_price, pnl, "trailing_stop").await;
                         orders.push(OrderRequest {
                             symbol: self.pair.clone(), side: OrderSide::Sell,
                             order_type: OrderTypeReq::Limit, price: Some(current_price),
@@ -497,6 +510,7 @@ impl Strategy for TrendStrategy {
                     if let Some((s, ep, sl, tp3, et)) = snap {
                         self.log_close(s, ep, current_price, qty, pnl, sl, tp3, "signal_exit", ctx.timestamp, et);
                     }
+                    self.notify_exit(current_price, pnl, "signal_exit").await;
                     orders.push(OrderRequest {
                         symbol: self.pair.clone(), side: OrderSide::Sell,
                         order_type: OrderTypeReq::Limit, price: Some(current_price),

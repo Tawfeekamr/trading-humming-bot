@@ -103,6 +103,7 @@ async fn async_main() -> Result<()> {
         let trend = trading_engine_core::strategy::trend::TrendStrategy::new(
             symbol,
             &trend_cfg,
+            telegram.clone_for_signal(),
         );
         engine.add_strategy(Box::new(trend));
 
