@@ -443,6 +443,8 @@ impl Strategy for GridStrategy {
         &self.pair
     }
 
+    fn realized_pnl(&self) -> f64 { self.total_pnl }
+
     async fn on_tick(&mut self, ctx: &TickContext) -> Result<Vec<OrderRequest>> {
         // Track bar availability for diagnostics (before any early return)
         self.diag_bars_count = ctx.recent_bars.len();

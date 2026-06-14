@@ -76,3 +76,12 @@ fn test_indicators_not_ready_initially() {
     // Strategy should report no position
     assert!(strategy.position().is_none(), "Should have no position before any entry");
 }
+
+#[test]
+fn test_realized_pnl_accessor_default_zero() {
+    let config = default_trend_config();
+    let telegram = trading_engine_core::notifications::TelegramBot::new("", "");
+    let strategy = TrendStrategy::new("BTCUSDT", &config, telegram);
+    use trading_engine_core::strategy::Strategy;
+    assert_eq!(strategy.realized_pnl(), 0.0, "fresh strategy has zero realized PnL");
+}

@@ -63,4 +63,7 @@ pub trait Strategy: Send {
     fn current_capital(&self) -> f64 { 0.0 }
     /// Initial capital before compounding
     fn initial_capital(&self) -> f64 { 0.0 }
+    /// Cumulative realized PnL (closed trades only). Used by the engine to feed
+    /// the portfolio circuit breaker on a stable (non-MTM) basis.
+    fn realized_pnl(&self) -> f64 { 0.0 }
 }
