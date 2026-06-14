@@ -5,6 +5,7 @@ use crate::models::order::OrderSide;
 use crate::notifications::TelegramBot;
 use async_trait::async_trait;
 use anyhow::Result;
+use serde::{Serialize, Deserialize};
 use tracing::{info, warn};
 use std::collections::VecDeque;
 
@@ -52,11 +53,22 @@ pub struct MeanReversionStrategy {
     in_position: bool,
     entry_price: f64,
     position_qty: f64,
+    realized_pnl: f64,
+    trades: u32,
+    wins: u32,
+}
+
+/// Persisted MR summary state (cumulative P&L across restarts).
+#[derive(Serialize, Deserialize, Default)]
+struct MrState {
+    realized_pnl: f64,
+    trades: u32,
+    wins: u32,
 }
 
 impl MeanReversionStrategy {
     pub fn new(pair: &str, config: &MeanReversionConfig, telegram: TelegramBot) -> Self {
-        Self {
+        let mut me = Self {
             pair: pair.to_string(),
             config: config.clone(),
             telegram,
@@ -64,7 +76,43 @@ impl MeanReversionStrategy {
             in_position: false,
             entry_price: 0.0,
             position_qty: 0.0,
+            realized_pnl: 0.0,
+            trades: 0,
+            wins: 0,
+        };
+        me.load_state();
+        me
+    }
+
+    fn state_path(&self) -> std::path::PathBuf {
+        std::path::PathBuf::from(format!("data/{}_mean_reversion_state.json", self.pair.replace("-", "_")))
+    }
+
+    fn load_state(&mut self) {
+        if let Ok(content) = std::fs::read_to_string(self.state_path()) {
+            if let Ok(s) = serde_json::from_str::<MrState>(&content) {
+                self.realized_pnl = s.realized_pnl;
+                self.trades = s.trades;
+                self.wins = s.wins;
+            }
         }
+    }
+
+    fn save_state(&self) {
+        let path = self.state_path();
+        if let Some(parent) = path.parent() { let _ = std::fs::create_dir_all(parent); }
+        let state = MrState { realized_pnl: self.realized_pnl, trades: self.trades, wins: self.wins };
+        let tmp = path.with_extension("json.tmp");
+        if let Ok(json) = serde_json::to_string_pretty(&state) {
+            if std::fs::write(&tmp, json).is_ok() { let _ = std::fs::rename(&tmp, &path); }
+        }
+    }
+
+    /// Test hook: inject an open position to exercise TP/SL accounting.
+    pub fn set_position_for_test(&mut self, entry: f64, qty: f64) {
+        self.in_position = true;
+        self.entry_price = entry;
+        self.position_qty = qty;
     }
 
     fn calculate_bid_depth(bids: &[(f64, f64)], mid: f64, bps: f64) -> f64 {
@@ -152,8 +200,18 @@ impl Strategy for MeanReversionStrategy {
         } else if self.in_position {
             // Layer 2 Active Stop & Take profit
             if mid >= self.entry_price * (1.0 + self.config.tp_pct) {
-                info!("📈 MeanReversion TP hit at {}", mid);
+                let pnl = (mid - self.entry_price) * self.position_qty;
+                self.realized_pnl += pnl;
+                self.trades += 1;
+                if pnl > 0.0 { self.wins += 1; }
+                info!("📈 MeanReversion TP hit @ {} | PnL: ${:+.2}", mid, pnl);
                 self.in_position = false;
+                let pair = self.pair.clone();
+                let tg = self.telegram.clone_for_signal();
+                tokio::spawn(async move {
+                    let _ = tg.send(&format!("📈 MR {} TP @ ${:.2} | PnL: ${:+.2}", pair, mid, pnl)).await;
+                });
+                self.save_state();
                 orders.push(OrderRequest {
                     symbol: self.pair.replace("-", ""), side: OrderSide::Sell,
                     order_type: OrderTypeReq::Market, price: None, quantity: self.position_qty,
@@ -161,8 +219,18 @@ impl Strategy for MeanReversionStrategy {
                     reduce_only: true,
                 });
             } else if mid <= self.entry_price * (1.0 - self.config.stop_pct) {
-                warn!("⚠️ MeanReversion Layer 2 Stop hit at {}", mid);
+                let pnl = (mid - self.entry_price) * self.position_qty;
+                self.realized_pnl += pnl;
+                self.trades += 1;
+                if pnl > 0.0 { self.wins += 1; }
+                warn!("⚠️ MeanReversion SL hit @ {} | PnL: ${:+.2}", mid, pnl);
                 self.in_position = false;
+                let pair = self.pair.clone();
+                let tg = self.telegram.clone_for_signal();
+                tokio::spawn(async move {
+                    let _ = tg.send(&format!("⚠️ MR {} SL @ ${:.2} | PnL: ${:+.2}", pair, mid, pnl)).await;
+                });
+                self.save_state();
                 orders.push(OrderRequest {
                     symbol: self.pair.replace("-", ""), side: OrderSide::Sell,
                     order_type: OrderTypeReq::Market, price: None, quantity: self.position_qty,
@@ -197,13 +265,21 @@ impl Strategy for MeanReversionStrategy {
     async fn on_stop(&mut self) -> Result<()> { Ok(()) }
 
     fn status(&self) -> StrategyStatus {
+        let win_rate = if self.trades > 0 { self.wins as f64 / self.trades as f64 * 100.0 } else { 0.0 };
         StrategyStatus {
             name: self.name().to_string(),
             pair: self.pair.clone(),
             state: if self.in_position { "IN TRADE".into() } else { "Scanning".into() },
-            pnl: 0.0,
+            pnl: self.realized_pnl,
             open_orders: 0,
-            details: format!("Buf size: {}", self.tick_history.len()),
+            details: format!(
+                "Trades: {} | Wins: {} ({:.0}%) | TP +{:.0}% SL -{:.0}% | Buf: {}",
+                self.trades, self.wins, win_rate,
+                self.config.tp_pct * 100.0, self.config.stop_pct * 100.0,
+                self.tick_history.len()
+            ),
         }
     }
+
+    fn realized_pnl(&self) -> f64 { self.realized_pnl }
 }
