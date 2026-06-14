@@ -104,6 +104,10 @@ pub struct TrendStrategy {
     // Capital tracking
     initial_capital: f64,
     realized_pnl: f64,
+    /// Last live order-book price seen by on_tick. status() uses this (not the
+    /// lagging ema_fast) to compute direction + unrealized MTM, so "Ready" only
+    /// shows when an entry would actually fire (price must be > ema_slow).
+    last_price: f64,
     // Trade journal (fail-soft: None if the DB cannot be opened)
     journal: Option<TrendJournal>,
     telegram: TelegramBot,
@@ -166,6 +170,7 @@ impl TrendStrategy {
             last_bar_count: 0,
             initial_capital: capital,
             realized_pnl: 0.0,
+            last_price: 0.0,
             journal,
             telegram,
         };
@@ -416,6 +421,7 @@ impl Strategy for TrendStrategy {
         // $1832.52 while real ETH was ~$1.6k). No live quote => hold.
         let current_price = ctx.order_book.mid_price().unwrap_or(0.0);
         if current_price <= 0.0 { return Ok(orders); }
+        self.last_price = current_price;
 
         // ── If in position: check exits ──
         // Snapshot entry metadata for journaling (all fields Copy; fixed at entry,
@@ -640,16 +646,22 @@ impl Strategy for TrendStrategy {
     async fn on_stop(&mut self) -> Result<()> { Ok(()) }
 
     fn status(&self) -> StrategyStatus {
+        // Reference price for direction + mark-to-market: the last LIVE tick
+        // price, not the lagging ema_fast. Otherwise "Ready / dir:+1" shows
+        // whenever ema_fast > ema_slow, even when the live price has dropped
+        // below ema_slow (where on_tick's entry check would skip). Falls back
+        // to ema_fast before the first live tick.
+        let ref_price = if self.last_price > 0.0 { self.last_price } else { self.ema_fast.value() };
         let (state, details, pnl) = if let Some(pos) = &self.position {
             let unrealized = match pos.side {
-                OrderSide::Buy => (self.ema_fast.value() - pos.entry_price) * pos.remaining_qty,
-                OrderSide::Sell => (pos.entry_price - self.ema_fast.value()) * pos.remaining_qty,
+                OrderSide::Buy => (ref_price - pos.entry_price) * pos.remaining_qty,
+                OrderSide::Sell => (pos.entry_price - ref_price) * pos.remaining_qty,
             };
             let side_str = match pos.side { OrderSide::Buy => "LONG", OrderSide::Sell => "SHORT" };
             let trail_str = match pos.trailing_stop {
                 Some(ts) => format!(" | Trail: ${:.2}", ts), None => String::new(),
             };
-            let dir_str = match self.direction(self.ema_fast.value()) {
+            let dir_str = match self.direction(ref_price) {
                 Direction::Up => "+1", Direction::Down => "-1", Direction::Flat => "0",
             };
             (
@@ -662,7 +674,7 @@ impl Strategy for TrendStrategy {
         } else if !self.indicators_ready() {
             ("WAITING".to_string(), "⏳ All indicators warming up".to_string(), 0.0)
         } else {
-            let dir = self.direction(self.ema_fast.value());
+            let dir = self.direction(ref_price);
             let scores = self.compute_score(dir);
             let threshold = if self.config.entry_score_threshold > 0 { self.config.entry_score_threshold } else { 5 };
             let dir_str = match dir { Direction::Up => "+1", Direction::Down => "-1", Direction::Flat => "0" };

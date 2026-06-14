@@ -142,6 +142,38 @@ async fn test_no_trade_without_live_orderbook() {
     );
 }
 
+/// status() must compute direction from the LIVE tick price, not the lagging
+/// ema_fast. Otherwise it prints "Ready / dir:+1" whenever ema_fast > ema_slow,
+/// even when the live price has dropped below ema_slow (where on_tick's entry
+/// check would actually see a non-long direction and skip entry).
+#[tokio::test]
+async fn test_status_uses_live_price_for_direction() {
+    let config = default_trend_config();
+    let mut strategy = TrendStrategy::new_with_journal(
+        "LIVEUSDT", &config, None, TelegramBot::disabled(),
+    );
+    strategy.on_start().await.unwrap();
+    warmup_uptrend(&mut strategy, 50000.0); // ema_fast > ema_slow (uptrend warmup)
+
+    // Tick at a price just BELOW ema_slow (which lags well under the fast EMA in
+    // a steady rise) — small enough that ema_fast is still > ema_slow, but the
+    // live price isn't. The old status() used ema_fast -> "Ready/dir:+1"; the
+    // fix uses the live price -> not Ready.
+    let mut bars = Vec::new();
+    let ctx = make_tick(50400.0, &mut bars);
+    let _ = strategy.on_tick(&ctx).await.unwrap();
+
+    let status = strategy.status();
+    assert!(
+        !status.details.contains("Ready"),
+        "status must NOT say Ready when live price < ema_slow; got: {}", status.details
+    );
+    assert!(
+        !status.details.contains("dir:+1"),
+        "status dir must reflect the live price, not the lagging ema_fast; got: {}", status.details
+    );
+}
+
 /// A stop-loss exit must be a MARKET order so it fills even if price gaps
 /// through it. A LIMIT stop can sit unfilled in a fast crash.
 #[tokio::test]
