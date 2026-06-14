@@ -23,6 +23,34 @@ fn test_breaker_daily_loss_trips() {
 }
 
 #[test]
+fn test_risk_state_roundtrip() {
+    let dir = std::env::temp_dir().join("test_risk_state_rt");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("risk_state.json");
+    let _ = std::fs::remove_file(&path);
+
+    let mut cb = CircuitBreaker::new(10.0, 5.0);
+    cb.set_peak_equity(12000.0);
+    cb.set_start_of_day_equity(11500.0);
+    cb.set_last_reset_date("2026-06-14".to_string());
+    trading_engine_core::risk::save_state(&cb, path.to_str().unwrap());
+
+    let mut cb2 = CircuitBreaker::new(10.0, 5.0);
+    trading_engine_core::risk::load_state(&mut cb2, path.to_str().unwrap(), 10000.0);
+    assert_eq!(cb2.peak_equity(), 12000.0, "peak restored");
+    assert_eq!(cb2.start_of_day_equity(), 11500.0, "SOD restored");
+    assert_eq!(cb2.last_reset_date(), "2026-06-14");
+}
+
+#[test]
+fn test_risk_state_missing_initializes_from_equity() {
+    let mut cb = CircuitBreaker::new(10.0, 5.0);
+    trading_engine_core::risk::load_state(&mut cb, "/nonexistent/risk_state.json", 9000.0);
+    assert_eq!(cb.peak_equity(), 9000.0, "no file -> peak = current equity");
+    assert_eq!(cb.start_of_day_equity(), 9000.0);
+}
+
+#[test]
 fn test_reduce_only_flag_is_set_on_exit_order() {
     // Guard: exits must carry reduce_only=true so the breaker can't trap them.
     let req = OrderRequest {
