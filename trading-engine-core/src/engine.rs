@@ -1,7 +1,6 @@
 use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Instant;
 use tracing::{info, warn, error};
 use crate::config::AppConfig;
 use crate::connector::Connector;
@@ -25,7 +24,6 @@ pub struct Engine {
     signal: Option<SignalEngine>,
     bar_buffers: BarCache,
     order_books: HashMap<String, OrderBook>,
-    started_at: Instant,
     status_cache: StrategyStatusCache,
     regime_cache: RegimeCache,
 }
@@ -49,7 +47,6 @@ impl Engine {
             signal: None, // initialized below
             bar_buffers: bar_cache,
             order_books: HashMap::new(),
-            started_at: Instant::now(),
             status_cache,
             regime_cache,
         };
@@ -79,9 +76,9 @@ impl Engine {
 
         // Initialize strategies
         let mut all_orders = Vec::new();
-        for strategy in &mut self.strategies {
+        for (i, strategy) in self.strategies.iter_mut().enumerate() {
             match strategy.on_start().await {
-                Ok(mut orders) => all_orders.append(&mut orders),
+                Ok(orders) => all_orders.extend(Self::tag_owner(i, orders)),
                 Err(e) => error!("Strategy {} start failed: {}", strategy.name(), e),
             }
         }
@@ -165,7 +162,7 @@ impl Engine {
 
     async fn tick_strategies(&mut self) -> Result<()> {
         let mut all_orders = Vec::new();
-        for strategy in &mut self.strategies {
+        for (i, strategy) in self.strategies.iter_mut().enumerate() {
             let pair = strategy.trading_pair().to_string();
             let order_book = self.order_books.get(&pair).cloned().unwrap_or(OrderBook {
                 symbol: pair.clone(),
@@ -198,7 +195,7 @@ impl Engine {
             };
 
             match strategy.on_tick(&ctx).await {
-                Ok(mut orders) => all_orders.append(&mut orders),
+                Ok(orders) => all_orders.extend(Self::tag_owner(i, orders)),
                 Err(e) => warn!("Strategy {} tick error: {}", strategy.name(), e),
             }
         }
@@ -209,6 +206,24 @@ impl Engine {
         self.status_cache.update(statuses).await;
 
         Ok(())
+    }
+
+    /// Tag each order with the owning strategy index (encoded in client_order_id)
+    /// so a paper fill can be routed back to the strategy that placed the order.
+    /// Any client_order_id the strategy already set is preserved after the tag.
+    fn tag_owner(idx: usize, mut orders: Vec<OrderRequest>) -> Vec<OrderRequest> {
+        for o in &mut orders {
+            let existing = o.client_order_id.take().unwrap_or_default();
+            o.client_order_id = Some(format!("owner:{}#{}", idx, existing));
+        }
+        orders
+    }
+
+    /// Recover the owning strategy index from a fill's client_order_id.
+    fn owner_index(fill: &Fill) -> Option<usize> {
+        let cid = fill.client_order_id.as_deref()?;
+        let rest = cid.strip_prefix("owner:")?;
+        rest.split('#').next()?.parse().ok()
     }
 
     async fn submit_orders(&self, orders: Vec<OrderRequest>) -> Result<()> {
@@ -324,23 +339,39 @@ impl Engine {
             return Ok(());
         }
 
-        for (ob_symbol, fill) in &fills_by_pair {
+        for (_ob_symbol, fill) in &fills_by_pair {
             info!("Paper fill: {} {} {} @ ${:.2}",
                 fill.side, fill.quantity, fill.symbol, fill.price);
         }
 
-        // Dispatch each fill to the strategy that owns its symbol only.
-        // (A fill's symbol is the order's real pair; routing by the orderbook
-        // pair as well previously delivered fills to the wrong strategy.)
+        // Dispatch each fill to the strategy that PLACED the order (encoded in
+        // client_order_id). Previously routing matched by symbol, which delivered
+        // a grid fill to the trend/mean-reversion strategies on the same pair and
+        // corrupted their state. Fall back to symbol routing only for legacy
+        // fills that carry no owner tag.
         let mut all_orders = Vec::new();
         for (_ob_symbol, fill) in &fills_by_pair {
-            let fill_norm = fill.symbol.replace("-", "");
-            for strategy in &mut self.strategies {
-                let strategy_norm = strategy.trading_pair().replace("-", "");
-                if strategy_norm == fill_norm {
-                    match strategy.on_fill(fill).await {
-                        Ok(orders) => all_orders.extend(orders),
-                        Err(e) => warn!("Strategy {} fill error: {}", strategy.name(), e),
+            match Self::owner_index(fill) {
+                Some(idx) => {
+                    if let Some(strategy) = self.strategies.get_mut(idx) {
+                        match strategy.on_fill(fill).await {
+                            Ok(orders) => all_orders.extend(orders),
+                            Err(e) => warn!("Strategy {} fill error: {}", strategy.name(), e),
+                        }
+                    } else {
+                        warn!("Fill owner index {} out of range for {}", idx, fill.symbol);
+                    }
+                }
+                None => {
+                    let fill_norm = fill.symbol.replace("-", "");
+                    for strategy in &mut self.strategies {
+                        let strategy_norm = strategy.trading_pair().replace("-", "");
+                        if strategy_norm == fill_norm {
+                            match strategy.on_fill(fill).await {
+                                Ok(orders) => all_orders.extend(orders),
+                                Err(e) => warn!("Strategy {} fill error: {}", strategy.name(), e),
+                            }
+                        }
                     }
                 }
             }
@@ -361,16 +392,4 @@ impl Engine {
         None
     }
 
-    /// Rough equity estimate from order book mid-price × USDT balance
-    fn estimate_equity(&self) -> f64 {
-        // Sum of configured capital per pair as baseline equity estimate
-        // Each pair gets an equal share of the total grid capital
-        let pair_count = self.config.pairs.0.len().max(1) as f64;
-        let per_pair_capital = self.config.grid.capital_usdt / pair_count;
-        let mut total = 0.0;
-        for _ in self.config.pairs.0.iter() {
-            total += per_pair_capital;
-        }
-        if total > 0.0 { total } else { self.config.grid.capital_usdt }
-    }
 }

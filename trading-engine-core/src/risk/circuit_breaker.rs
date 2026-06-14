@@ -76,7 +76,7 @@ impl CircuitBreaker {
     }
 
     /// Record a PnL event and check circuit breaker thresholds
-    pub fn record_pnl(&mut self, pnl: f64, current_equity: f64) -> bool {
+    pub fn record_pnl(&mut self, _pnl: f64, current_equity: f64) -> bool {
         self.update_peak(current_equity);
         self.check(current_equity) || self.check_daily(current_equity)
     }

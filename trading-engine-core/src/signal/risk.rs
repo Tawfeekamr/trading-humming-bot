@@ -1,4 +1,4 @@
-use crate::signal::types::{ParsedSignal, SignalConfidence};
+use crate::signal::types::ParsedSignal;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::path::PathBuf;
 use std::fs;

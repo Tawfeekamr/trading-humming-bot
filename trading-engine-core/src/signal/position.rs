@@ -1,7 +1,7 @@
 use crate::signal::types::SignalPosition;
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{info, warn};
 
@@ -142,20 +142,46 @@ impl SignalPositionManager {
     }
 
     fn save_state(&self) {
+        use fs2::FileExt;
         let path = self.data_dir.join("signal_positions.json");
-        let mut state = serde_json::Map::new();
-        let now = now_secs();
+        let tmp_path = self.data_dir.join("signal_positions.json.tmp");
+        let lock_path = self.data_dir.join("signal_positions.lock");
 
+        // Cross-process advisory lock shared with the Python signal listener.
+        // Non-blocking: if Python holds the lock, defer this save to the next
+        // tick (state stays in memory, nothing is lost).
+        let lock_file = match fs::OpenOptions::new()
+            .create(true).read(true).write(true).open(&lock_path)
+        {
+            Ok(f) => f,
+            Err(e) => { warn!("signal_positions lock open failed: {}", e); return; }
+        };
+        if let Err(e) = lock_file.try_lock_exclusive() {
+            warn!("signal_positions lock busy, deferring save: {}", e);
+            return;
+        }
+
+        // Read current disk state and preserve entries we don't track (e.g.
+        // a position Python just opened) so our write can't erase it.
+        let mut merged: serde_json::Map<String, serde_json::Value> = match fs::read_to_string(&path) {
+            Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
+            Err(_) => serde_json::Map::new(),
+        };
+        let now = now_secs();
         for (symbol, pos) in &self.positions {
             // Keep open positions and recently closed (within 24h)
             if !pos.is_closed || (now - pos.entry_timestamp as u64) < 86400 {
-                state.insert(symbol.clone(), serde_json::to_value(pos).unwrap_or_default());
+                merged.insert(symbol.clone(), serde_json::to_value(pos).unwrap_or_default());
             }
         }
 
-        if let Ok(json) = serde_json::to_string_pretty(&state) {
-            let _ = fs::write(&path, json);
+        // Atomic publish: write temp, then rename — readers never see a partial file.
+        if let Ok(json) = serde_json::to_string_pretty(&merged) {
+            if fs::write(&tmp_path, json).is_ok() {
+                let _ = fs::rename(&tmp_path, &path);
+            }
         }
+        let _ = lock_file.unlock();
     }
 
     fn load_state(&mut self) {

@@ -1,9 +1,3 @@
-/// Support and resistance level detection using pivot points.
-///
-/// A high is resistance if it's the highest in a window of N bars on each side.
-/// A low is support if it's the lowest in a window of N bars on each side.
-/// Levels within merge_threshold_pct are merged and their strength incremented.
-use std::fmt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LevelKind {

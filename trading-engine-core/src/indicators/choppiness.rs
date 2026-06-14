@@ -34,7 +34,7 @@ impl Choppiness {
         }
     }
 
-    pub fn update_bar(&mut self, _open: f64, high: f64, low: f64, close: f64, prev_close: Option<f64>) {
+    pub fn update_bar(&mut self, _open: f64, high: f64, low: f64, _close: f64, prev_close: Option<f64>) {
         // True Range
         let tr = match prev_close {
             Some(pc) => (high - low).max((high - pc).abs()).max((low - pc).abs()),
@@ -123,7 +123,7 @@ mod tests {
     fn test_chop_not_initialized_before_period() {
         let mut chop = Choppiness::new(14);
         let mut prev_close = None;
-        for i in 0..13 {
+        for _i in 0..13 {
             chop.update_bar(100.0, 101.0, 99.0, 100.0, prev_close);
             prev_close = Some(100.0);
             assert!(!chop.is_initialized());
@@ -136,7 +136,7 @@ mod tests {
     fn test_chop_reset() {
         let mut chop = Choppiness::new(14);
         let mut prev_close = None;
-        for i in 0..15 {
+        for _i in 0..15 {
             chop.update_bar(100.0, 101.0, 99.0, 100.0, prev_close);
             prev_close = Some(100.0);
         }

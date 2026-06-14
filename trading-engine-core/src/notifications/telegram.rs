@@ -19,9 +19,20 @@ impl TelegramBot {
         Self {
             token: token.to_string(),
             chat_id: chat_id.to_string(),
-            client: Client::new(),
+            // Hard cap every request so a stalled api.telegram.org can never
+            // hang the caller (this runs in the strategy tick loop).
+            client: Client::builder()
+                .timeout(std::time::Duration::from_secs(5))
+                .connect_timeout(std::time::Duration::from_secs(3))
+                .build()
+                .unwrap_or_else(|_| Client::new()),
             enabled,
         }
+    }
+
+    /// Construct a disabled bot (no-op `send`) — useful in tests.
+    pub fn disabled() -> Self {
+        Self::new("", "")
     }
 
     pub fn enabled(&self) -> bool {

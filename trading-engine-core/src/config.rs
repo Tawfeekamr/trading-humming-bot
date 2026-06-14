@@ -199,7 +199,6 @@ fn default_0_2() -> f64 { 0.2 }
 fn default_2_5() -> f64 { 2.5 }
 fn default_38() -> f64 { 38.0 }
 fn default_1_2() -> f64 { 1.2 }
-fn default_5_u8() -> u8 { 5 }
 fn default_4_u8() -> u8 { 4 }
 fn default_65() -> f64 { 65.0 }
 fn default_35() -> f64 { 35.0 }

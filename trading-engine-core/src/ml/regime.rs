@@ -14,18 +14,16 @@ pub struct RegimePrediction {
     pub probabilities: [f64; 3],
 }
 
-pub struct RegimeClassifier {
-    model_path: String,
-}
+pub struct RegimeClassifier;
 
 impl RegimeClassifier {
     pub fn new(model_path: &str) -> Result<Self> {
         std::fs::metadata(model_path)?;
-        Ok(Self { model_path: model_path.to_string() })
+        Ok(Self)
     }
 
     pub fn predict(&self, bars: &[Bar]) -> Result<RegimePrediction> {
-        let features = extract_features(bars);
+        let _features = extract_features(bars);
         // TODO: Run ONNX inference when ort crate integration is complete
         Ok(RegimePrediction {
             regime: MarketRegime::Ranging,

@@ -68,10 +68,6 @@ pub struct GridStrategy {
 #[derive(Debug, Clone)]
 struct GridOrder {
     order_id: String,
-    level_index: usize,
-    side: OrderSide,
-    price: f64,
-    quantity: f64,
 }
 
 impl GridStrategy {
@@ -211,7 +207,7 @@ impl GridStrategy {
 
     /// Regime-based grid deployment gate.
     /// Returns (should_deploy: bool, reason_if_not: String).
-    fn should_deploy_grid(&self, price: f64, ml_regime: Option<i32>, ml_confidence: f64) -> (bool, String) {
+    fn should_deploy_grid(&self, _price: f64, ml_regime: Option<i32>, ml_confidence: f64) -> (bool, String) {
         // 1. ML Danger / Trending → block if confidence exceeds threshold
         if let Some(regime) = ml_regime {
             if regime == 2 && ml_confidence >= self.config.ml_danger_block_threshold {
@@ -516,10 +512,6 @@ impl Strategy for GridStrategy {
             };
             self.orders.insert(id.clone(), GridOrder {
                 order_id: id,
-                level_index: i,
-                side: OrderSide::Buy,
-                price: level.price,
-                quantity: level.quantity,
             });
             orders.push(req);
         }
@@ -544,10 +536,6 @@ impl Strategy for GridStrategy {
             };
             self.orders.insert(id.clone(), GridOrder {
                 order_id: id,
-                level_index: i,
-                side: OrderSide::Sell,
-                price: level.price,
-                quantity: level.quantity,
             });
             orders.push(req);
         }
@@ -701,7 +689,7 @@ mod tests {
     }
 
     fn warm_adx(grid: &mut GridStrategy) {
-        for i in 0..30 { grid.adx.update_bar(100.0, 101.0, 99.0, 100.5); }
+        for _i in 0..30 { grid.adx.update_bar(100.0, 101.0, 99.0, 100.5); }
     }
 
     fn warm_chop(grid: &mut GridStrategy) {

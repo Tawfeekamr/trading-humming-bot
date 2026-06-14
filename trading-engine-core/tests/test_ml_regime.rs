@@ -1,4 +1,4 @@
-use trading_engine_core::ml::regime::{RegimeClassifier, MarketRegime};
+use trading_engine_core::ml::regime::RegimeClassifier;
 use trading_engine_core::models::bar::Bar;
 
 #[test]

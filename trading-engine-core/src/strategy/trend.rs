@@ -357,11 +357,14 @@ impl TrendStrategy {
         }
     }
 
-    async fn notify_exit(&self, exit_price: f64, pnl: f64, reason: &str) {
+    fn notify_exit(&self, exit_price: f64, pnl: f64, reason: &str) {
         let emoji = if pnl >= 0.0 { "📈" } else { "⚠️" };
-        let _ = self.telegram.send(&format!(
+        let msg = format!(
             "{} Trend {} {} @ ${:.2} | PnL: ${:+.2}", emoji, self.pair, reason, exit_price, pnl
-        )).await;
+        );
+        // Fire-and-forget: never block the tick loop on Telegram latency.
+        let tg = self.telegram.clone_for_signal();
+        tokio::spawn(async move { let _ = tg.send(&msg).await; });
     }
 }
 
@@ -417,7 +420,7 @@ impl Strategy for TrendStrategy {
                 if let Some((s, ep, sl, tp3, et)) = snap {
                     self.log_close(s, ep, current_price, qty, pnl, sl, tp3, "stop_loss", ctx.timestamp, et);
                 }
-                self.notify_exit(current_price, pnl, "stop_loss").await;
+                self.notify_exit(current_price, pnl, "stop_loss");
                 orders.push(OrderRequest {
                     symbol: self.pair.clone(), side: OrderSide::Sell,
                     order_type: OrderTypeReq::Limit, price: Some(current_price),
@@ -454,7 +457,7 @@ impl Strategy for TrendStrategy {
                 if let Some((s, ep, sl, tp3, et)) = snap {
                     self.log_close(s, ep, current_price, *qty, *pnl, sl, tp3, reason, ctx.timestamp, et);
                 }
-                self.notify_exit(current_price, *pnl, reason).await;
+                self.notify_exit(current_price, *pnl, reason);
             }
             if self.position.is_none() { return Ok(orders); }
 
@@ -486,7 +489,7 @@ impl Strategy for TrendStrategy {
                         if let Some((s, ep, sl, tp3, et)) = snap {
                             self.log_close(s, ep, current_price, qty, pnl, sl, tp3, "trailing_stop", ctx.timestamp, et);
                         }
-                        self.notify_exit(current_price, pnl, "trailing_stop").await;
+                        self.notify_exit(current_price, pnl, "trailing_stop");
                         orders.push(OrderRequest {
                             symbol: self.pair.clone(), side: OrderSide::Sell,
                             order_type: OrderTypeReq::Limit, price: Some(current_price),
@@ -510,7 +513,7 @@ impl Strategy for TrendStrategy {
                     if let Some((s, ep, sl, tp3, et)) = snap {
                         self.log_close(s, ep, current_price, qty, pnl, sl, tp3, "signal_exit", ctx.timestamp, et);
                     }
-                    self.notify_exit(current_price, pnl, "signal_exit").await;
+                    self.notify_exit(current_price, pnl, "signal_exit");
                     orders.push(OrderRequest {
                         symbol: self.pair.clone(), side: OrderSide::Sell,
                         order_type: OrderTypeReq::Limit, price: Some(current_price),

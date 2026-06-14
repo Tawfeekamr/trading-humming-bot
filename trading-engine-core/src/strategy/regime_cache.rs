@@ -27,10 +27,17 @@ pub struct RegimeUpdate {
 
 #[derive(Clone)]
 pub struct RegimeCache {
-    inner: Arc<RwLock<HashMap<String, RegimeEntry>>>,
+    /// In-memory regime map + last-loaded file mtime, guarded by a single lock
+    /// so the mtime check, file reload, and map update are atomic.
+    state: Arc<RwLock<RegimeState>>,
     file_path: String,
-    last_mtime: Arc<RwLock<u64>>,
     ttl_ms: i64, // Max age in milliseconds; entries older than this return None. 0 = never stale.
+}
+
+#[derive(Default)]
+struct RegimeState {
+    map: HashMap<String, RegimeEntry>,
+    last_mtime: u64,
 }
 
 impl RegimeCache {
@@ -39,19 +46,18 @@ impl RegimeCache {
     /// Recommended: 3× poll interval (e.g., 180_000 for 60s polling).
     pub fn new(file_path: &str, ttl_ms: i64) -> Self {
         Self {
-            inner: Arc::new(RwLock::new(HashMap::new())),
+            state: Arc::new(RwLock::new(RegimeState::default())),
             file_path: file_path.to_string(),
-            last_mtime: Arc::new(RwLock::new(0)),
             ttl_ms,
         }
     }
 
     /// Update regime from HTTP push (called by API handler).
     pub async fn update(&self, updates: &[RegimeUpdate]) {
-        let mut map = self.inner.write().await;
+        let mut state = self.state.write().await;
         let now = chrono::Utc::now().timestamp_millis();
         for u in updates {
-            map.insert(u.pair.clone(), RegimeEntry {
+            state.map.insert(u.pair.clone(), RegimeEntry {
                 regime: u.regime,
                 confidence: u.confidence,
                 timestamp: now,
@@ -64,8 +70,8 @@ impl RegimeCache {
     /// Checks file mtime first — if file changed since last read, reloads.
     pub async fn get(&self, pair: &str) -> Option<(i32, f64)> {
         self.maybe_reload_from_file().await;
-        let map = self.inner.read().await;
-        map.get(pair).and_then(|e| {
+        let state = self.state.read().await;
+        state.map.get(pair).and_then(|e| {
             if self.ttl_ms > 0 {
                 let now = chrono::Utc::now().timestamp_millis();
                 if now - e.timestamp > self.ttl_ms {
@@ -77,8 +83,9 @@ impl RegimeCache {
     }
 
     /// Check if file has been modified since last read. If so, reload.
+    /// Acquires a single write lock across stat → read → parse → insert → mtime
+    /// update so concurrent callers can't race or clobber a fresh HTTP push.
     async fn maybe_reload_from_file(&self) {
-        // Quick stat to check mtime — no lock contention on the map
         let current_mtime = std::fs::metadata(&self.file_path)
             .map(|m| m.modified()
                 .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
@@ -87,19 +94,32 @@ impl RegimeCache {
                 .as_secs())
             .unwrap_or(0);
 
-        let last = *self.last_mtime.read().await;
-        if current_mtime > 0 && current_mtime != last {
-            // File changed — reload
-            if let Ok(content) = std::fs::read_to_string(&self.file_path) {
-                if let Ok(entries) = serde_json::from_str::<HashMap<String, RegimeEntry>>(&content) {
-                    let mut map = self.inner.write().await;
-                    for (k, v) in entries {
-                        map.insert(k, v);
-                    }
-                    *self.last_mtime.write().await = current_mtime;
-                }
+        // Fast path under a read lock: skip if nothing changed.
+        {
+            let state = self.state.read().await;
+            if current_mtime == 0 || state.last_mtime == current_mtime {
+                return;
             }
         }
+
+        // File changed — read + parse outside the lock, then apply atomically.
+        let content = match std::fs::read_to_string(&self.file_path) {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        let entries = match serde_json::from_str::<HashMap<String, RegimeEntry>>(&content) {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+        let mut state = self.state.write().await;
+        // Re-check under the exclusive lock: another task may have just reloaded.
+        if state.last_mtime == current_mtime {
+            return;
+        }
+        for (k, v) in entries {
+            state.map.insert(k, v);
+        }
+        state.last_mtime = current_mtime;
     }
 
     /// Load from file on startup (no mtime check — always reads).
@@ -120,18 +140,18 @@ impl RegimeCache {
                 .as_secs())
             .unwrap_or(0);
 
-        let mut map = self.inner.write().await;
+        let mut state = self.state.write().await;
         for (k, v) in entries {
-            map.insert(k, v);
+            state.map.insert(k, v);
         }
-        *self.last_mtime.write().await = mtime;
+        state.last_mtime = mtime;
     }
 
     /// Persist current state to file (called after HTTP push as backup).
     pub async fn persist(&self) {
-        let map = self.inner.read().await;
-        if map.is_empty() { return; }
-        if let Ok(json) = serde_json::to_string_pretty(&*map) {
+        let state = self.state.read().await;
+        if state.map.is_empty() { return; }
+        if let Ok(json) = serde_json::to_string_pretty(&state.map) {
             let _ = std::fs::write(&self.file_path, json);
         }
     }
@@ -193,13 +213,13 @@ mod tests {
         let cache = RegimeCache::new("/tmp/test_regime_ttl.json", 5000); // 5s TTL
 
         // Insert entry with timestamp 10 seconds ago
-        let mut map = cache.inner.write().await;
-        map.insert("BTC-USDT".to_string(), RegimeEntry {
+        let mut state = cache.state.write().await;
+        state.map.insert("BTC-USDT".to_string(), RegimeEntry {
             regime: 0,
             confidence: 0.9,
             timestamp: chrono::Utc::now().timestamp_millis() - 10_000, // 10s ago
         });
-        drop(map);
+        drop(state);
 
         // Entry should be expired → None
         let result = cache.get("BTC-USDT").await;

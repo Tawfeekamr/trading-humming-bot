@@ -2,10 +2,13 @@
 signal_position.py — Position manager for signal copy trading with TP scaling.
 """
 
+import fcntl
 import json
 import logging
+import os
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Optional
@@ -148,13 +151,36 @@ class SignalPositionManager:
                 pos.stop_loss = new_sl
                 self._save_state()
 
+    @contextmanager
+    def _state_lock(self):
+        """Advisory file lock shared with the Rust engine (fcntl.flock) so
+        concurrent writes don't clobber each other's state. Blocks until acquired
+        (Python can wait briefly; the Rust side uses a non-blocking try-lock)."""
+        lock_path = self._data_dir / "signal_positions.lock"
+        f = open(lock_path, "w")
+        try:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            yield
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
+            f.close()
+
     def _save_state(self):
-        state = {}
-        for symbol, pos in self._positions.items():
-            if not pos.is_closed or (time.time() - pos.entry_timestamp) < 86400:
-                state[symbol] = asdict(pos)
         path = self._data_dir / "signal_positions.json"
-        path.write_text(json.dumps(state, indent=2, default=str))
+        tmp_path = self._data_dir / "signal_positions.json.tmp"
+        with self._state_lock():
+            # Read current disk state and preserve entries we don't track (e.g.
+            # positions the Rust engine is managing) so our write can't erase them.
+            try:
+                merged = json.loads(path.read_text()) if path.exists() else {}
+            except Exception:
+                merged = {}
+            for symbol, pos in self._positions.items():
+                if not pos.is_closed or (time.time() - pos.entry_timestamp) < 86400:
+                    merged[symbol] = asdict(pos)
+            # Atomic publish: write temp, then replace.
+            tmp_path.write_text(json.dumps(merged, indent=2, default=str))
+            os.replace(tmp_path, path)
 
     def _load_state(self):
         path = self._data_dir / "signal_positions.json"

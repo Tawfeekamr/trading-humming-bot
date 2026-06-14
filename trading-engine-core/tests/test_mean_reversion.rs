@@ -46,6 +46,7 @@ fn make_fill(order_id: &str, side: OrderSide, price: f64, quantity: f64) -> Fill
     Fill {
         fill_id: format!("fill_{}", order_id),
         order_id: order_id.to_string(),
+        client_order_id: None,
         symbol: "BTCUSDT".to_string(),
         side,
         price,

@@ -4,7 +4,7 @@ use chrono::Utc;
 use rusqlite::Connection;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use tracing::{info, warn, error};
+use tracing::error;
 
 pub struct SignalJournal {
     conn: Mutex<Connection>,

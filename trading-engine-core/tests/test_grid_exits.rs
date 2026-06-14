@@ -29,6 +29,7 @@ async fn test_buy_fill_records_negative_pnl() {
     let fill = Fill {
         fill_id: "fill_1".to_string(),
         order_id: "grid_buy_0".to_string(),
+        client_order_id: None,
         symbol: "BTCUSDT".to_string(),
         side: OrderSide::Buy,
         price: 49500.0,
@@ -65,6 +66,7 @@ async fn test_sell_fill_records_positive_pnl() {
     let buy_fill = Fill {
         fill_id: "fill_buy".to_string(),
         order_id: "grid_buy_0".to_string(),
+        client_order_id: None,
         symbol: "BTCUSDT".to_string(),
         side: OrderSide::Buy,
         price: 49500.0,
@@ -80,6 +82,7 @@ async fn test_sell_fill_records_positive_pnl() {
     let sell_fill = Fill {
         fill_id: "fill_sell".to_string(),
         order_id: "grid_sell_0".to_string(),
+        client_order_id: None,
         symbol: "BTCUSDT".to_string(),
         side: OrderSide::Sell,
         price: 50500.0,

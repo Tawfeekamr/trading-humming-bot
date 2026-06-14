@@ -132,7 +132,10 @@ impl Strategy for MeanReversionStrategy {
                     self.position_qty = qty;
 
                     info!("📉 MeanReversion Flush detected! Buying {:.4} @ {}", qty, mid);
-                    let _ = self.telegram.send(&format!("📉 MeanReversion Buying {:.4} @ {}", qty, mid)).await;
+                    // Fire-and-forget so Telegram latency can't stall the tick loop.
+                    let tg = self.telegram.clone_for_signal();
+                    let msg = format!("📉 MeanReversion Buying {:.4} @ {}", qty, mid);
+                    tokio::spawn(async move { let _ = tg.send(&msg).await; });
 
                     orders.push(OrderRequest {
                         symbol: self.pair.replace("-", ""),

@@ -1,17 +1,11 @@
 use crate::config::SignalConfig;
 use crate::connector::Connector;
-use crate::connector::types::OrderRequest;
-use crate::models::order::OrderSide;
 use crate::signal::types::*;
-use crate::signal::parser::SignalParser;
-use crate::signal::validator::SignalValidator;
 use crate::signal::risk::SignalRiskGuard;
 use crate::signal::position::SignalPositionManager;
 use crate::signal::journal::SignalJournal;
 use crate::notifications::TelegramBot;
-use anyhow::Result;
 use chrono::Utc;
-use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{info, warn, error};
@@ -20,20 +14,14 @@ pub struct SignalEngine {
     config: SignalConfig,
     enabled: bool,
     manual_pause: bool,
-    parser: SignalParser,
-    validator: Arc<Mutex<SignalValidator>>,
     risk: Arc<Mutex<SignalRiskGuard>>,
     position_mgr: Arc<Mutex<SignalPositionManager>>,
     journal: Arc<SignalJournal>,
     telegram: Option<TelegramBot>,
-    available_pairs: Arc<Mutex<HashSet<String>>>,
 }
 
 impl SignalEngine {
     pub fn new(config: &SignalConfig, telegram: Option<TelegramBot>) -> Self {
-        let api_key = std::env::var("DEEPSEEK_API_KEY").unwrap_or_default();
-        let parser = SignalParser::new(&api_key, &config.ai_model);
-        let validator = SignalValidator::new(config);
         let risk = SignalRiskGuard::new(config);
         let position_mgr = SignalPositionManager::new(config);
 
@@ -50,13 +38,10 @@ impl SignalEngine {
             enabled: config.enabled,
             manual_pause: false,
             config: config.clone(),
-            parser,
-            validator: Arc::new(Mutex::new(validator)),
             risk: Arc::new(Mutex::new(risk)),
             position_mgr: Arc::new(Mutex::new(position_mgr)),
             journal,
             telegram,
-            available_pairs: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -82,84 +67,6 @@ impl SignalEngine {
     pub fn resume(&mut self) {
         self.manual_pause = false;
         info!("Signal engine resumed");
-    }
-
-    /// Process a message from the channel listener
-    pub async fn process_message(&self, msg: &ChannelMessage) {
-        if !self.enabled || self.manual_pause { return; }
-
-        let signal = self.parser.parse(&msg.text).await;
-
-        info!("Signal parsed: action={}, pair={}, reasoning={:.80}",
-            signal.action, signal.pair.as_deref().unwrap_or("none"), signal.reasoning);
-
-        // Log raw message
-        self.journal.log_raw_message(
-            msg.channel_id,
-            &msg.channel_name,
-            msg.message_id,
-            &msg.text,
-            &signal.action,
-            signal.pair.as_deref().unwrap_or(""),
-            &signal.reasoning,
-        );
-
-        let action = signal.signal_action();
-        if action == SignalAction::NotASignal { return; }
-
-        // Handle CLOSE signals
-        if action == SignalAction::Close {
-            self.handle_close(&signal, &msg.channel_name).await;
-            return;
-        }
-
-        // Handle UPDATE signals
-        if action == SignalAction::UpdateSl {
-            if let (Some(pair), Some(sl)) = (&signal.pair, signal.stop_loss) {
-                self.position_mgr.lock().await.update_stop_loss(pair, sl);
-                info!("Signal SL updated: {} → ${:.2}", pair, sl);
-            }
-            return;
-        }
-
-        if action != SignalAction::OpenLong { return; }
-
-        // Fill missing stop-loss
-        if signal.stop_loss.is_none() {
-            // Would need ATR fetch — simplified for now
-            let entry = signal.entry_high.unwrap_or(signal.entry_low.unwrap_or(0.0));
-            if entry > 0.0 {
-                let default_sl = entry * 0.95; // 5% default SL
-                warn!("No SL for {} — using default 5%: ${:.2}", signal.pair.as_deref().unwrap_or("?"), default_sl);
-                // Create a mutable copy is tricky — we log and continue
-                self.notify(&format!(
-                    "⚠️ No SL for {} — using default 5%",
-                    signal.pair.as_deref().unwrap_or("?")
-                )).await;
-            }
-        }
-
-        // Validate
-        let (valid, reason) = self.validator.lock().await.validate(&signal);
-        if !valid {
-            info!("Signal rejected ({}): {}", msg.channel_name, reason);
-            self.notify(&format!("Signal rejected: {} — {}", signal.pair.as_deref().unwrap_or("?"), reason)).await;
-            self.log_audit_trade(&signal, &msg.channel_name, "rejected", 0.0, &reason);
-            return;
-        }
-
-        // Risk checks
-        if !self.risk.lock().await.can_trade() {
-            info!("Signal blocked by risk guard");
-            self.log_audit_trade(&signal, &msg.channel_name, "blocked_risk", 0.0, "risk_limit");
-            return;
-        }
-
-        // Execute
-        if self.config.audit_mode {
-            self.simulate_entry(&signal, &msg.channel_name).await;
-        }
-        // Live execution would be wired through connector — TODO in engine integration
     }
 
     /// Manage open positions (SL/TP checks). Call on every tick.
@@ -245,63 +152,6 @@ impl SignalEngine {
         self.position_mgr.lock().await.close_position(symbol, 0.0, "manual").is_some()
     }
 
-    async fn simulate_entry(&self, signal: &ParsedSignal, channel_name: &str) {
-        let entry = signal.entry_high.unwrap_or(signal.entry_low.unwrap_or(0.0));
-        if entry <= 0.0 { return; }
-
-        let sl = signal.stop_loss.unwrap_or(entry * 0.95);
-        let result = self.position_mgr.lock().await.open_position(
-            signal.pair.as_deref().unwrap_or("?"),
-            entry,
-            100.0, // Simulated amount
-            sl,
-            signal.take_profits.clone(),
-            &signal.confidence,
-            &signal.raw_message,
-            channel_name,
-        );
-
-        match result {
-            Ok(()) => {
-                self.risk.lock().await.record_trade_opened();
-                self.log_audit_trade(signal, channel_name, "OPEN_LONG", entry, "audit_entry");
-                self.notify(&format!(
-                    "[AUDIT] Signal entered: {}\nEntry: ${:.2}\nSL: ${:.2}\nTPs: {}\nChannel: {}",
-                    signal.pair.as_deref().unwrap_or("?"), entry, sl,
-                    signal.take_profits.iter().map(|t| format!("${:.2}", t)).collect::<Vec<_>>().join(", "),
-                    channel_name
-                )).await;
-                info!("[AUDIT] Signal entered: {} @ ${:.2} from {}", signal.pair.as_deref().unwrap_or("?"), entry, channel_name);
-            }
-            Err(reason) => {
-                info!("Signal skipped ({}): {}", channel_name, reason);
-                self.log_audit_trade(signal, channel_name, "rejected_position", 0.0, &reason);
-                self.notify(&format!(
-                    "⚠️ Signal skipped: {}\n{}\nChannel: {}",
-                    signal.pair.as_deref().unwrap_or("?"), reason, channel_name
-                )).await;
-            }
-        }
-    }
-
-    async fn handle_close(&self, signal: &ParsedSignal, channel_name: &str) {
-        let pair = match &signal.pair {
-            Some(p) => p,
-            None => return,
-        };
-        let mgr = self.position_mgr.lock().await;
-        let pos = match mgr.get_position(pair) {
-            Some(p) => p.clone(),
-            None => return,
-        };
-        drop(mgr);
-
-        let close_price = signal.entry_low.unwrap_or(pos.entry_price);
-        let pnl = self.position_mgr.lock().await.close_position(pair, close_price, "trader_close");
-        self.record_close(&pos, close_price, "trader_close", pnl).await;
-        self.notify(&format!("Signal closed by trader: {}", pair)).await;
-    }
-
     async fn get_current_price(&self, connector: &dyn Connector, symbol: &str) -> f64 {
         // Try connector first
         if let Ok(book) = connector.get_order_book(symbol, 1).await {
@@ -359,27 +209,6 @@ impl SignalEngine {
             if self.config.audit_mode { "AUDIT" } else { "LIVE" },
             pos.symbol, reason, price, pnl.unwrap_or(0.0)
         )).await;
-    }
-
-    fn log_audit_trade(&self, signal: &ParsedSignal, channel_name: &str, action: &str, price: f64, reason: &str) {
-        self.journal.log_trade(&SignalTrade {
-            timestamp: Utc::now().to_rfc3339(),
-            symbol: signal.pair.clone().unwrap_or_default(),
-            channel_name: channel_name.to_string(),
-            action: action.to_string(),
-            entry_price: signal.entry_high.unwrap_or(signal.entry_low.unwrap_or(0.0)),
-            current_price: price,
-            quantity: 0.0,
-            realized_pnl: 0.0,
-            exit_reason: reason.to_string(),
-            signal_confidence: signal.confidence.clone(),
-            stop_loss: signal.stop_loss.unwrap_or(0.0),
-            take_profits: serde_json::to_string(&signal.take_profits).unwrap_or_default(),
-            tp1_hit: 0, tp2_hit: 0, tp3_hit: 0,
-            raw_message: signal.raw_message.chars().take(500).collect(),
-            parse_reasoning: signal.reasoning.clone(),
-            is_audit: if self.config.audit_mode { 1 } else { 0 },
-        });
     }
 
     async fn notify(&self, message: &str) {

@@ -5,6 +5,7 @@ use trading_engine_core::config::TrendConfig;
 use trading_engine_core::connector::types::{OrderBook, Fill};
 use trading_engine_core::models::order::OrderSide;
 use trading_engine_core::models::bar::Bar;
+use trading_engine_core::notifications::TelegramBot;
 use rusqlite::Connection;
 use std::collections::HashMap;
 
@@ -65,12 +66,12 @@ async fn test_stop_loss_logs_to_journal() {
 
     let journal = TrendJournal::open(db_path.to_str().unwrap()).expect("journal open");
     let config = default_trend_config();
-    let mut strategy = TrendStrategy::new_with_journal("BTCUSDT", &config, Some(journal));
+    let mut strategy = TrendStrategy::new_with_journal("BTCUSDT", &config, Some(journal), TelegramBot::disabled());
 
     warmup(&mut strategy, 50000.0);
     // Enter a LONG at 50000
     let fill = Fill {
-        fill_id: "f1".into(), order_id: "o1".into(), symbol: "BTCUSDT".into(),
+        fill_id: "f1".into(), order_id: "o1".into(), client_order_id: None, symbol: "BTCUSDT".into(),
         side: OrderSide::Buy, price: 50000.0, quantity: 0.1, fee: 0.0, timestamp: 1000,
     };
     strategy.on_fill(&fill).await.unwrap();
@@ -112,11 +113,11 @@ async fn test_tp_partial_logs_to_journal() {
 
     let journal = TrendJournal::open(db_path.to_str().unwrap()).expect("journal open");
     let config = default_trend_config();
-    let mut strategy = TrendStrategy::new_with_journal("BTCUSDT", &config, Some(journal));
+    let mut strategy = TrendStrategy::new_with_journal("BTCUSDT", &config, Some(journal), TelegramBot::disabled());
 
     warmup(&mut strategy, 50000.0);
     let fill = Fill {
-        fill_id: "f1".into(), order_id: "o1".into(), symbol: "BTCUSDT".into(),
+        fill_id: "f1".into(), order_id: "o1".into(), client_order_id: None, symbol: "BTCUSDT".into(),
         side: OrderSide::Buy, price: 50000.0, quantity: 0.1, fee: 0.0, timestamp: 1000,
     };
     strategy.on_fill(&fill).await.unwrap();

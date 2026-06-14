@@ -8,9 +8,9 @@ const FEE_RATE: f64 = 0.001; // 0.1% per side
 
 struct PaperOrder {
     id: String,
+    client_order_id: Option<String>,
     symbol: String,
     side: OrderSide,
-    order_type: OrderTypeReq,
     price: Option<f64>,
     quantity: f64,
 }
@@ -51,9 +51,9 @@ impl PaperTradeEngine {
 
         self.open_orders.push(PaperOrder {
             id: id.clone(),
+            client_order_id: req.client_order_id.clone(),
             symbol: req.symbol.clone(),
             side: req.side,
-            order_type: req.order_type,
             price: req.price,
             quantity: req.quantity,
         });
@@ -151,6 +151,7 @@ impl PaperTradeEngine {
                 let fill = Fill {
                     fill_id: format!("fill_{}", self.trade_history.len()),
                     order_id: order.id,
+                    client_order_id: order.client_order_id.clone(),
                     symbol: order.symbol,
                     side: order.side,
                     price: fill_price,
@@ -215,7 +216,7 @@ impl PaperTradeConnector {
     }
 
     /// Set the per-symbol fill cooldown (ms). Call after constructing.
-    pub fn with_fill_cooldown(mut self, ms: i64) -> Self {
+    pub fn with_fill_cooldown(self, ms: i64) -> Self {
         if let Ok(mut engine) = self.engine.lock() {
             engine.set_fill_cooldown(ms);
         }
@@ -230,12 +231,12 @@ impl crate::connector::Connector for PaperTradeConnector {
         engine.place_order(req)
     }
 
-    async fn cancel_order(&self, symbol: &str, order_id: &str) -> anyhow::Result<()> {
+    async fn cancel_order(&self, _symbol: &str, order_id: &str) -> anyhow::Result<()> {
         let mut engine = self.engine.lock().unwrap();
         engine.cancel_order(order_id)
     }
 
-    async fn cancel_all_orders(&self, symbol: &str) -> anyhow::Result<Vec<CancelResult>> {
+    async fn cancel_all_orders(&self, _symbol: &str) -> anyhow::Result<Vec<CancelResult>> {
         Ok(Vec::new()) // Not implemented for paper
     }
 
@@ -244,7 +245,7 @@ impl crate::connector::Connector for PaperTradeConnector {
         Ok(engine.balances().clone())
     }
 
-    async fn get_open_orders(&self, symbol: &str) -> anyhow::Result<Vec<OpenOrder>> {
+    async fn get_open_orders(&self, _symbol: &str) -> anyhow::Result<Vec<OpenOrder>> {
         Ok(Vec::new()) // Not implemented for paper
     }
 

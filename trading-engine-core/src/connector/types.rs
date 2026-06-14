@@ -78,6 +78,7 @@ pub struct OpenOrder {
 pub struct Fill {
     pub fill_id: String,
     pub order_id: String,
+    pub client_order_id: Option<String>,
     pub symbol: String,
     pub side: OrderSide,
     pub price: f64,

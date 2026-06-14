@@ -3,6 +3,7 @@ use trading_engine_core::config::TrendConfig;
 use trading_engine_core::models::bar::Bar;
 use trading_engine_core::connector::types::OrderBook;
 use trading_engine_core::strategy::{TickContext, Strategy};
+use trading_engine_core::notifications::TelegramBot;
 
 fn make_config() -> TrendConfig {
     TrendConfig {
@@ -67,7 +68,7 @@ fn make_ctx(bars: Vec<Bar>) -> TickContext {
 #[tokio::test]
 async fn test_trend_does_not_reprocess_old_bars() {
     let config = make_config();
-    let mut strategy = TrendStrategy::new("BTC-USDT", &config);
+    let mut strategy = TrendStrategy::new("BTC-USDT", &config, TelegramBot::disabled());
 
     // First tick: feed 40 bars (should warm up ADX which needs 28)
     let bars_40 = make_bars(40);
@@ -96,7 +97,7 @@ async fn test_trend_does_not_reprocess_old_bars() {
 #[tokio::test]
 async fn test_trend_adx_valid_after_incremental_feed() {
     let config = make_config();
-    let mut strategy = TrendStrategy::new("BTC-USDT", &config);
+    let mut strategy = TrendStrategy::new("BTC-USDT", &config, TelegramBot::disabled());
 
     // Feed 50 bars incrementally (simulating live bar-by-bar arrivals)
     for batch_end in 1..=50 {
