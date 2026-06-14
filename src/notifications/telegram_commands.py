@@ -1343,11 +1343,20 @@ class TelegramCommandHandler:
         try:
             logger.info("Telegram /trend_history received")
             strategy = self.strategy
-            if not hasattr(strategy, '_trend_journal') or strategy._trend_journal is None:
-                update.message.reply_text("Trend engine not active")
-                return
-
-            trades = strategy._trend_journal.recent_trades(limit=10)
+            # Unified source: prefer the Python _trend_journal if wired; fall
+            # back to the Rust engine's SQLite journal. The hybrid RunnerProxy
+            # leaves _trend_journal=None, but trend trades live in
+            # data/trend_journal.db (shared volume) — reading it directly fixes
+            # the false "Trend engine not active" on the hybrid runner.
+            trades = []
+            journal = getattr(strategy, '_trend_journal', None)
+            if journal is not None:
+                try:
+                    trades = journal.recent_trades(limit=10)
+                except Exception as e:
+                    logger.warning(f"_trend_journal.recent_trades failed: {e}")
+            if not trades:
+                trades = self._rust_trend_trades(limit=10)
 
             if not trades:
                 update.message.reply_text("No trend trades yet")
@@ -1356,12 +1365,48 @@ class TelegramCommandHandler:
             lines = ["📜 <b>TREND HISTORY</b>", "•••"]
             for t in trades:
                 emoji = "+" if t["pnl"] >= 0 else "-"
-                lines.append(f"{emoji} {t['side']} {t['amount']:.1f}@${t['entry_price']:.2f}->${t['exit_price']:.2f} | ${t['pnl']:+.2f} ({t['exit_reason']})")
+                pair = t.get("pair", "")
+                pair_str = f"{pair} " if pair else ""
+                lines.append(f"{emoji} {pair_str}{t['side']} {t['amount']:.1f}@${t['entry_price']:.2f}->${t['exit_price']:.2f} | ${t['pnl']:+.2f} ({t['exit_reason']})")
 
             update.message.reply_text("\n".join(lines), parse_mode="HTML")
         except Exception as e:
             logger.error(f"Error in /trend_history: {e}")
             update.message.reply_text(f"⚠️ Error getting trend history: {e}")
+
+    def _rust_trend_trades(self, limit: int = 10) -> list:
+        """Read recent closed trend trades from the Rust engine's SQLite journal.
+
+        Used when the Python _trend_journal isn't wired (hybrid runner). The
+        data/ volume is shared with the Rust container, which writes
+        trend_trades in WAL mode — a concurrent read here is safe.
+        """
+        import sqlite3
+        path = os.environ.get("TREND_JOURNAL_PATH", "data/trend_journal.db")
+        try:
+            conn = sqlite3.connect(path)
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT side, entry_price, exit_price, amount, pnl, exit_reason, pair "
+                "FROM trend_trades ORDER BY id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+            conn.close()
+            return [
+                {
+                    "side": r["side"] or "",
+                    "entry_price": r["entry_price"] or 0.0,
+                    "exit_price": r["exit_price"] or 0.0,
+                    "amount": r["amount"] or 0.0,
+                    "pnl": r["pnl"] or 0.0,
+                    "exit_reason": r["exit_reason"] or "",
+                    "pair": r["pair"] or "",
+                }
+                for r in rows
+            ]
+        except Exception as e:
+            logger.warning(f"Rust trend journal read failed ({path}): {e}")
+            return []
 
     def _cmd_help(self, update, context):
         logger.info("Telegram /help received")
