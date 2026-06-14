@@ -1,5 +1,6 @@
 use trading_engine_core::config::GridConfig;
 use trading_engine_core::strategy::grid::GridStrategy;
+use trading_engine_core::strategy::Strategy;
 
 fn cfg() -> GridConfig {
     GridConfig {
@@ -42,4 +43,15 @@ fn test_corrupt_state_starts_fresh() {
     std::fs::write(dir.join("ETH_USDT_grid_state.json"), "{ not valid json").unwrap();
     let grid = GridStrategy::new_with_state_dir("ETH-USDT", &cfg(), 0.0001, 1.0, dir.to_str().unwrap());
     assert!(grid.realized_pnl().abs() < 1e-6, "corrupt file -> fresh start, no panic");
+}
+
+#[test]
+fn test_mtm_uses_cached_balances() {
+    let dir = std::env::temp_dir().join("test_grid_mtm");
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut grid = GridStrategy::new_with_state_dir("DOGE-USDT", &cfg(), 0.0001, 1.0, dir.to_str().unwrap());
+    grid.set_mtm_snapshot_for_test(5000.0, 9500.0, 0.12);
+    let status = grid.status();
+    // MTM = base*mid + quote = 5000*0.12 + 9500 = 10100
+    assert!(status.details.contains("MTM $10100"), "details show MTM; got: {}", status.details);
 }

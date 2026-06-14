@@ -75,6 +75,8 @@ pub struct GridStrategy {
     diag_near_resistance: bool,
     state_dir: String,
     journal: Option<GridJournal>,
+    last_base_balance: f64,
+    last_quote_balance: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -121,6 +123,8 @@ impl GridStrategy {
             diag_near_resistance: false,
             state_dir: state_dir.to_string(),
             journal,
+            last_base_balance: 0.0,
+            last_quote_balance: 0.0,
         };
         me.load_state();
         me
@@ -176,6 +180,14 @@ impl GridStrategy {
     pub fn peak_equity_pub(&self) -> f64 { self.peak_equity }
     pub fn set_level_cooldown(&mut self, level: String, ts: i64) { self.level_cooldowns.insert(level, ts); }
     pub fn has_level_cooldown(&self, level: &str) -> bool { self.level_cooldowns.contains_key(level) }
+
+    /// Test hook: inject cached balances + price so status() can show MTM.
+    pub fn set_mtm_snapshot_for_test(&mut self, base: f64, quote: f64, mid: f64) {
+        self.last_base_balance = base;
+        self.last_quote_balance = quote;
+        self.diag_price = mid;
+        self.state = GridState::Active;
+    }
 
     /// Calculate grid levels based on BB center, ATR, and BB bounds.
     /// Snap buy levels away from resistance and sell levels away from support.
@@ -449,6 +461,15 @@ impl Strategy for GridStrategy {
         // Track bar availability for diagnostics (before any early return)
         self.diag_bars_count = ctx.recent_bars.len();
 
+        // Cache balances for mark-to-market display in status().
+        let (base, quote) = if let Some(pos) = self.pair.find('-') {
+            (&self.pair[..pos], &self.pair[pos + 1..])
+        } else {
+            ("", "")
+        };
+        self.last_base_balance = ctx.balances.get(base).copied().unwrap_or(0.0);
+        self.last_quote_balance = ctx.balances.get(quote).copied().unwrap_or(0.0);
+
         // Feed new bars to indicator modules (avoid double-counting)
         let mut prev_close: Option<f64> = None;
         let bars_to_process = if ctx.recent_bars.len() > self.last_bar_count {
@@ -710,11 +731,13 @@ impl Strategy for GridStrategy {
                 self.current_capital,
             )
         } else if self.state == GridState::Active {
+            let mtm = self.last_base_balance * self.diag_price + self.last_quote_balance;
             format!(
-                "Active: ranging | ADX={:.1} CHOP={:.0} NATR={:.4} | Capital: ${:.2} (${:.2} growth)",
+                "Active: ranging | ADX={:.1} CHOP={:.0} NATR={:.4} | Capital: ${:.2} (${:.2} growth) | MTM ${:.2}",
                 self.diag_adx, self.diag_chop, self.diag_natr,
                 self.current_capital,
-                (self.growth_ratio() - 1.0) * 100.0
+                (self.growth_ratio() - 1.0) * 100.0,
+                mtm
             )
         } else {
             format!(
