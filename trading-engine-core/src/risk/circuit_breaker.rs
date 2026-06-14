@@ -8,6 +8,7 @@ pub struct CircuitBreaker {
     halted: bool,
     cooldown_secs: u64,
     halted_at: Option<Instant>,
+    last_reset_date: String,
 }
 
 impl CircuitBreaker {
@@ -20,6 +21,7 @@ impl CircuitBreaker {
             halted: false,
             cooldown_secs: 1800,
             halted_at: None,
+            last_reset_date: String::new(),
         }
     }
 
@@ -67,6 +69,18 @@ impl CircuitBreaker {
 
     pub fn is_halted(&self) -> bool {
         self.halted && self.halted_at.map_or(true, |at| at.elapsed().as_secs() < self.cooldown_secs)
+    }
+
+    pub fn is_halted_raw(&self) -> bool { self.halted }
+    pub fn last_reset_date(&self) -> &str { &self.last_reset_date }
+    pub fn set_last_reset_date(&mut self, d: String) { self.last_reset_date = d; }
+    pub fn start_of_day_equity(&self) -> f64 { self.start_of_day_equity }
+    pub fn halted_at_unix(&self) -> Option<i64> {
+        self.halted_at.map(|at| chrono::Utc::now().timestamp() - at.elapsed().as_secs() as i64)
+    }
+    pub fn set_halted_state(&mut self, halted: bool, _halted_at_unix: Option<i64>) {
+        self.halted = halted;
+        self.halted_at = if halted { Some(Instant::now()) } else { None };
     }
 
     pub fn reset(&mut self, equity: f64) {
