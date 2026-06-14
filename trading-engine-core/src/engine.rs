@@ -228,9 +228,13 @@ impl Engine {
 
     async fn submit_orders(&self, orders: Vec<OrderRequest>) -> Result<()> {
         for req in orders {
-            if let Err(e) = self.risk.check_trading_allowed() {
-                warn!("Order vetoed by risk manager: {}", e);
-                continue;
+            // Reduce-only orders (exits) bypass the halt check so a circuit
+            // breaker trip can't trap open positions.
+            if !req.reduce_only {
+                if let Err(e) = self.risk.check_trading_allowed() {
+                    warn!("Order vetoed by risk manager (halted): {}", e);
+                    continue;
+                }
             }
 
             match self.connector.place_order(&req).await {
