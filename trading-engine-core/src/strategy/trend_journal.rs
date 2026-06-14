@@ -130,4 +130,23 @@ impl TrendJournal {
             error!("Trend journal write failed: {}", e);
         }
     }
+
+    /// Cumulative realized P&L for a pair: `SUM(pnl)` across every closed trade
+    /// recorded for that pair. This is the authoritative value used to
+    /// reconstitute a strategy's `realized_pnl` on startup — the position file
+    /// is deleted on close, so the journal is the only durable record of
+    /// closed-trade P&L. Fail-soft: a query error logs and returns 0.0 rather
+    /// than ever blocking the strategy.
+    pub fn realized_pnl(&self, pair: &str) -> f64 {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT COALESCE(SUM(pnl), 0.0) FROM trend_trades WHERE pair = ?1",
+            rusqlite::params![pair],
+            |row| row.get::<_, f64>(0),
+        )
+        .unwrap_or_else(|e| {
+            error!("Trend journal realized_pnl query failed for {}: {}", pair, e);
+            0.0
+        })
+    }
 }

@@ -614,7 +614,17 @@ impl Strategy for TrendStrategy {
         Ok(Vec::new())
     }
 
-    async fn on_start(&mut self) -> Result<Vec<OrderRequest>> { Ok(Vec::new()) }
+    async fn on_start(&mut self) -> Result<Vec<OrderRequest>> {
+        // Reconstitute cumulative realized P&L from the authoritative journal.
+        // The position file is deleted on close, so without this a restart
+        // while flat would silently reset realized_pnl to $0 — hiding the
+        // engine's real result from /trend's total and from position-sizing
+        // capital (calculate_qty uses capital + realized_pnl).
+        if let Some(j) = &self.journal {
+            self.realized_pnl = j.realized_pnl(&self.pair);
+        }
+        Ok(Vec::new())
+    }
     async fn on_stop(&mut self) -> Result<()> { Ok(()) }
 
     fn status(&self) -> StrategyStatus {
@@ -650,13 +660,14 @@ impl Strategy for TrendStrategy {
                          else { "Ready".to_string() };
             (
                 "WAITING".to_string(),
-                format!("Score:{}/9 (A:{} C:{} V:{} M:{} R:{}) need≥{} | dir:{} | ADX={:.1} CHOP={:.0} RSI={:.1} | {}",
+                format!("Score:{}/9 (A:{} C:{} V:{} M:{} R:{}) need≥{} | dir:{} | ADX={:.1} CHOP={:.0} RSI={:.1} | {} | Realized: ${:.0}",
                     scores.total,
                     scores.adx, scores.chop, scores.volume, scores.macd, scores.rsi,
                     threshold,
                     dir_str,
-                    self.adx.adx(), self.choppiness.value(), self.rsi.value(), reason),
-                0.0,
+                    self.adx.adx(), self.choppiness.value(), self.rsi.value(), reason,
+                    self.realized_pnl),
+                self.realized_pnl,
             )
         };
         StrategyStatus { name: self.name().to_string(), pair: self.pair.clone(), state, pnl, open_orders: 0, details }
