@@ -716,35 +716,44 @@ class TelegramCommandHandler:
     def _cmd_pending(self, update, context):
         try:
             logger.info("Telegram /pending received")
-            tracker = self.strategy.order_tracker
-            pending = tracker.pending_orders()
+            # Hybrid runner: open orders live in the Rust engine (the legacy
+            # `strategy.order_tracker` is faked as {} by RunnerProxy, so
+            # `.pending_orders()` crashed). Query the Rust API directly.
+            import urllib.request
+            url = os.environ.get("RUST_ENGINE_URL", "http://localhost:3030") + "/api/v1/orders?symbol="
+            try:
+                with urllib.request.urlopen(url, timeout=5) as r:
+                    pending = json.loads(r.read())
+            except Exception as e:
+                update.message.reply_text(f"⚠️ Could not reach engine API: {e}")
+                return
 
             if not pending:
                 update.message.reply_text("📋 No pending orders.")
                 return
 
-            buys = [o for o in pending if o.side.value == "BUY"]
-            sells = [o for o in pending if o.side.value == "SELL"]
+            buys = [o for o in pending if str(o.get("side", "")).upper() == "BUY"]
+            sells = [o for o in pending if str(o.get("side", "")).upper() == "SELL"]
 
             lines = [f"📋 <b>Pending Orders ({len(pending)})</b>", "•••"]
 
             if buys:
-                buys.sort(key=lambda o: o.price, reverse=True)
+                buys.sort(key=lambda o: o.get("price") or 0, reverse=True)
                 lines.append(f"📈 <b>BUY ({len(buys)})</b>")
                 for o in buys:
-                    val = o.price * o.quantity
-                    lines.append(f"  L{o.level}: ${o.price:,.2f} × {o.quantity:.4f} (${val:.2f})")
+                    p = o.get("price") or 0; q = o.get("quantity") or 0
+                    lines.append(f"  {o.get('symbol','?')}: ${p:,.2f} × {q:.4f} (${p*q:.2f})")
 
             if sells:
-                sells.sort(key=lambda o: o.price)
+                sells.sort(key=lambda o: o.get("price") or 0)
                 lines.append(f"📉 <b>SELL ({len(sells)})</b>")
                 for o in sells:
-                    val = o.price * o.quantity
-                    lines.append(f"  L{o.level}: ${o.price:,.2f} × {o.quantity:.4f} (${val:.2f})")
+                    p = o.get("price") or 0; q = o.get("quantity") or 0
+                    lines.append(f"  {o.get('symbol','?')}: ${p:,.2f} × {q:.4f} (${p*q:.2f})")
 
             lines.append("•••")
-            total_buy = sum(o.price * o.quantity for o in buys)
-            total_sell = sum(o.price * o.quantity for o in sells)
+            total_buy = sum((o.get("price") or 0) * (o.get("quantity") or 0) for o in buys)
+            total_sell = sum((o.get("price") or 0) * (o.get("quantity") or 0) for o in sells)
             lines.append(f"💰 Buy value: ${total_buy:,.2f} | Sell value: ${total_sell:,.2f}")
 
             update.message.reply_text("\n".join(lines), parse_mode="HTML")
