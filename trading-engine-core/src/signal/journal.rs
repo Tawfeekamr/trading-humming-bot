@@ -4,7 +4,7 @@ use chrono::Utc;
 use rusqlite::Connection;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use tracing::error;
+use tracing::{error, info};
 
 pub struct SignalJournal {
     conn: Mutex<Connection>,
@@ -19,6 +19,11 @@ impl SignalJournal {
         conn.execute_batch("PRAGMA journal_mode=WAL;")?;
         let journal = Self { conn: Mutex::new(conn) };
         journal.init_db()?;
+        if let Ok(n) = journal.dedup_closes() {
+            if n > 0 {
+                info!("Signal journal dedup: removed {} duplicate CLOSE rows (kept earliest per position)", n);
+            }
+        }
         Ok(journal)
     }
 
@@ -147,6 +152,25 @@ impl SignalJournal {
             Ok(s) => s,
             Err(_) => SummaryResult { total_trades: 0, total_pnl: 0.0, win_rate: 0.0 },
         }
+    }
+
+    /// Idempotent one-time cleanup of duplicate CLOSE rows left by the
+    /// Rust/Python dual-write duplicate-close bug: keep the EARLIEST CLOSE per
+    /// (symbol, entry_price) — the real first close — and delete the phantom
+    /// re-closes. Safe to run on every boot (no-op once clean).
+    pub fn dedup_closes(&self) -> Result<usize> {
+        let conn = self.conn.lock().unwrap();
+        let n = conn.execute(
+            "DELETE FROM signal_trades
+             WHERE action LIKE 'CLOSE_%'
+               AND id NOT IN (
+                 SELECT MIN(id) FROM signal_trades
+                 WHERE action LIKE 'CLOSE_%'
+                 GROUP BY symbol, entry_price
+               )",
+            [],
+        )?;
+        Ok(n)
     }
 
     /// Every CLOSE_* trade as (symbol, entry_price, exit_reason, tp3_hit) — used
