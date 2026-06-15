@@ -18,25 +18,27 @@ pub struct UnifiedTradeJournal {
 }
 
 fn migrations() -> Migrations<'static> {
-    Migrations::new(vec![M::up(
-        "CREATE TABLE IF NOT EXISTS trades (
-            id              INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp       TEXT NOT NULL,
-            engine          TEXT NOT NULL,
-            pair            TEXT NOT NULL,
-            side            TEXT,
-            entry_price     REAL,
-            exit_price      REAL,
-            quantity        REAL,
-            pnl             REAL NOT NULL,
-            exit_reason     TEXT,
-            duration_mins   INTEGER
-        );
-        CREATE INDEX IF NOT EXISTS idx_trades_ts ON trades(timestamp);
-        CREATE INDEX IF NOT EXISTS idx_trades_engine ON trades(engine);
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_trades_dedup ON trades(engine, timestamp, pair, pnl);
-        ALTER TABLE trades ADD COLUMN is_backfilled INTEGER DEFAULT 0;",
-    )])
+    Migrations::new(vec![
+        M::up(
+            "CREATE TABLE IF NOT EXISTS trades (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp       TEXT NOT NULL,
+                engine          TEXT NOT NULL,
+                pair            TEXT NOT NULL,
+                side            TEXT,
+                entry_price     REAL,
+                exit_price      REAL,
+                quantity        REAL,
+                pnl             REAL NOT NULL,
+                exit_reason     TEXT,
+                duration_mins   INTEGER
+            );
+            CREATE INDEX IF NOT EXISTS idx_trades_ts ON trades(timestamp);
+            CREATE INDEX IF NOT EXISTS idx_trades_engine ON trades(engine);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_trades_dedup ON trades(engine, timestamp, pair, pnl);",
+        ),
+        M::up("ALTER TABLE trades ADD COLUMN is_backfilled INTEGER DEFAULT 0;"),
+    ])
 }
 
 impl UnifiedTradeJournal {
