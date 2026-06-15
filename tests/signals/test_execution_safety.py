@@ -143,56 +143,10 @@ class TestPartialExits:
 
 
 class TestAdapterMarketPayload:
-    """Real-money safety: MARKET orders must not carry price/time_in_force
-    (Binance/Gate reject a MARKET order with price set)."""
+    """Tests for the old Python adapter — removed with src/trading_engine/.
+    Order-payload safety is now validated by the Rust connector's
+    build_spot_order_params unit tests + validate_config CI gate."""
 
-    def test_market_order_omits_price_and_tif(self):
-        from src.trading_engine.adapter.base import Order
-        from src.trading_engine.adapter.rust_engine import RustEngineAdapter
-
-        adapter = RustEngineAdapter()
-        captured = {}
-
-        class FakeResp:
-            def raise_for_status(self):
-                pass
-
-            def json(self):
-                return {"orderId": "ord-1"}
-
-        def fake_post(url, json=None, timeout=None):
-            captured["payload"] = json
-            return FakeResp()
-
-        adapter._session.post = fake_post  # bypass real HTTP
-
-        adapter.submit_order(Order("BTC-USDT", "BUY", "MARKET", 50000.0, 0.001))
-
-        payload = captured["payload"]
-        assert payload["order_type"] == "Market"
-        assert payload["price"] is None, "MARKET must not send a price"
-        assert payload["time_in_force"] is None, "MARKET must not send time_in_force"
-
-    def test_limit_order_keeps_price_and_tif(self):
-        from src.trading_engine.adapter.base import Order
-        from src.trading_engine.adapter.rust_engine import RustEngineAdapter
-
-        adapter = RustEngineAdapter()
-        captured = {}
-
-        class FakeResp:
-            def raise_for_status(self):
-                pass
-
-            def json(self):
-                return {"orderId": "ord-2"}
-
-        adapter._session.post = lambda url, json=None, timeout=None: (
-            captured.__setitem__("payload", json), FakeResp())[1]
-
-        adapter.submit_order(Order("BTC-USDT", "BUY", "LIMIT", 50000.0, 0.001))
-
-        payload = captured["payload"]
-        assert payload["order_type"] == "Limit"
-        assert payload["price"] == 50000.0
-        assert payload["time_in_force"] == "Gtc"
+    def test_removed(self):
+        import pytest
+        pytest.skip("old trading_engine adapter removed — safety covered by Rust tests")
