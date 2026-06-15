@@ -34,7 +34,8 @@ fn migrations() -> Migrations<'static> {
         );
         CREATE INDEX IF NOT EXISTS idx_trades_ts ON trades(timestamp);
         CREATE INDEX IF NOT EXISTS idx_trades_engine ON trades(engine);
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_trades_dedup ON trades(engine, timestamp, pair, pnl);",
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_trades_dedup ON trades(engine, timestamp, pair, pnl);
+        ALTER TABLE trades ADD COLUMN is_backfilled INTEGER DEFAULT 0;",
     )])
 }
 
@@ -95,50 +96,46 @@ impl UnifiedTradeJournal {
         }
     }
 
-    /// One-time backfill: copy (engine, timestamp, pair, pnl) from each per-engine
-    /// journal into the unified table. Called once on startup when unified is empty,
-    /// BEFORE the engines trade — so there's no overlap with direct writes. Only the
-    /// PnL-relevant columns are copied (enough for /pnl_all; full fields come from
-    /// future direct writes).
+    /// Rebuild backfilled rows from the per-engine journals each startup. Direct
+    /// writes from engines (is_backfilled=0) are preserved. Copies the real
+    /// exit_reason so /trades shows [tp3], [stop_loss], etc. instead of [backfilled].
     pub fn backfill_from_engine_journals(&self) -> Result<usize> {
-        // (engine, db, table, pnl_col, pair_col, optional WHERE). NB signal_trades
-        // uses `symbol` not `pair` — that mismatch silently skipped signal history.
-        let sources: &[(&str, &str, &str, &str, &str, &str)] = &[
-            ("grid",   "data/grid_journal.db",            "grid_trades",   "realized_pnl", "pair",   ""),
-            ("trend",  "data/trend_journal.db",           "trend_trades",  "pnl",          "pair",   ""),
-            ("swing",  "data/swing_journal.db",           "swing_trades",  "pnl",          "pair",   ""),
-            ("mr",     "data/mean_reversion_journal.db",  "mr_trades",     "pnl",          "pair",   ""),
-            ("signal", "data/signal_journal.db",          "signal_trades", "realized_pnl", "symbol", "WHERE action LIKE 'CLOSE_%'"),
+        // (engine, db, table, pnl_col, pair_col, reason_col, optional WHERE)
+        let sources: &[(&str, &str, &str, &str, &str, &str, &str)] = &[
+            ("grid",   "data/grid_journal.db",            "grid_trades",   "realized_pnl", "pair",   "exit_reason", ""),
+            ("trend",  "data/trend_journal.db",           "trend_trades",  "pnl",          "pair",   "exit_reason", ""),
+            ("swing",  "data/swing_journal.db",           "swing_trades",  "pnl",          "pair",   "exit_reason", ""),
+            ("mr",     "data/mean_reversion_journal.db",  "mr_trades",     "pnl",          "pair",   "exit_reason", ""),
+            ("signal", "data/signal_journal.db",          "signal_trades", "realized_pnl", "symbol", "exit_reason", "WHERE action LIKE 'CLOSE_%'"),
         ];
         let mut total = 0usize;
         let conn = self.conn.lock().unwrap();
-        // Clear backfilled rows + rebuild from the per-engine journals each startup.
-        // Direct-writes from engines (exit_reason != 'backfilled') are preserved.
-        // This prevents the duplication bug where append-only backfills accumulated
-        // one copy per restart (10 restarts = 10× inflation).
-        let _ = conn.execute("DELETE FROM trades WHERE exit_reason = 'backfilled'", []);
-        // Purge phantom MR trades from the bar-replay bug (all logged at 22:39 on
-        // 2026-06-15, re-traded historical ETH bars). The per-tick replay guard
-        // prevents new ones; this cleans the residue.
+        // Clear backfilled rows (is_backfilled=1) + rebuild. Direct writes (0) preserved.
+        let _ = conn.execute("DELETE FROM trades WHERE is_backfilled = 1", []);
+        // Purge phantom MR trades from the bar-replay bug.
         let _ = conn.execute(
             "DELETE FROM trades WHERE engine = 'mr' AND timestamp LIKE '2026-06-15T22:39%'",
             [],
         );
-        for (engine, db, tbl, col, pair_col, where_clause) in sources {
+        for (engine, db, tbl, col, pair_col, reason_col, where_clause) in sources {
             if !std::path::Path::new(db).exists() { continue; }
             match Connection::open(db) {
                 Ok(src) => {
-                    let sql = format!("SELECT timestamp, {}, {} FROM {} {}", pair_col, col, tbl, where_clause);
+                    // SELECT timestamp, pair, pnl, exit_reason — with graceful fallback
+                    // if the reason column doesn't exist (uses 'fill' as default).
+                    let has_reason = src.prepare(&format!("SELECT {} FROM {} LIMIT 0", reason_col, tbl)).is_ok();
+                    let reason_expr = if has_reason { reason_col.to_string() } else { "'fill'".to_string() };
+                    let sql = format!("SELECT timestamp, {}, {}, {} FROM {} {}", pair_col, col, reason_expr, tbl, where_clause);
                     let mut stmt = match src.prepare(&sql) { Ok(s) => s, Err(e) => { error!("backfill {} prepare: {}", engine, e); continue; } };
                     let rows = stmt.query_map([], |r| {
-                        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, f64>(2)?))
+                        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, f64>(2)?, r.get::<_, String>(3)?))
                     });
                     if let Ok(rows) = rows {
                         for row in rows.flatten() {
-                            let (ts, pair, pnl) = row;
+                            let (ts, pair, pnl, reason) = row;
                             let _ = conn.execute(
-                                "INSERT OR IGNORE INTO trades (timestamp, engine, pair, pnl, exit_reason) VALUES (?1, ?2, ?3, ?4, 'backfilled')",
-                                rusqlite::params![ts, engine, pair, pnl],
+                                "INSERT OR IGNORE INTO trades (timestamp, engine, pair, pnl, exit_reason, is_backfilled) VALUES (?1, ?2, ?3, ?4, ?5, 1)",
+                                rusqlite::params![ts, engine, pair, pnl, reason],
                             );
                             total += 1;
                         }
