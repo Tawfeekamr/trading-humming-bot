@@ -40,6 +40,11 @@ jobs:
       - name: Run Rust tests
         run: cd trading-engine-core && cargo test --lib
 
+      - name: Validate production config parses
+        # Guards against config typos crashing the bot on startup (e.g. the
+        # runner_exit "BandOrChandelier" vs "band_or_chandelier" incident).
+        run: cd trading-engine-core && cargo run --bin validate_config -- ../config/strategy.yaml
+
       - name: Run Python unit tests
         run: pytest tests/ -v --tb=short
 
