@@ -100,21 +100,27 @@ impl UnifiedTradeJournal {
     /// PnL-relevant columns are copied (enough for /pnl_all; full fields come from
     /// future direct writes).
     pub fn backfill_from_engine_journals(&self) -> Result<usize> {
-        // (engine, db, table, pnl_col, optional WHERE)
-        let sources: &[(&str, &str, &str, &str, &str)] = &[
-            ("grid",   "data/grid_journal.db",            "grid_trades",   "realized_pnl", ""),
-            ("trend",  "data/trend_journal.db",           "trend_trades",  "pnl", ""),
-            ("swing",  "data/swing_journal.db",           "swing_trades",  "pnl", ""),
-            ("mr",     "data/mean_reversion_journal.db",  "mr_trades",     "pnl", ""),
-            ("signal", "data/signal_journal.db",          "signal_trades", "realized_pnl", "WHERE action LIKE 'CLOSE_%'"),
+        // (engine, db, table, pnl_col, pair_col, optional WHERE). NB signal_trades
+        // uses `symbol` not `pair` — that mismatch silently skipped signal history.
+        let sources: &[(&str, &str, &str, &str, &str, &str)] = &[
+            ("grid",   "data/grid_journal.db",            "grid_trades",   "realized_pnl", "pair",   ""),
+            ("trend",  "data/trend_journal.db",           "trend_trades",  "pnl",          "pair",   ""),
+            ("swing",  "data/swing_journal.db",           "swing_trades",  "pnl",          "pair",   ""),
+            ("mr",     "data/mean_reversion_journal.db",  "mr_trades",     "pnl",          "pair",   ""),
+            ("signal", "data/signal_journal.db",          "signal_trades", "realized_pnl", "symbol", "WHERE action LIKE 'CLOSE_%'"),
         ];
         let mut total = 0usize;
         let conn = self.conn.lock().unwrap();
-        for (engine, db, tbl, col, where_clause) in sources {
+        // Rebuild from the per-engine journals each startup: trades.db is derived
+        // (the journals are the source of truth during the migration), so a clear +
+        // re-copy is always correct and self-heals any backfill bug (like the
+        // signal symbol mismatch). Engines also direct-write, but the rebuild wins.
+        let _ = conn.execute("DELETE FROM trades", []);
+        for (engine, db, tbl, col, pair_col, where_clause) in sources {
             if !std::path::Path::new(db).exists() { continue; }
             match Connection::open(db) {
                 Ok(src) => {
-                    let sql = format!("SELECT timestamp, pair, {} FROM {} {}", col, tbl, where_clause);
+                    let sql = format!("SELECT timestamp, {}, {} FROM {} {}", pair_col, col, tbl, where_clause);
                     let mut stmt = match src.prepare(&sql) { Ok(s) => s, Err(e) => { error!("backfill {} prepare: {}", engine, e); continue; } };
                     let rows = stmt.query_map([], |r| {
                         Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, f64>(2)?))
@@ -156,15 +162,28 @@ pub fn log_unified(
     }
 }
 
-/// Backfill the unified table from the per-engine journals on startup (once, when
-/// empty). Call before the engines trade.
+/// Rebuild the unified table from the per-engine journals on startup. Idempotent
+/// (clears + re-copies), so it self-heals any backfill bug. Call before trading.
 pub fn backfill_unified_if_empty() {
     match UnifiedTradeJournal::new() {
-        Ok(j) => {
-            if j.is_empty() {
-                let _ = j.backfill_from_engine_journals();
-            }
-        }
+        Ok(j) => { let _ = j.backfill_from_engine_journals(); }
         Err(e) => error!("Unified journal init failed: {}", e),
+    }
+}
+
+/// Cumulative realized PnL for one engine+pair, read from the unified table. The
+/// single source of truth for startup seeding (replaces per-engine journal/json
+/// seeding — one mechanism, no drift).
+pub fn realized_pnl(engine: &str, pair: &str) -> f64 {
+    match UnifiedTradeJournal::new() {
+        Ok(j) => {
+            let conn = j.conn.lock().unwrap();
+            conn.query_row(
+                "SELECT COALESCE(SUM(pnl),0) FROM trades WHERE engine=?1 AND pair=?2",
+                rusqlite::params![engine, pair],
+                |row| row.get::<_, f64>(0),
+            ).unwrap_or(0.0)
+        }
+        Err(_) => 0.0,
     }
 }
