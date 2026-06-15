@@ -282,7 +282,20 @@ impl Strategy for MeanReversionStrategy {
         Ok(Vec::new())
     }
 
-    async fn on_start(&mut self) -> Result<Vec<OrderRequest>> { Ok(Vec::new()) }
+    async fn on_start(&mut self) -> Result<Vec<OrderRequest>> {
+        // Seed from the unified trades table (source of truth) — overrides any
+        // phantom P&L left in the JSON state file by the bar-replay bug.
+        let unified_pnl = crate::strategy::trade_journal::realized_pnl("mr", &self.pair);
+        if (unified_pnl - self.realized_pnl).abs() > 0.01 {
+            info!("MR {} state reconciliation: resetting realized_pnl ${:.2} → ${:.2} (from trades.db)",
+                  self.pair, self.realized_pnl, unified_pnl);
+            self.realized_pnl = unified_pnl;
+            self.trades = 0;
+            self.wins = 0;
+            self.save_state();
+        }
+        Ok(Vec::new())
+    }
     async fn on_stop(&mut self) -> Result<()> { Ok(()) }
 
     fn status(&self) -> StrategyStatus {
