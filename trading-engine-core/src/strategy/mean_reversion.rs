@@ -141,11 +141,12 @@ impl Strategy for MeanReversionStrategy {
 
     async fn on_tick(&mut self, ctx: &TickContext) -> Result<Vec<OrderRequest>> {
         // Skip bar-replay warmup: the engine replays cached historical bars on
-        // every restart to warm indicators. Without this guard, MR re-trades
-        // those bars as if live → phantom entries/exits (same bug class as the
-        // trend replay PnL fabrication). Wait 2 min of REAL clock time so only
-        // live ticks are processed.
-        if chrono::Utc::now().timestamp_millis() - self.startup_time_ms < 120_000 {
+        // every restart. Their timestamps are in the past (bar.timestamp), while
+        // live ticks have timestamps within seconds of now. Skip any tick more
+        // than 30s from real clock time — this prevents both phantom trades AND
+        // tick_history pollution (replayed prices would seed fake flush signals).
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        if (now_ms - ctx.timestamp).abs() > 30_000 {
             return Ok(Vec::new());
         }
 
