@@ -162,3 +162,29 @@ signal_copy:
 # ── Mean Reversion (retuned + enabled 2026-06-14) ──────────────────
 mean_reversion:
   enabled: true                     # Backtest-validated at 2% threshold (85% win, +1.8% / 6mo)
+
+# ── Reversal Swing (paper-deploy 2026-06-15, ETH only) ─────────────
+# Backtest GO on 5m/1h. Prod global feed is 1h, so this runs as a 1h-LTF / 4h-HTF
+# swing — a different timeframe config than backtested. Paper validates it; if
+# flat, suspect the timeframe (per-strategy timeframe needs an engine change),
+# not the strategy. ETH-only: BNB needs maker entries (not yet wired), DOGE loses,
+# XRP inconclusive. Capital modest to leave paper-balance headroom; tune via /swing.
+swing:
+  enabled: true
+  enabled_pairs: ["ETH-USDT"]       # carrier pair only (backtest: ETH positive all stops/modes)
+  runner_exit: "BandOrChandelier"
+  htf_period: "4h"                  # aggregate the 1h feed → 4h regime/band
+  ltf_period: "1h"                  # LTF = the global feed
+  donchian_period: 20
+  band_atr_mult: 0.5
+  rsi_period: 14
+  rsi_oversold: 30.0
+  volume_multiplier: 1.5
+  volume_avg_period: 20
+  atr_period: 14
+  atr_stop_mult: 1.5                # middle of the validated ETH plateau (1.0–2.5)
+  min_rr: 2.0
+  risk_per_trade_pct: 1.0
+  adx_range_entry: 22.0
+  adx_trend_exit: 28.0
+  capital: 5000
