@@ -167,21 +167,22 @@ impl SignalPositionManager {
             Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
             Err(_) => serde_json::Map::new(),
         };
-        let now = now_secs();
         for (symbol, pos) in &self.positions {
-            // Keep open positions and recently closed (within 24h)
-            if !pos.is_closed || (now - pos.entry_timestamp as u64) < 86400 {
-                // Don't clobber a same-position disk entry that's closed or further
-                // along than this in-memory copy. Two managers (Rust + Python) race
-                // on this file; without this guard a stale in-memory copy reverts a
-                // real close → the position re-opens → gets closed AGAIN on the next
-                // tick/restart (duplicate-close / phantom-PnL bug). A genuinely new
-                // open (different entry_timestamp) still overwrites.
-                if let Some(disk_val) = merged.get(symbol) {
-                    if disk_more_advanced(disk_val, pos) { continue; }
-                }
-                merged.insert(symbol.clone(), serde_json::to_value(pos).unwrap_or_default());
+            // Don't clobber a same-position disk entry that's closed or further
+            // along than this in-memory copy. Two managers (Rust + Python) race
+            // on this file; without this guard a stale in-memory copy reverts a
+            // real close → the position re-opens → gets closed AGAIN on the next
+            // tick/restart (duplicate-close / phantom-PnL bug). A genuinely new
+            // open (different entry_timestamp) still overwrites.
+            if let Some(disk_val) = merged.get(symbol) {
+                if disk_more_advanced(disk_val, pos) { continue; }
             }
+            // Persist closed positions too (do NOT prune by entry age). Pruning a
+            // just-closed position held >24h left the other manager's stale OPEN
+            // copy as the only one on disk → re-close loops. Re-opens of the same
+            // symbol (different entry_timestamp) still overwrite, so growth is
+            // bounded to one entry per distinct position.
+            merged.insert(symbol.clone(), serde_json::to_value(pos).unwrap_or_default());
         }
 
         // Atomic publish: write temp, then rename — readers never see a partial file.
@@ -264,10 +265,6 @@ impl Default for SignalPosition {
             order_id: String::new(),
         }
     }
-}
-
-fn now_secs() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
 }
 
 /// True if the on-disk JSON entry is the SAME position (same entry_timestamp) as

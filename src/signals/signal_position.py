@@ -185,8 +185,11 @@ class SignalPositionManager:
                 disk_pos = disk.get(symbol)
                 if disk_pos is not None and self._disk_more_advanced(disk_pos, pos):
                     continue
-                if not pos.is_closed or (time.time() - pos.entry_timestamp) < 86400:
-                    merged[symbol] = asdict(pos)
+                # Persist closed positions too (do NOT prune by entry age) — pruning
+                # a just-closed position held >24h left Rust's open copy as the only
+                # one on disk → re-close loops. Re-opens (different entry_timestamp)
+                # still overwrite, bounding growth.
+                merged[symbol] = asdict(pos)
             # Atomic publish: write temp, then replace.
             tmp_path.write_text(json.dumps(merged, indent=2, default=str))
             os.replace(tmp_path, path)
