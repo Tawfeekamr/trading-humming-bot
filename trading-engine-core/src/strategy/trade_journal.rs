@@ -33,7 +33,8 @@ fn migrations() -> Migrations<'static> {
             duration_mins   INTEGER
         );
         CREATE INDEX IF NOT EXISTS idx_trades_ts ON trades(timestamp);
-        CREATE INDEX IF NOT EXISTS idx_trades_engine ON trades(engine);",
+        CREATE INDEX IF NOT EXISTS idx_trades_engine ON trades(engine);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_trades_dedup ON trades(engine, timestamp, pair, pnl);",
     )])
 }
 
@@ -82,7 +83,7 @@ impl UnifiedTradeJournal {
     ) {
         let conn = self.conn.lock().unwrap();
         if let Err(e) = conn.execute(
-            "INSERT INTO trades
+            "INSERT OR IGNORE INTO trades
              (timestamp, engine, pair, side, entry_price, exit_price, quantity, pnl, exit_reason, duration_mins)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             rusqlite::params![
@@ -111,11 +112,9 @@ impl UnifiedTradeJournal {
         ];
         let mut total = 0usize;
         let conn = self.conn.lock().unwrap();
-        // Rebuild from the per-engine journals each startup: trades.db is derived
-        // (the journals are the source of truth during the migration), so a clear +
-        // re-copy is always correct and self-heals any backfill bug (like the
-        // signal symbol mismatch). Engines also direct-write, but the rebuild wins.
-        let _ = conn.execute("DELETE FROM trades", []);
+        // Append from the per-engine journals (INSERT OR IGNORE dedupes by the
+        // unique index on engine+timestamp+pair+pnl). No clear — history is
+        // retained even after the journal modules are deleted (the DB files persist).
         for (engine, db, tbl, col, pair_col, where_clause) in sources {
             if !std::path::Path::new(db).exists() { continue; }
             match Connection::open(db) {
@@ -129,7 +128,7 @@ impl UnifiedTradeJournal {
                         for row in rows.flatten() {
                             let (ts, pair, pnl) = row;
                             let _ = conn.execute(
-                                "INSERT INTO trades (timestamp, engine, pair, pnl, exit_reason) VALUES (?1, ?2, ?3, ?4, 'backfilled')",
+                                "INSERT OR IGNORE INTO trades (timestamp, engine, pair, pnl, exit_reason) VALUES (?1, ?2, ?3, ?4, 'backfilled')",
                                 rusqlite::params![ts, engine, pair, pnl],
                             );
                             total += 1;

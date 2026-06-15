@@ -3,7 +3,7 @@ use serde::{Serialize, Deserialize};
 use crate::config::GridConfig;
 use crate::models::order::OrderSide;
 use crate::indicators::{SupportResistance, LevelKind, Adx, Choppiness, Atr};
-use crate::strategy::grid_journal::GridJournal;
+// Journal removed — unified trades.db.
 use tracing::{info, debug, warn};
 
 const MIN_NOTIONAL: f64 = 5.0;
@@ -74,7 +74,6 @@ pub struct GridStrategy {
     diag_near_support: bool,
     diag_near_resistance: bool,
     state_dir: String,
-    journal: Option<GridJournal>,
     last_base_balance: f64,
     last_quote_balance: f64,
 }
@@ -91,7 +90,6 @@ impl GridStrategy {
 
     /// Construct with an explicit state directory (tests use a temp dir).
     pub fn new_with_state_dir(pair: &str, config: &GridConfig, tick_size: f64, step_size: f64, state_dir: &str) -> Self {
-        let journal = GridJournal::new().ok();
         let mut me = Self {
             pair: pair.to_string(),
             config: config.clone(),
@@ -122,7 +120,6 @@ impl GridStrategy {
             diag_near_support: false,
             diag_near_resistance: false,
             state_dir: state_dir.to_string(),
-            journal,
             last_base_balance: 0.0,
             last_quote_balance: 0.0,
         };
@@ -678,14 +675,6 @@ impl Strategy for GridStrategy {
 
         self.record_pnl(pnl);
 
-        // Journal the fill + persist summary state so it survives restart.
-        if let Some(ref journal) = self.journal {
-            let level = fill.order_id
-                .rfind("_buy_").map(|i| &fill.order_id[i + 1..])
-                .or_else(|| fill.order_id.rfind("_sell_").map(|i| &fill.order_id[i + 1..]))
-                .unwrap_or("?");
-            journal.log_fill(&self.pair, fill.side, level, fill.price, fill.quantity, fill.fee, pnl, self.total_pnl);
-        }
         crate::strategy::trade_journal::log_unified("grid", &self.pair, None, Some(fill.price), Some(fill.quantity), pnl, Some("grid_fill"), None);
         self.save_state_internal();
         Ok(Vec::new())

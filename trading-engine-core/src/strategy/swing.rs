@@ -3,7 +3,7 @@ use crate::indicators::{Adx, Atr, CandlestickPatterns, Pattern, DonchianChannel,
 use crate::models::bar::Bar;
 use crate::models::order::OrderSide;
 use crate::strategy::{Strategy, TickContext, StrategyStatus};
-use crate::strategy::swing_journal::SwingJournal;
+// Journal removed — unified trades.db.
 use crate::connector::types::{OrderRequest, Fill, OrderTypeReq, TimeInForceReq};
 use crate::notifications::TelegramBot;
 use async_trait::async_trait;
@@ -27,7 +27,6 @@ pub struct SwingStrategy {
     config: SwingConfig,
     position: Option<SwingPosition>,
     realized_pnl: f64,
-    journal: Option<SwingJournal>,
     telegram: TelegramBot,
     pending_buy: bool,
     pending_sell: bool,
@@ -110,13 +109,11 @@ fn aggregate_closed_bars(bars: &[Bar], interval_ms: i64) -> Vec<Bar> {
 
 impl SwingStrategy {
     pub fn new(pair: &str, config: &SwingConfig, telegram: TelegramBot) -> Self {
-        let journal = SwingJournal::new().ok();
         Self {
             pair: pair.to_string(),
             config: config.clone(),
             position: None,
             realized_pnl: 0.0,
-            journal,
             telegram,
             pending_buy: false,
             pending_sell: false,
@@ -457,12 +454,8 @@ impl Strategy for SwingStrategy {
                     self.realized_pnl += pnl;
                     pos.remaining_qty -= fill.quantity;
                     pos.midline_scaled_out = true;
-                    if let Some(j) = &self.journal {
                         let dur = (fill.timestamp - pos.entry_time) / 60_000;
-                        let rm = format!("{:?}", self.config.runner_exit);
-                        j.log_trade(&self.pair, pos.side, pos.entry_price, fill.price, fill.quantity, pnl, "ScaleOut", dur, &rm);
                         crate::strategy::trade_journal::log_unified("swing", &self.pair, Some(pos.entry_price), Some(fill.price), Some(fill.quantity), pnl, Some("ScaleOut"), Some(dur));
-                    }
                     let msg = format!("🔔 *Swing Scale-Out*\nPair: {}\nPrice: {:.4}\nPnL: {:.2} USDT", self.pair, fill.price, pnl);
                     let _ = self.telegram.send(&msg).await;
                     Some((pos.stop_loss, pos.remaining_qty))
@@ -498,12 +491,8 @@ impl Strategy for SwingStrategy {
                         else if cid.contains("ChandelierStop") { "ChandelierStop" }
                         else if cid.contains("OppositeBand") { "OppositeBand" }
                         else { "Exit" };
-                    if let Some(j) = &self.journal {
                         let dur = (fill.timestamp - pos.entry_time) / 60_000;
-                        let rm = format!("{:?}", self.config.runner_exit);
-                        j.log_trade(&self.pair, pos.side, pos.entry_price, fill.price, fill.quantity, pnl, reason, dur, &rm);
                         crate::strategy::trade_journal::log_unified("swing", &self.pair, Some(pos.entry_price), Some(fill.price), Some(fill.quantity), pnl, Some(reason), Some(dur));
-                    }
                     let msg = format!("🔔 *Swing Exit* ({})\nPair: {}\nPrice: {:.4}\nPnL: {:.2} USDT",
                                       reason, self.pair, fill.price, pnl);
                     let _ = self.telegram.send(&msg).await;
@@ -525,9 +514,7 @@ impl Strategy for SwingStrategy {
     }
 
     async fn on_start(&mut self) -> Result<Vec<OrderRequest>> {
-        if let Some(j) = &self.journal {
-            self.realized_pnl = j.realized_pnl(&self.pair);
-        }
+        self.realized_pnl = crate::strategy::trade_journal::realized_pnl("swing", &self.pair);
         self.load_position();
         Ok(Vec::new())
     }

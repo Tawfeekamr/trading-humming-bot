@@ -3,7 +3,7 @@ use crate::indicators::{Ema, Rsi, Atr, Adx, Choppiness, Macd, VolumeSma};
 use crate::models::bar::Bar;
 use crate::models::order::OrderSide;
 use crate::strategy::{Strategy, TickContext, StrategyStatus};
-use crate::strategy::trend_journal::TrendJournal;
+// Journal removed — trades go to the unified trades.db via log_unified.
 use crate::connector::types::{OrderRequest, Fill, OrderTypeReq, TimeInForceReq};
 use crate::notifications::TelegramBot;
 use async_trait::async_trait;
@@ -108,25 +108,11 @@ pub struct TrendStrategy {
     /// lagging ema_fast) to compute direction + unrealized MTM, so "Ready" only
     /// shows when an entry would actually fire (price must be > ema_slow).
     last_price: f64,
-    // Trade journal (fail-soft: None if the DB cannot be opened)
-    journal: Option<TrendJournal>,
     telegram: TelegramBot,
 }
 
 impl TrendStrategy {
     pub fn new(pair: &str, config: &TrendConfig, telegram: TelegramBot) -> Self {
-        let journal = match TrendJournal::new() {
-            Ok(j) => Some(j),
-            Err(e) => {
-                warn!("Trend journal disabled for {}: {}", pair, e);
-                None
-            }
-        };
-        Self::new_with_journal(pair, config, journal, telegram)
-    }
-
-    /// Construct with an explicit journal (used by tests; production uses `new`).
-    pub fn new_with_journal(pair: &str, config: &TrendConfig, journal: Option<TrendJournal>, telegram: TelegramBot) -> Self {
         let capital = config.capital;
         let mut me = Self {
             pair: pair.to_string(),
@@ -171,7 +157,6 @@ impl TrendStrategy {
             initial_capital: capital,
             realized_pnl: 0.0,
             last_price: 0.0,
-            journal,
             telegram,
         };
         me.load_position();
@@ -193,18 +178,12 @@ impl TrendStrategy {
         now_ts: i64,
         entry_time: i64,
     ) {
-        if let Some(j) = &self.journal {
-            let duration = if now_ts > 0 && entry_time > 0 {
-                ((now_ts - entry_time) / 60).max(0)
-            } else {
-                0
-            };
-            j.log_trade(
-                &self.pair, side, entry_price, exit_price, amount, pnl,
-                stop_loss, take_profit, exit_reason, duration,
-            );
-            crate::strategy::trade_journal::log_unified("trend", &self.pair, Some(entry_price), Some(exit_price), Some(amount), pnl, Some(exit_reason), Some(duration));
-        }
+        let duration = if now_ts > 0 && entry_time > 0 {
+            ((now_ts - entry_time) / 60).max(0)
+        } else {
+            0
+        };
+        crate::strategy::trade_journal::log_unified("trend", &self.pair, Some(entry_price), Some(exit_price), Some(amount), pnl, Some(exit_reason), Some(duration));
     }
 
     pub fn update_indicators(&mut self, bar: &Bar) {
@@ -639,8 +618,8 @@ impl Strategy for TrendStrategy {
         // while flat would silently reset realized_pnl to $0 — hiding the
         // engine's real result from /trend's total and from position-sizing
         // capital (calculate_qty uses capital + realized_pnl).
-        if let Some(j) = &self.journal {
-            self.realized_pnl = j.realized_pnl(&self.pair);
+        if true {
+            self.realized_pnl = crate::strategy::trade_journal::realized_pnl("trend", &self.pair);
         }
         Ok(Vec::new())
     }

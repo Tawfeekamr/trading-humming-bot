@@ -1,6 +1,6 @@
 use crate::config::{MeanReversionConfig, ClassifierCfg};
 use crate::strategy::{Strategy, TickContext, StrategyStatus, MarketRegime};
-use crate::strategy::mean_reversion_journal::MeanReversionJournal;
+// Journal removed — unified trades.db.
 use crate::connector::types::{OrderRequest, Fill, OrderTypeReq};
 use crate::models::order::OrderSide;
 use crate::notifications::TelegramBot;
@@ -58,7 +58,6 @@ pub struct MeanReversionStrategy {
     trades: u32,
     wins: u32,
     entry_time: i64,
-    journal: Option<MeanReversionJournal>,
 }
 
 /// Persisted MR summary state (cumulative P&L across restarts).
@@ -83,7 +82,6 @@ impl MeanReversionStrategy {
             trades: 0,
             wins: 0,
             entry_time: 0,
-            journal: MeanReversionJournal::new().ok(),
         };
         me.load_state();
         me
@@ -218,9 +216,6 @@ impl Strategy for MeanReversionStrategy {
                     let _ = tg.send(&format!("📈 MR {} TP @ ${:.2} | PnL: ${:+.2}", pair, mid, pnl)).await;
                 });
                 self.save_state();
-                if let Some(j) = &self.journal {
-                    j.log_trade(&self.pair, self.entry_price, mid, self.position_qty, pnl, "TakeProfit", (now - self.entry_time) / 60_000);
-                }
                 crate::strategy::trade_journal::log_unified("mr", &self.pair, Some(self.entry_price), Some(mid), Some(self.position_qty), pnl, Some("TakeProfit"), Some((now - self.entry_time) / 60_000));
                 orders.push(OrderRequest {
                     symbol: self.pair.replace("-", ""), side: OrderSide::Sell,
@@ -241,9 +236,6 @@ impl Strategy for MeanReversionStrategy {
                     let _ = tg.send(&format!("⚠️ MR {} SL @ ${:.2} | PnL: ${:+.2}", pair, mid, pnl)).await;
                 });
                 self.save_state();
-                if let Some(j) = &self.journal {
-                    j.log_trade(&self.pair, self.entry_price, mid, self.position_qty, pnl, "StopLoss", (now - self.entry_time) / 60_000);
-                }
                 crate::strategy::trade_journal::log_unified("mr", &self.pair, Some(self.entry_price), Some(mid), Some(self.position_qty), pnl, Some("StopLoss"), Some((now - self.entry_time) / 60_000));
                 orders.push(OrderRequest {
                     symbol: self.pair.replace("-", ""), side: OrderSide::Sell,
