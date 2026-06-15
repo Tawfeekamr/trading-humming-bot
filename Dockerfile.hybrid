@@ -60,4 +60,4 @@ ENV EXECUTION_MODE=rust
 ENV RUST_ENGINE_URL=http://rust-engine:3030
 ENV PYTHONPATH=/app
 
-ENTRYPOINT ["python", "-m", "src.trading_engine.runner"]
+ENTRYPOINT ["python", "-m", "src.run_signal_listener"]
