@@ -426,7 +426,9 @@ class TelegramCommandHandler:
             update.message.reply_text(f"⚠️ Error: {e}")
 
     def _cmd_grid_status(self, update, context):
-        try:
+        self._rust_strategy_status(update, "grid", "Grid Engine", "📊")
+        return
+        try:  # dead code — old implementation
             if not self._require_grid(update):
                 return
             logger.info("Telegram /status received")
@@ -1208,7 +1210,9 @@ class TelegramCommandHandler:
     # ── Trend Commands ────────────────────────────────────────────
 
     def _cmd_trend_status(self, update, context):
-        try:
+        self._rust_strategy_status(update, "trend", "Trend Engine", "📈")
+        return
+        try:  # dead code — old implementation
             logger.info("Telegram /trend_status received")
             strategy = self.strategy
 
@@ -1498,7 +1502,37 @@ class TelegramCommandHandler:
     # ── Signal Copy Commands ─────────────────────────────────────────
 
     def _cmd_signal_status(self, update, context):
-        engine = getattr(self.strategy, '_signal_engine', None)
+        try:
+            import json, sqlite3
+            logger.info("Telegram /signal_status received")
+            pos = {}
+            try:
+                with open("data/signal_positions.json") as f:
+                    pos = json.load(f)
+            except Exception:
+                pass
+            open_pos = {k: v for k, v in pos.items() if not v.get("is_closed")}
+            c = sqlite3.connect("data/signal_journal.db")
+            summary = c.execute("SELECT COUNT(*), COALESCE(SUM(realized_pnl),0) FROM signal_trades WHERE action LIKE 'CLOSE%'").fetchone()
+            c.close()
+            lines = ["📡 <b>SIGNAL ENGINE</b>", "•••"]
+            lines.append(f"State: LISTENING")
+            lines.append(f"Open positions: {len(open_pos)}/5")
+            lines.append(f"Realized P&L: ${summary[1]:.2f} ({summary[0]} trades)")
+            if open_pos:
+                lines.append("•••")
+                lines.append("<b>Open Positions:</b>")
+                for sym, p in list(open_pos.items())[:5]:
+                    entry = p.get("entry_price", 0)
+                    rpn = p.get("realized_pnl", 0)
+                    tp_marks = "".join("✅" if p.get(f"tp{i}_hit") else "⬜" for i in range(1, 4))
+                    lines.append(f"  {sym}: ${entry:.4f} TPs={tp_marks} R:${rpn:.2f}")
+            lines.append("•••")
+            update.message.reply_text("\n".join(lines), parse_mode="HTML")
+        except Exception as e:
+            update.message.reply_text(f"⚠️ Error: {e}")
+        return
+        engine = getattr(self.strategy, '_signal_engine', None)  # dead code below
         if engine is None:
             update.message.reply_text("Signal engine not configured.")
             return
@@ -1794,6 +1828,35 @@ class TelegramCommandHandler:
         except Exception as e:
             logger.error(f"Error in /mean_status: {e}")
             update.message.reply_text(f"⚠️ Error getting mean-reversion status: {e}")
+
+    def _rust_strategy_status(self, update, engine_name, title, emoji):
+        """Generic Rust-API strategy status. Calls /api/v1/strategies, filters by name."""
+        try:
+            logger.info(f"Telegram /{engine_name}_status received")
+            strategies = self._rust_api("/api/v1/strategies") or []
+            matching = [s for s in strategies if s.get("name") == engine_name]
+            if not matching:
+                update.message.reply_text(f"{title} not active or unavailable.")
+                return
+            import html as _html
+            lines = [f"{emoji} <b>{title.upper()}</b>", "•••"]
+            total_pnl = 0.0
+            for s in matching:
+                pair = s.get("pair", "?").replace("-", "/")
+                state = s.get("state", "?")
+                pnl = s.get("pnl", 0)
+                details = s.get("details", "")
+                total_pnl += pnl
+                lines.append(f"<b>{pair}:</b> {state}")
+                if details:
+                    lines.append(f"  <i>{_html.escape(details)}</i>")
+                lines.append(f"  P&L: {'+' if pnl >= 0 else ''}${pnl:.2f}")
+            lines.append("•••")
+            lines.append(f"<b>Total P&L: {'+' if total_pnl >= 0 else ''}${total_pnl:.2f}</b>")
+            update.message.reply_text("\n".join(lines), parse_mode="HTML")
+        except Exception as e:
+            logger.error(f"Error in /{engine_name}_status: {e}")
+            update.message.reply_text(f"⚠️ Error: {e}")
 
     def _cmd_swing_status(self, update, context):
         """Show swing strategy status from Rust engine API."""
