@@ -23,7 +23,7 @@ pub struct SignalEngine {
 impl SignalEngine {
     pub fn new(config: &SignalConfig, telegram: Option<TelegramBot>) -> Self {
         let risk = SignalRiskGuard::new(config);
-        let position_mgr = SignalPositionManager::new(config);
+        let mut position_mgr = SignalPositionManager::new(config);
 
         let journal = match SignalJournal::new() {
             Ok(j) => Arc::new(j),
@@ -33,6 +33,13 @@ impl SignalEngine {
                 panic!("Signal journal creation failed");
             }
         };
+
+        // Self-heal: mark any open position closed if the journal already closed
+        // it. Clears stale-open positions left by the Rust/Python dual-write era so
+        // they aren't re-managed / re-closed (the duplicate-close bug).
+        if let Ok(closed) = journal.closed_entries() {
+            position_mgr.reconcile_closed(&closed);
+        }
 
         Self {
             enabled: config.enabled,

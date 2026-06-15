@@ -149,6 +149,20 @@ impl SignalJournal {
         }
     }
 
+    /// Every CLOSE_* trade as (symbol, entry_price, exit_reason, tp3_hit) — used
+    /// by the startup self-heal to mark open-but-already-closed positions closed.
+    pub fn closed_entries(&self) -> Result<Vec<(String, f64, String, bool)>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT symbol, entry_price, exit_reason, tp3_hit FROM signal_trades WHERE action LIKE 'CLOSE_%'"
+        )?;
+        let out = stmt.query_map([], |row| {
+            let tp3: i32 = row.get(3)?;
+            Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?, row.get::<_, String>(2)?, tp3 != 0))
+        })?.collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(out)
+    }
+
     pub fn recent_signals(&self, limit: usize) -> Vec<RecentSignal> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = match conn.prepare(

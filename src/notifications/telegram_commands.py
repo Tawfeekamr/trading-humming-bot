@@ -115,6 +115,7 @@ class TelegramCommandHandler:
                     "<b>Signal:</b> /signal_status /signal_pnl /signal_channels /signal_history /signal_pause /signal_resume /signal_close /signal_inject\n"
                     "<b>Swing:</b> /swing_status /swing_pnl\n"
                     "<b>Mean-Reversion:</b> /mean_status /mean_pnl\n"
+                    "<b>All:</b> /pnl_all (today/week/month consolidated)\n"
                     "••• /help for details"
                 )
                 self._tg_post("sendMessage", data={
@@ -177,6 +178,7 @@ class TelegramCommandHandler:
             # Grid
             "grid_status": self._cmd_grid_status,
             "pnl": self._cmd_pnl,
+            "pnl_all": self._cmd_pnl_all,
             "balance": self._cmd_balance,
             "capital": self._cmd_capital,
             "pause": self._cmd_pause,
@@ -554,6 +556,57 @@ class TelegramCommandHandler:
         except Exception as e:
             logger.error(f"Error in /pnl: {e}")
             update.message.reply_text(f"⚠️ Error getting P&L: {e}")
+
+    def _cmd_pnl_all(self, update, context):
+        """Consolidated realized P&L across all engines (today / week / month)."""
+        try:
+            logger.info("Telegram /pnl_all received")
+            import sqlite3
+            from datetime import datetime, timezone, timedelta
+            now = datetime.now(timezone.utc)
+            today = now.strftime("%Y-%m-%d")                              # since UTC midnight
+            week = (now - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%S")
+            month = (now - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%S")
+            windows = [("Today", today), ("Week", week), ("Month", month)]
+            # (label, db, table, pnl column, extra WHERE). Only CLOSE rows count
+            # for signal (open/skip rows carry no realized PnL).
+            sources = [
+                ("Grid",   "data/grid_journal.db",   "grid_trades",   "realized_pnl", ""),
+                ("Trend",  "data/trend_journal.db",  "trend_trades",  "pnl", ""),
+                ("Swing",  "data/swing_journal.db",  "swing_trades",  "pnl", ""),
+                ("Signal", "data/signal_journal.db", "signal_trades", "realized_pnl", "AND action LIKE 'CLOSE%'"),
+            ]
+            totals = [0.0, 0.0, 0.0]
+            body = ""
+            for name, db, tbl, col, extra in sources:
+                per = []
+                try:
+                    conn = sqlite3.connect(db)
+                    for i, (_, cutoff) in enumerate(windows):
+                        v = conn.execute(
+                            f"SELECT COALESCE(SUM({col}),0) FROM {tbl} WHERE timestamp >= ? {extra}",
+                            (cutoff,)).fetchone()[0] or 0.0
+                        per.append(v)
+                        totals[i] += v
+                    conn.close()
+                except Exception as e:
+                    logger.warning(f"pnl_all {name} ({db}): {e}")
+                    per = [0.0, 0.0, 0.0]
+                body += f"{name:<7}" + "".join(f"{self._fmt_pnl(v):>11}" for v in per) + "\n"
+            total_line = "TOTAL  " + "".join(f"{self._fmt_pnl(t):>11}" for t in totals)
+            update.message.reply_text(
+                "📊 <b>Consolidated P&amp;L</b> (realized)\n"
+                "•••\n"
+                f"{'':<7}{'Today':>11}{'Week':>11}{'Month':>11}\n"
+                f"{body}"
+                "•••\n"
+                f"{total_line}\n"
+                "<i>signal = CLOSE rows (incl. pre-fix duplicates); MR not journaled</i>",
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            logger.error(f"Error in /pnl_all: {e}")
+            update.message.reply_text(f"⚠️ Error: {e}")
 
     def _cmd_balance(self, update, context):
         try:

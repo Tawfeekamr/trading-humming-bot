@@ -141,6 +141,26 @@ impl SignalPositionManager {
         }
     }
 
+    /// Self-heal: mark any open position closed if `closed` (from the journal)
+    /// shows it was already closed — matched by symbol + entry_price so a new
+    /// open for the same symbol isn't falsely closed. Clears stale-open positions
+    /// left by the Rust/Python dual-write era so they aren't re-managed/re-closed.
+    pub fn reconcile_closed(&mut self, closed: &[(String, f64, String, bool)]) {
+        let mut changed = false;
+        for (symbol, entry_price, reason, tp3) in closed {
+            if let Some(pos) = self.positions.get_mut(symbol) {
+                if !pos.is_closed && (pos.entry_price - entry_price).abs() < 1e-6 {
+                    pos.is_closed = true;
+                    pos.exit_reason = reason.clone();
+                    if *tp3 { pos.tp3_hit = true; }
+                    info!("Signal self-heal: {} marked closed (journal CLOSE @ entry ${:.4})", symbol, entry_price);
+                    changed = true;
+                }
+            }
+        }
+        if changed { self.save_state(); }
+    }
+
     fn save_state(&self) {
         use fs2::FileExt;
         let path = self.data_dir.join("signal_positions.json");
