@@ -7,6 +7,9 @@ import logging
 import os
 
 import yaml
+from dotenv import load_dotenv
+
+load_dotenv()  # Load .env (TELEGRAM_API_ID, TELEGRAM_API_HASH, DEEPSEEK_API_KEY, etc.)
 
 logger = logging.getLogger(__name__)
 
