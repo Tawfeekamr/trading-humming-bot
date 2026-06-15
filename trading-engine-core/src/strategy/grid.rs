@@ -299,8 +299,11 @@ impl GridStrategy {
                 return (false, format!("ML regime=Trending (conf={:.2}>={:.2})", ml_confidence, self.config.ml_trending_block_threshold));
             }
         } else {
-            // Unknown regime → block (not safe to assume ranging)
-            return (false, "ML regime unknown (None)".to_string());
+            // ML regime unknown (cache expired between ~3min pushes). Don't block —
+            // fall through to the TA gates below (ADX/choppiness/ATR/EMA-200) which
+            // independently detect ranging and provide the same protection. Blocking
+            // on None caused flapping: activate → cache expires → deactivate → repeat,
+            // so orders never rested long enough to fill.
         }
 
         // 2. Indicator warm-up check
@@ -805,7 +808,10 @@ mod tests {
     }
 
     #[test]
-    fn test_gate_ml_none_blocks() {
+    fn test_gate_ml_none_falls_through_to_ta() {
+        // ML regime=None (cache stale) should NOT block with "ML regime unknown".
+        // Instead, fall through to TA gates (which may block for their own reasons
+        // like warmup, but NOT for ML staleness). This is the flap fix.
         let mut grid = make_grid();
         grid.diag_adx = 15.0;
         grid.diag_chop = 65.0;
@@ -813,9 +819,10 @@ mod tests {
         grid.diag_bars_count = 50;
         warm_adx(&mut grid);
 
-        let (deploy, reason) = grid.should_deploy_grid(100.0, None, 0.0);
-        assert!(!deploy);
-        assert!(reason.contains("unknown") || reason.contains("None"), "Expected 'unknown' in reason, got: {}", reason);
+        let (_deploy, reason) = grid.should_deploy_grid(100.0, None, 0.0);
+        // The reason must NOT be "ML regime unknown" — that block is removed.
+        assert!(!reason.contains("unknown") && !reason.contains("None"),
+            "Grid must not block on ML regime=None; got reason: {}", reason);
     }
 
     #[test]
