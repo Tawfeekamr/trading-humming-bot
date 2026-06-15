@@ -117,6 +117,13 @@ impl UnifiedTradeJournal {
         // This prevents the duplication bug where append-only backfills accumulated
         // one copy per restart (10 restarts = 10× inflation).
         let _ = conn.execute("DELETE FROM trades WHERE exit_reason = 'backfilled'", []);
+        // Purge phantom MR trades from the bar-replay bug (all logged at 22:39 on
+        // 2026-06-15, re-traded historical ETH bars). The per-tick replay guard
+        // prevents new ones; this cleans the residue.
+        let _ = conn.execute(
+            "DELETE FROM trades WHERE engine = 'mr' AND timestamp LIKE '2026-06-15T22:39%'",
+            [],
+        );
         for (engine, db, tbl, col, pair_col, where_clause) in sources {
             if !std::path::Path::new(db).exists() { continue; }
             match Connection::open(db) {
