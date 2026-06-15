@@ -341,6 +341,20 @@ impl GridStrategy {
             return (false, format!("Volatility too high, NATR={:.4} (>{:.3})", natr, self.config.natr_ceil));
         }
 
+        // 5. Fee profitability: per-level profit must exceed round-trip fees.
+        // Round-trip = 0.2% (0.1% LIMIT_MAKER each side). Spacing = NATR × mult.
+        // Require spacing >= 0.3% (0.2% fee × 1.5 safety margin) so each level
+        // nets at least 0.1% profit after fees. Prevents the grid from deploying
+        // when volatility is too low for fees to be covered.
+        let spacing_pct = natr * self.config.spacing_multiplier;
+        const MIN_SPACING_FOR_FEES: f64 = 0.003; // 0.3%
+        if spacing_pct < MIN_SPACING_FOR_FEES {
+            return (false, format!(
+                "Spacing too thin for fees: {:.4}% < {:.1}% (NATR={:.4} × mult={:.1})",
+                spacing_pct * 100.0, MIN_SPACING_FOR_FEES * 100.0, natr, self.config.spacing_multiplier,
+            ));
+        }
+
         // All conditions met
         (true, String::new())
     }
