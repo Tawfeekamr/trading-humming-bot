@@ -172,7 +172,7 @@ mean_reversion:
 swing:
   enabled: true
   enabled_pairs: ["ETH-USDT"]       # carrier pair only (backtest: ETH positive all stops/modes)
-  runner_exit: "BandOrChandelier"
+  runner_exit: "band_or_chandelier"   # serde rename_all=snake_case on RunnerExitMode
   htf_period: "4h"                  # aggregate the 1h feed → 4h regime/band
   ltf_period: "1h"                  # LTF = the global feed
   donchian_period: 20
