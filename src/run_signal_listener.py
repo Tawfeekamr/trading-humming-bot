@@ -47,6 +47,24 @@ async def main():
     engine.start_listener()
     logger.info("Signal Copy Engine started — listening to Telegram channels")
 
+    # Start the Telegram command handler (/pnl_all, /trend_status, etc.)
+    # The old trading_engine deps are gone — pass dummies. Commands that read
+    # SQLite journals directly (/pnl_all, /trend_pnl) work; strategy-proxy
+    # commands use safe defaults.
+    from types import SimpleNamespace
+    from src.notifications.telegram_commands import TelegramCommandHandler
+
+    handler = TelegramCommandHandler(
+        journal=None,
+        state_machine=SimpleNamespace(),
+        circuit_breaker=SimpleNamespace(halted=False),
+        position_guard=SimpleNamespace(),
+        event_logger=SimpleNamespace(),
+        strategy=SimpleNamespace(),
+    )
+    handler.start()
+    logger.info("Telegram command handler started")
+
     while True:
         try:
             engine.tick()
