@@ -1,15 +1,18 @@
 """Signal listener entrypoint — replaces the deleted src/trading_engine/runner.py.
 Starts the SignalEngine (Telethon channel listener + DeepSeek parser) which opens
 positions in signal_positions.json. The Rust engine manages exits (TP/SL/close).
+Also runs the Telegram command handler (poll_once loop) for /pnl_all etc.
 """
 import asyncio
 import logging
 import os
+import threading
+import time
 
 import yaml
 from dotenv import load_dotenv
 
-load_dotenv()  # Load .env (TELEGRAM_API_ID, TELEGRAM_API_HASH, DEEPSEEK_API_KEY, etc.)
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +20,16 @@ logger = logging.getLogger(__name__)
 def load_config():
     with open("config/strategy.yaml") as f:
         return yaml.safe_load(f)
+
+
+def _poll_commands(handler):
+    """Background thread: poll Telegram for /commands every second."""
+    while True:
+        try:
+            handler.poll_once()
+        except Exception as e:
+            logger.error(f"Command poll error: {e}")
+        time.sleep(1)
 
 
 async def main():
@@ -27,30 +40,7 @@ async def main():
     config = load_config()
     logger.info("Config loaded from config/strategy.yaml")
 
-    signal_cfg = config.get("signal_copy", {})
-    if not signal_cfg.get("enabled", False):
-        logger.info("Signal Copy Engine disabled — exiting")
-        return
-
-    from src.signals.signal_engine import SignalEngine
-
-    engine = SignalEngine(
-        config=signal_cfg,
-        btc_regime_fn=lambda: ("RANGING", 0.0, 0.0),
-        telegram_send_fn=lambda msg: logger.info("Signal TG: %s", msg),
-        # Order execution is handled by the Rust engine (reads signal_positions.json).
-        # These fns are no-ops — the signal engine tracks positions; Rust places orders.
-        buy_fn=lambda s, a, p, ot="MARKET": logger.info("Signal buy %s %s @ %s (Rust executes)", s, a, p),
-        sell_fn=lambda s, a, p, ot="MARKET": logger.info("Signal sell %s %s @ %s (Rust executes)", s, a, p),
-        get_price_fn=lambda s: 0.0,
-    )
-    engine.start_listener()
-    logger.info("Signal Copy Engine started — listening to Telegram channels")
-
-    # Start the Telegram command handler (/pnl_all, /trend_status, etc.)
-    # The old trading_engine deps are gone — pass dummies. Commands that read
-    # SQLite journals directly (/pnl_all, /trend_pnl) work; strategy-proxy
-    # commands use safe defaults.
+    # Start Telegram command handler in a background thread
     from types import SimpleNamespace
     from src.notifications.telegram_commands import TelegramCommandHandler
 
@@ -63,14 +53,38 @@ async def main():
         strategy=SimpleNamespace(),
     )
     handler.start()
-    logger.info("Telegram command handler started")
+    poll_thread = threading.Thread(target=_poll_commands, args=(handler,), daemon=True)
+    poll_thread.start()
+    logger.info("Telegram command handler polling started")
 
+    # Start signal listener
+    signal_cfg = config.get("signal_copy", {})
+    if not signal_cfg.get("enabled", False):
+        logger.info("Signal Copy Engine disabled — commands still running")
+    else:
+        from src.signals.signal_engine import SignalEngine
+
+        engine = SignalEngine(
+            config=signal_cfg,
+            btc_regime_fn=lambda: ("RANGING", 0.0, 0.0),
+            telegram_send_fn=lambda msg: logger.info("Signal TG: %s", msg),
+            buy_fn=lambda s, a, p, ot="MARKET": logger.info("Signal buy %s %s @ %s (Rust executes)", s, a, p),
+            sell_fn=lambda s, a, p, ot="MARKET": logger.info("Signal sell %s %s @ %s (Rust executes)", s, a, p),
+            get_price_fn=lambda s: 0.0,
+        )
+        engine.start_listener()
+        logger.info("Signal Copy Engine started — listening to Telegram channels")
+
+        while True:
+            try:
+                engine.tick()
+            except Exception as e:
+                logger.error("Signal tick error: %s", e)
+            await asyncio.sleep(1)
+
+    # If signal disabled, just keep the command thread alive
     while True:
-        try:
-            engine.tick()
-        except Exception as e:
-            logger.error("Signal tick error: %s", e)
-        await asyncio.sleep(1)
+        await asyncio.sleep(3600)
 
 
 if __name__ == "__main__":
