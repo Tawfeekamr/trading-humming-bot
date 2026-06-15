@@ -197,23 +197,37 @@ impl GateioRest {
         let path = format!("{}/spot/orders", API_PREFIX);
         let url = format!("{}/spot/orders", self.base_url);
 
+        // Gate.io spot order endpoint supports market/limit (post-only via
+        // time_in_force=poc). STOP_MARKET needs the separate conditional-order
+        // API and is unsupported here — fail loudly rather than mis-map it.
+        let tif_for = |t: TimeInForceReq| -> &'static str {
+            match t {
+                TimeInForceReq::Gtc => "gtc",
+                TimeInForceReq::Ioc => "ioc",
+                TimeInForceReq::Fok => "fok",
+            }
+        };
+        let (order_type_str, tif_str): (&str, Option<&str>) = match req.order_type {
+            OrderTypeReq::Market => ("market", req.time_in_force.map(tif_for)),
+            OrderTypeReq::Limit => ("limit", req.time_in_force.map(tif_for)),
+            OrderTypeReq::LimitMaker => ("limit", Some("poc")), // post-only
+            OrderTypeReq::StopMarket { .. } => {
+                return Err(anyhow::anyhow!(
+                    "Gate.io spot does not support STOP_MARKET via /spot/orders (needs conditional-order API)"
+                ));
+            }
+        };
+
         let body = serde_json::json!({
             "currency_pair": pair,
             "side": match req.side {
                 OrderSide::Buy => "buy",
                 OrderSide::Sell => "sell",
             },
-            "type": match req.order_type {
-                OrderTypeReq::Market => "market",
-                OrderTypeReq::Limit => "limit",
-            },
+            "type": order_type_str,
             "amount": req.quantity.to_string(),
             "price": req.price.map(|p| p.to_string()).unwrap_or_default(),
-            "time_in_force": req.time_in_force.map(|tif| match tif {
-                TimeInForceReq::Gtc => "gtc",
-                TimeInForceReq::Ioc => "ioc",
-                TimeInForceReq::Fok => "fok",
-            }),
+            "time_in_force": tif_str,
             "text": req.client_order_id.clone().unwrap_or_default(),
         });
 

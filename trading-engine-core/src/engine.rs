@@ -26,6 +26,10 @@ pub struct Engine {
     order_books: HashMap<String, OrderBook>,
     status_cache: StrategyStatusCache,
     regime_cache: RegimeCache,
+    /// client_order_id (owner-tagged) → (symbol, exchange order_id) for orders
+    /// this engine has placed, so strategies can cancel their own resting orders
+    /// (e.g. swing's resting TP1 / hard stop) via `pending_cancels`.
+    placed_orders: HashMap<String, (String, String)>,
 }
 
 impl Engine {
@@ -49,6 +53,7 @@ impl Engine {
             order_books: HashMap::new(),
             status_cache,
             regime_cache,
+            placed_orders: HashMap::new(),
         };
         // Init signal engine after self.config is set
         engine.signal = engine.config.signal.as_ref().filter(|s| s.enabled).map(|sc| {
@@ -173,6 +178,7 @@ impl Engine {
 
     async fn tick_strategies(&mut self) -> Result<()> {
         let mut all_orders = Vec::new();
+        let mut all_cancels: Vec<(usize, String)> = Vec::new();
         for (i, strategy) in self.strategies.iter_mut().enumerate() {
             let pair = strategy.trading_pair().to_string();
             let order_book = self.order_books.get(&pair).cloned().unwrap_or(OrderBook {
@@ -197,7 +203,7 @@ impl Engine {
 
             let ctx = TickContext {
                 order_book,
-                recent_bars: self.bar_buffers.get(&pair, 500).await,
+                recent_bars: self.bar_buffers.get(&pair, 1500).await,
                 balances,
                 open_orders: Vec::new(),
                 regime,
@@ -209,8 +215,14 @@ impl Engine {
                 Ok(orders) => all_orders.extend(Self::tag_owner(i, orders)),
                 Err(e) => warn!("Strategy {} tick error: {}", strategy.name(), e),
             }
+            for cid in strategy.pending_cancels() {
+                all_cancels.push((i, cid));
+            }
         }
         self.submit_orders(all_orders).await?;
+        // Process cancels AFTER placing new orders, so a stop replacement keeps a
+        // protective order live at all times (place runner stop, then cancel old).
+        self.process_cancels(all_cancels).await;
 
         // Update shared status cache for API access
         let statuses: Vec<_> = self.strategies.iter().map(|s| s.status()).collect();
@@ -272,7 +284,7 @@ impl Engine {
         crate::risk::save_state(&self.risk.circuit_breaker, &path);
     }
 
-    async fn submit_orders(&self, orders: Vec<OrderRequest>) -> Result<()> {
+    async fn submit_orders(&mut self, orders: Vec<OrderRequest>) -> Result<()> {
         for req in orders {
             // Reduce-only orders (exits) bypass the halt check so a circuit
             // breaker trip can't trap open positions.
@@ -284,12 +296,35 @@ impl Engine {
             }
 
             match self.connector.place_order(&req).await {
-                Ok(resp) => info!("Order placed: {} {} {} @ {}",
-                    resp.order_id, resp.symbol, resp.quantity, resp.price),
+                Ok(resp) => {
+                    info!("Order placed: {} {} {} @ {}",
+                        resp.order_id, resp.symbol, resp.quantity, resp.price);
+                    // Track so the owning strategy can cancel it later by client-id.
+                    if let Some(cid) = &resp.client_order_id {
+                        self.placed_orders.insert(
+                            cid.clone(),
+                            (resp.symbol.clone(), resp.order_id.clone()),
+                        );
+                    }
+                }
                 Err(e) => error!("Order failed: {}", e),
             }
         }
         Ok(())
+    }
+
+    /// Cancel resting orders strategies asked to cancel. Each entry is
+    /// (strategy_index, client_id_as_strategy_set_it); the engine reconstructs
+    /// the owner-tagged id it recorded at placement time.
+    async fn process_cancels(&mut self, cancels: Vec<(usize, String)>) {
+        for (idx, cid) in cancels {
+            let tagged = format!("owner:{}#{}", idx, cid);
+            if let Some((symbol, order_id)) = self.placed_orders.remove(&tagged) {
+                if let Err(e) = self.connector.cancel_order(&symbol, &order_id).await {
+                    warn!("Cancel failed for {} ({}): {}", symbol, cid, e);
+                }
+            }
+        }
     }
 
     /// Save bar buffers to disk for warm startup after restart
@@ -400,33 +435,41 @@ impl Engine {
         // corrupted their state. Fall back to symbol routing only for legacy
         // fills that carry no owner tag.
         let mut all_orders = Vec::new();
+        let mut all_cancels: Vec<(usize, String)> = Vec::new();
         for (_ob_symbol, fill) in &fills_by_pair {
+            // A resting order that filled is consumed — drop it from the cancel map.
+            if let Some(cid) = fill.client_order_id.as_deref() {
+                self.placed_orders.remove(cid);
+            }
             match Self::owner_index(fill) {
                 Some(idx) => {
                     if let Some(strategy) = self.strategies.get_mut(idx) {
                         match strategy.on_fill(fill).await {
-                            Ok(orders) => all_orders.extend(orders),
+                            Ok(orders) => all_orders.extend(Self::tag_owner(idx, orders)),
                             Err(e) => warn!("Strategy {} fill error: {}", strategy.name(), e),
                         }
+                        for cid in strategy.pending_cancels() { all_cancels.push((idx, cid)); }
                     } else {
                         warn!("Fill owner index {} out of range for {}", idx, fill.symbol);
                     }
                 }
                 None => {
                     let fill_norm = fill.symbol.replace("-", "");
-                    for strategy in &mut self.strategies {
+                    for (i, strategy) in self.strategies.iter_mut().enumerate() {
                         let strategy_norm = strategy.trading_pair().replace("-", "");
                         if strategy_norm == fill_norm {
                             match strategy.on_fill(fill).await {
-                                Ok(orders) => all_orders.extend(orders),
+                                Ok(orders) => all_orders.extend(Self::tag_owner(i, orders)),
                                 Err(e) => warn!("Strategy {} fill error: {}", strategy.name(), e),
                             }
+                            for cid in strategy.pending_cancels() { all_cancels.push((i, cid)); }
                         }
                     }
                 }
             }
         }
         self.submit_orders(all_orders).await?;
+        self.process_cancels(all_cancels).await;
 
         Ok(())
     }

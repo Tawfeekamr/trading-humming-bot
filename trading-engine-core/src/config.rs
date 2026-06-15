@@ -18,6 +18,7 @@ pub struct AppConfig {
     pub ml: Option<MlConfig>,
     #[serde(default, alias = "signal_copy")]
     pub signal: Option<SignalConfig>,
+    pub swing: Option<SwingConfig>,
     #[serde(default = "default_timeframe")]
     pub timeframe: String,
 }
@@ -382,3 +383,79 @@ fn default_full_size_margin() -> f64 { 1.5 }
 fn default_drop_thr() -> f64 { 0.02 }
 fn default_tp_pct() -> f64 { 0.02 }
 fn default_stop_pct() -> f64 { 0.03 }
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum RunnerExitMode {
+    OppositeBand,
+    ChandelierOnly,
+    BandOrChandelier,
+}
+
+impl Default for RunnerExitMode {
+    fn default() -> Self { Self::BandOrChandelier }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SwingConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_runner_exit")]
+    pub runner_exit: RunnerExitMode,
+    #[serde(default = "default_htf")]
+    pub htf_period: String,
+    #[serde(default = "default_ltf")]
+    pub ltf_period: String,
+    #[serde(default = "default_20_usize")]
+    pub donchian_period: usize,
+    #[serde(default = "default_0_5")]
+    pub band_atr_mult: f64,
+    #[serde(default = "default_14_usize")]
+    pub rsi_period: usize,
+    #[serde(default = "default_30")]
+    pub rsi_oversold: f64,
+    #[serde(default = "default_1_5")]
+    pub volume_multiplier: f64,
+    #[serde(default = "default_20_usize")]
+    pub volume_avg_period: usize,
+    #[serde(default = "default_14_usize")]
+    pub atr_period: usize,
+    #[serde(default = "default_1_5")]
+    pub atr_stop_mult: f64,
+    #[serde(default = "default_2")]
+    pub min_rr: f64,
+    #[serde(default = "default_1")]
+    pub risk_per_trade_pct: f64,
+    #[serde(default = "default_22")]
+    pub adx_range_entry: f64,
+    #[serde(default = "default_28")]
+    pub adx_trend_exit: f64,
+    #[serde(default = "default_10k")]
+    pub capital: f64,
+    #[serde(default = "default_48_usize")]
+    pub max_bars_in_trade: usize,
+    /// Restrict the swing strategy to these pairs (dash-free or dashed, e.g.
+    /// "ETH-USDT" / "ETHUSDT"). Empty = run on every enabled pair. The backtest
+    /// showed edge concentrated on ETH (DOGE loses, XRP inconclusive), so
+    /// production should set this explicitly.
+    #[serde(default)]
+    pub enabled_pairs: Vec<String>,
+    /// Exchange LOT_SIZE step + PRICE_FILTER tick, set per-symbol at wiring time
+    /// (main.rs reads them from PairConfig). Used to round resting-order qty/price
+    /// so live orders don't get rejected for filter mismatches. None on test/backtest.
+    #[serde(default)]
+    pub step_size: Option<f64>,
+    #[serde(default)]
+    pub tick_size: Option<f64>,
+}
+
+fn default_runner_exit() -> RunnerExitMode { RunnerExitMode::BandOrChandelier }
+fn default_htf() -> String { "1h".to_string() }
+fn default_ltf() -> String { "5m".to_string() }
+fn default_20_usize() -> usize { 20 }
+fn default_14_usize() -> usize { 14 }
+fn default_0_5() -> f64 { 0.5 }
+fn default_30() -> f64 { 30.0 }
+fn default_1() -> f64 { 1.0 }
+fn default_28() -> f64 { 28.0 }
+fn default_48_usize() -> usize { 48 }
