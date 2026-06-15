@@ -3,6 +3,8 @@ pub mod trend;
 pub mod mean_reversion;
 pub mod trend_journal;
 pub mod grid_journal;
+pub mod swing_journal;
+pub mod swing;
 pub mod status_cache;
 pub mod regime_cache;
 
@@ -59,6 +61,10 @@ pub trait Strategy: Send {
 
     /// Pause or resume the strategy
     fn set_paused(&mut self, _paused: bool) {}
+    /// Client-order-ids (as the strategy set them, pre-owner-tag) of resting
+    /// orders this strategy wants cancelled on the next engine cycle. Default
+    /// empty — strategies that don't place resting orders never cancel.
+    fn pending_cancels(&mut self) -> Vec<String> { Vec::new() }
     /// Current capital including compounded profits
     fn current_capital(&self) -> f64 { 0.0 }
     /// Initial capital before compounding

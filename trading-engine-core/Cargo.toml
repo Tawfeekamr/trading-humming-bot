@@ -73,6 +73,7 @@ rustc-hash = "2"
 
 # Python bindings (optional — enabled for maturin wheel builds)
 pyo3 = { version = "0.24", features = ["extension-module"], optional = true }
+urlencoding = "2.1.3"
 
 [dev-dependencies]
 tokio-test = "0.4"

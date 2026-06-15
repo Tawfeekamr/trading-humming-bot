@@ -9,6 +9,7 @@ mod volume;
 mod adx;
 mod choppiness;
 mod macd;
+mod donchian;
 
 pub use ema::Ema;
 pub use rsi::Rsi;
@@ -21,3 +22,4 @@ pub use volume::VolumeSma;
 pub use adx::Adx;
 pub use choppiness::Choppiness;
 pub use macd::Macd;
+pub use donchian::DonchianChannel;

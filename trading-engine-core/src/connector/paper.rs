@@ -13,6 +13,7 @@ struct PaperOrder {
     side: OrderSide,
     price: Option<f64>,
     quantity: f64,
+    order_type: OrderTypeReq,
 }
 
 pub struct PaperTradeEngine {
@@ -56,6 +57,7 @@ impl PaperTradeEngine {
             side: req.side,
             price: req.price,
             quantity: req.quantity,
+            order_type: req.order_type,
         });
 
         Ok(OrderResponse {
@@ -106,10 +108,21 @@ impl PaperTradeEngine {
                 continue;
             }
 
-            let should_fill = match (order.side, order.price) {
-                (OrderSide::Buy, Some(limit_price)) => market_price <= limit_price,
-                (OrderSide::Sell, Some(limit_price)) => market_price >= limit_price,
-                (_, None) => true, // Market orders always fill
+            let should_fill = match order.order_type {
+                // Stop-market: triggers when price crosses the stop, then fills
+                // at market (taker). Sells trigger on the way down, buys on the way up.
+                OrderTypeReq::StopMarket { stop_price } => match order.side {
+                    OrderSide::Sell => market_price <= stop_price,
+                    OrderSide::Buy => market_price >= stop_price,
+                },
+                // Limit / LimitMaker fill when the limit is crossed (maker vs
+                // taker distinction isn't modeled in paper — same fee either way);
+                // Market always fills.
+                _ => match (order.side, order.price) {
+                    (OrderSide::Buy, Some(limit_price)) => market_price <= limit_price,
+                    (OrderSide::Sell, Some(limit_price)) => market_price >= limit_price,
+                    (_, None) => true, // Market orders always fill
+                },
             };
 
             if should_fill {
@@ -273,5 +286,87 @@ impl crate::connector::Connector for PaperTradeConnector {
     async fn try_fill_at_price(&self, symbol: &str, market_price: f64) -> Vec<Fill> {
         let mut engine = self.engine.lock().unwrap();
         engine.try_fill_at_price(symbol, market_price)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn engine() -> PaperTradeEngine {
+        let mut bal = HashMap::new();
+        bal.insert("BTC".to_string(), 1.0);
+        bal.insert("USDT".to_string(), 10_000.0);
+        PaperTradeEngine::new(bal)
+    }
+
+    fn sell_stop(stop: f64, qty: f64) -> OrderRequest {
+        OrderRequest {
+            symbol: "BTCUSDT".to_string(),
+            side: OrderSide::Sell,
+            order_type: OrderTypeReq::StopMarket { stop_price: stop },
+            price: None,
+            quantity: qty,
+            time_in_force: None,
+            client_order_id: None,
+            reduce_only: false,
+        }
+    }
+
+    #[test]
+    fn sell_stop_does_not_trigger_above_stop_price() {
+        let mut e = engine();
+        e.place_order(&sell_stop(50_000.0, 0.5)).unwrap();
+        // Price still above the stop → protective exit must NOT fire.
+        assert!(e.try_fill_at_price("BTCUSDT", 51_000.0).is_empty());
+    }
+
+    #[test]
+    fn sell_stop_triggers_when_price_falls_through() {
+        let mut e = engine();
+        e.place_order(&sell_stop(50_000.0, 0.5)).unwrap();
+        let fills = e.try_fill_at_price("BTCUSDT", 49_900.0);
+        assert_eq!(fills.len(), 1, "stop should trigger once price <= stop");
+        // STOP_MARKET fills at market (the trigger price), not the stop price.
+        assert!((fills[0].price - 49_900.0).abs() < 1e-9);
+        assert_eq!(fills[0].side, OrderSide::Sell);
+    }
+
+    #[test]
+    fn buy_stop_triggers_on_upside_cross_only() {
+        let mut e = engine();
+        e.place_order(&OrderRequest {
+            symbol: "BTCUSDT".to_string(),
+            side: OrderSide::Buy,
+            order_type: OrderTypeReq::StopMarket { stop_price: 50_000.0 },
+            price: None,
+            quantity: 0.1,
+            time_in_force: None,
+            client_order_id: None,
+            reduce_only: false,
+        }).unwrap();
+        assert!(e.try_fill_at_price("BTCUSDT", 49_000.0).is_empty());
+        assert_eq!(e.try_fill_at_price("BTCUSDT", 50_500.0).len(), 1);
+    }
+
+    #[test]
+    fn limit_maker_fills_like_a_passive_limit_at_its_price() {
+        let mut e = engine();
+        e.place_order(&OrderRequest {
+            symbol: "BTCUSDT".to_string(),
+            side: OrderSide::Buy,
+            order_type: OrderTypeReq::LimitMaker,
+            price: Some(50_000.0),
+            quantity: 0.1,
+            time_in_force: None,
+            client_order_id: None,
+            reduce_only: false,
+        }).unwrap();
+        // Buy limit rests below market → no fill while price is higher.
+        assert!(e.try_fill_at_price("BTCUSDT", 51_000.0).is_empty());
+        let fills = e.try_fill_at_price("BTCUSDT", 50_000.0);
+        assert_eq!(fills.len(), 1);
+        // Maker fills at its resting price, not the market price.
+        assert!((fills[0].price - 50_000.0).abs() < 1e-9);
     }
 }

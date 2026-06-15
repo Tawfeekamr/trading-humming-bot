@@ -20,6 +20,15 @@ pub struct OrderRequest {
 pub enum OrderTypeReq {
     Market,
     Limit,
+    /// Post-only limit order (Binance `LIMIT_MAKER` / Gate.io `poc`). Rejected
+    /// by the exchange if it would cross the book and execute as taker — so it
+    /// never pays taker fees, at the cost of possibly not filling. `price` is
+    /// the resting limit price and must be set.
+    LimitMaker,
+    /// Stop-market order (Binance `STOP_MARKET`): rests until `stop_price` is
+    /// crossed, then fills at market. Used for protective/trailing exits —
+    /// guarantees *execution*, not price (slippage on trigger). `price` is None.
+    StopMarket { stop_price: f64 },
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
