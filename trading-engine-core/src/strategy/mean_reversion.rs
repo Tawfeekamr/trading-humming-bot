@@ -58,6 +58,10 @@ pub struct MeanReversionStrategy {
     trades: u32,
     wins: u32,
     entry_time: i64,
+    /// Real-clock startup time — used to skip the bar-replay warmup phase
+    /// (same phantom-trade class as the trend replay bug). MR must not trade
+    /// during the replay; it re-trades historical bars as if live.
+    startup_time_ms: i64,
 }
 
 /// Persisted MR summary state (cumulative P&L across restarts).
@@ -82,6 +86,7 @@ impl MeanReversionStrategy {
             trades: 0,
             wins: 0,
             entry_time: 0,
+            startup_time_ms: chrono::Utc::now().timestamp_millis(),
         };
         me.load_state();
         me
@@ -135,6 +140,15 @@ impl Strategy for MeanReversionStrategy {
     }
 
     async fn on_tick(&mut self, ctx: &TickContext) -> Result<Vec<OrderRequest>> {
+        // Skip bar-replay warmup: the engine replays cached historical bars on
+        // every restart to warm indicators. Without this guard, MR re-trades
+        // those bars as if live → phantom entries/exits (same bug class as the
+        // trend replay PnL fabrication). Wait 2 min of REAL clock time so only
+        // live ticks are processed.
+        if chrono::Utc::now().timestamp_millis() - self.startup_time_ms < 120_000 {
+            return Ok(Vec::new());
+        }
+
         if !self.config.enabled {
             return Ok(Vec::new());
         }
