@@ -172,15 +172,38 @@ class SignalPositionManager:
             # Read current disk state and preserve entries we don't track (e.g.
             # positions the Rust engine is managing) so our write can't erase them.
             try:
-                merged = json.loads(path.read_text()) if path.exists() else {}
+                disk = json.loads(path.read_text()) if path.exists() else {}
             except Exception:
-                merged = {}
+                disk = {}
+            merged = dict(disk)
             for symbol, pos in self._positions.items():
+                # Don't clobber a same-position disk entry that Rust closed or took
+                # further than our (possibly stale) in-memory copy — that's the
+                # duplicate-close bug: a reverted close re-opens the position and it
+                # gets closed AGAIN next tick/restart. A new open (different
+                # entry_timestamp) still overwrites.
+                disk_pos = disk.get(symbol)
+                if disk_pos is not None and self._disk_more_advanced(disk_pos, pos):
+                    continue
                 if not pos.is_closed or (time.time() - pos.entry_timestamp) < 86400:
                     merged[symbol] = asdict(pos)
             # Atomic publish: write temp, then replace.
             tmp_path.write_text(json.dumps(merged, indent=2, default=str))
             os.replace(tmp_path, path)
+
+    @staticmethod
+    def _disk_more_advanced(disk_pos: dict, pos: "SignalPosition") -> bool:
+        """True if disk is the SAME position (same entry_timestamp) AND has
+        progressed further (closed, or a TP hit our in-memory copy lacks). In that
+        case disk is authoritative and we must not overwrite it."""
+        if abs(float(disk_pos.get("entry_timestamp", 0)) - pos.entry_timestamp) > 1e-3:
+            return False  # different position (a new open) — allow overwrite
+        if disk_pos.get("is_closed") and not pos.is_closed:
+            return True
+        for key, py_hit in (("tp1_hit", pos.tp1_hit), ("tp2_hit", pos.tp2_hit), ("tp3_hit", pos.tp3_hit)):
+            if disk_pos.get(key) and not py_hit:
+                return True
+        return False
 
     def _load_state(self):
         path = self._data_dir / "signal_positions.json"

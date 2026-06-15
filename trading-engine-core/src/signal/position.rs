@@ -171,6 +171,15 @@ impl SignalPositionManager {
         for (symbol, pos) in &self.positions {
             // Keep open positions and recently closed (within 24h)
             if !pos.is_closed || (now - pos.entry_timestamp as u64) < 86400 {
+                // Don't clobber a same-position disk entry that's closed or further
+                // along than this in-memory copy. Two managers (Rust + Python) race
+                // on this file; without this guard a stale in-memory copy reverts a
+                // real close → the position re-opens → gets closed AGAIN on the next
+                // tick/restart (duplicate-close / phantom-PnL bug). A genuinely new
+                // open (different entry_timestamp) still overwrites.
+                if let Some(disk_val) = merged.get(symbol) {
+                    if disk_more_advanced(disk_val, pos) { continue; }
+                }
                 merged.insert(symbol.clone(), serde_json::to_value(pos).unwrap_or_default());
             }
         }
@@ -259,4 +268,21 @@ impl Default for SignalPosition {
 
 fn now_secs() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
+}
+
+/// True if the on-disk JSON entry is the SAME position (same entry_timestamp) as
+/// `pos` AND has progressed further — closed, or a TP hit that `pos` lacks. In
+/// that case the in-memory copy is stale and must not overwrite disk. A different
+/// entry_timestamp means a new open for the same symbol, which should overwrite.
+fn disk_more_advanced(disk: &serde_json::Value, pos: &SignalPosition) -> bool {
+    let obj = match disk.as_object() { Some(o) => o, None => return false };
+    let disk_ts = obj.get("entry_timestamp").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    if (disk_ts - pos.entry_timestamp).abs() > 1e-3 { return false; }
+    let disk_closed = obj.get("is_closed").and_then(|v| v.as_bool()).unwrap_or(false);
+    if disk_closed && !pos.is_closed { return true; }
+    for (key, py_hit) in [("tp1_hit", pos.tp1_hit), ("tp2_hit", pos.tp2_hit), ("tp3_hit", pos.tp3_hit)] {
+        let disk_hit = obj.get(key).and_then(|v| v.as_bool()).unwrap_or(false);
+        if disk_hit && !py_hit { return true; }
+    }
+    false
 }
