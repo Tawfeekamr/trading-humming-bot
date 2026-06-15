@@ -1,6 +1,7 @@
 pub mod grid;
 pub mod trend;
 pub mod mean_reversion;
+pub mod mean_reversion_journal;
 pub mod trend_journal;
 pub mod grid_journal;
 pub mod swing_journal;

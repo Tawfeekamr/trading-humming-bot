@@ -1,5 +1,6 @@
 use crate::config::{MeanReversionConfig, ClassifierCfg};
 use crate::strategy::{Strategy, TickContext, StrategyStatus, MarketRegime};
+use crate::strategy::mean_reversion_journal::MeanReversionJournal;
 use crate::connector::types::{OrderRequest, Fill, OrderTypeReq};
 use crate::models::order::OrderSide;
 use crate::notifications::TelegramBot;
@@ -56,6 +57,8 @@ pub struct MeanReversionStrategy {
     realized_pnl: f64,
     trades: u32,
     wins: u32,
+    entry_time: i64,
+    journal: Option<MeanReversionJournal>,
 }
 
 /// Persisted MR summary state (cumulative P&L across restarts).
@@ -79,6 +82,8 @@ impl MeanReversionStrategy {
             realized_pnl: 0.0,
             trades: 0,
             wins: 0,
+            entry_time: 0,
+            journal: MeanReversionJournal::new().ok(),
         };
         me.load_state();
         me
@@ -178,6 +183,7 @@ impl Strategy for MeanReversionStrategy {
                     self.in_position = true;
                     self.entry_price = mid;
                     self.position_qty = qty;
+                    self.entry_time = now;
 
                     info!("📉 MeanReversion Flush detected! Buying {:.4} @ {}", qty, mid);
                     // Fire-and-forget so Telegram latency can't stall the tick loop.
@@ -212,6 +218,9 @@ impl Strategy for MeanReversionStrategy {
                     let _ = tg.send(&format!("📈 MR {} TP @ ${:.2} | PnL: ${:+.2}", pair, mid, pnl)).await;
                 });
                 self.save_state();
+                if let Some(j) = &self.journal {
+                    j.log_trade(&self.pair, self.entry_price, mid, self.position_qty, pnl, "TakeProfit", (now - self.entry_time) / 60_000);
+                }
                 orders.push(OrderRequest {
                     symbol: self.pair.replace("-", ""), side: OrderSide::Sell,
                     order_type: OrderTypeReq::Market, price: None, quantity: self.position_qty,
@@ -231,6 +240,9 @@ impl Strategy for MeanReversionStrategy {
                     let _ = tg.send(&format!("⚠️ MR {} SL @ ${:.2} | PnL: ${:+.2}", pair, mid, pnl)).await;
                 });
                 self.save_state();
+                if let Some(j) = &self.journal {
+                    j.log_trade(&self.pair, self.entry_price, mid, self.position_qty, pnl, "StopLoss", (now - self.entry_time) / 60_000);
+                }
                 orders.push(OrderRequest {
                     symbol: self.pair.replace("-", ""), side: OrderSide::Sell,
                     order_type: OrderTypeReq::Market, price: None, quantity: self.position_qty,

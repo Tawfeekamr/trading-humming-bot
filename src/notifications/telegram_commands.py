@@ -571,10 +571,11 @@ class TelegramCommandHandler:
             # (label, db, table, pnl column, extra WHERE). Only CLOSE rows count
             # for signal (open/skip rows carry no realized PnL).
             sources = [
-                ("Grid",   "data/grid_journal.db",   "grid_trades",   "realized_pnl", ""),
-                ("Trend",  "data/trend_journal.db",  "trend_trades",  "pnl", ""),
-                ("Swing",  "data/swing_journal.db",  "swing_trades",  "pnl", ""),
-                ("Signal", "data/signal_journal.db", "signal_trades", "realized_pnl", "AND action LIKE 'CLOSE%'"),
+                ("Grid",   "data/grid_journal.db",            "grid_trades",   "realized_pnl", ""),
+                ("Trend",  "data/trend_journal.db",           "trend_trades",  "pnl", ""),
+                ("Swing",  "data/swing_journal.db",           "swing_trades",  "pnl", ""),
+                ("MR",     "data/mean_reversion_journal.db",  "mr_trades",     "pnl", ""),
+                ("Signal", "data/signal_journal.db",          "signal_trades", "realized_pnl", "AND action LIKE 'CLOSE%'"),
             ]
             totals = [0.0, 0.0, 0.0]
             body = ""
@@ -601,7 +602,7 @@ class TelegramCommandHandler:
                 f"{body}"
                 "•••\n"
                 f"{total_line}\n"
-                "<i>signal = CLOSE rows (incl. pre-fix duplicates); MR not journaled</i>",
+                "<i>signal = CLOSE rows (incl. pre-fix duplicates)</i>",
                 parse_mode="HTML"
             )
         except Exception as e:
