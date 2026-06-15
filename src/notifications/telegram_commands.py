@@ -115,7 +115,7 @@ class TelegramCommandHandler:
                     "<b>Signal:</b> /signal_status /signal_pnl /signal_channels /signal_history /signal_pause /signal_resume /signal_close /signal_inject\n"
                     "<b>Swing:</b> /swing_status /swing_pnl\n"
                     "<b>Mean-Reversion:</b> /mean_status /mean_pnl\n"
-                    "<b>All:</b> /pnl_all (today/week/month consolidated)\n"
+                    "<b>All:</b> /pnl_all /trades\n"
                     "••• /help for details"
                 )
                 self._tg_post("sendMessage", data={
@@ -179,6 +179,7 @@ class TelegramCommandHandler:
             "grid_status": self._cmd_grid_status,
             "pnl": self._cmd_pnl,
             "pnl_all": self._cmd_pnl_all,
+            "trades": self._cmd_trades,
             "balance": self._cmd_balance,
             "capital": self._cmd_capital,
             "pause": self._cmd_pause,
@@ -1828,6 +1829,32 @@ class TelegramCommandHandler:
         except Exception as e:
             logger.error(f"Error in /mean_status: {e}")
             update.message.reply_text(f"⚠️ Error getting mean-reversion status: {e}")
+
+    def _cmd_trades(self, update, context):
+        """Show recent individual trades across all bots from trades.db."""
+        try:
+            import sqlite3
+            logger.info("Telegram /trades received")
+            conn = sqlite3.connect("data/trades.db")
+            rows = conn.execute(
+                "SELECT timestamp, engine, pair, pnl, exit_reason FROM trades ORDER BY id DESC LIMIT 15"
+            ).fetchall()
+            conn.close()
+            if not rows:
+                update.message.reply_text("No trades yet.")
+                return
+            lines = ["📜 <b>Recent Trades</b> (all engines)", "•••"]
+            for ts, engine, pair, pnl, reason in rows:
+                t = ts[11:16] if len(ts) > 16 else ts
+                sign = "+" if pnl >= 0 else ""
+                emoji = "🟢" if pnl >= 0 else "🔴"
+                p = pair.replace("-USDT", "").replace("-USD", "")
+                lines.append(f"{t}  {engine:<6} {p:<8} {reason:<12} {emoji} {sign}${pnl:.2f}")
+            lines.append("•••")
+            lines.append(f"<i>{len(rows)} most recent</i>")
+            update.message.reply_text("\n".join(lines), parse_mode="HTML")
+        except Exception as e:
+            update.message.reply_text(f"⚠️ Error: {e}")
 
     def _rust_strategy_status(self, update, engine_name, title, emoji):
         """Generic Rust-API strategy status. Calls /api/v1/strategies, filters by name."""

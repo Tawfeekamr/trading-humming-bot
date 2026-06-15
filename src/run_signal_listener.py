@@ -50,7 +50,20 @@ async def main():
         circuit_breaker=SimpleNamespace(halted=False),
         position_guard=SimpleNamespace(),
         event_logger=SimpleNamespace(),
-        strategy=SimpleNamespace(),
+        strategy=SimpleNamespace(
+            env=os.environ.get("ENV", "testnet"),
+            capital_usdt=10000,
+            base_asset="CRYPTO",
+            grid_manager=SimpleNamespace(capital_usdt=10000),
+            _base_capital=10000,
+            _trend_statuses={},
+            _trend_capital=10000,
+            pairs={},
+            grid_pnl={},
+            get_indicators_snapshot=lambda: None,
+            _get_usdt_balance=lambda: 0,
+            _get_base_balance=lambda: 0,
+        ),
     )
     handler.start()
     poll_thread = threading.Thread(target=_poll_commands, args=(handler,), daemon=True)
