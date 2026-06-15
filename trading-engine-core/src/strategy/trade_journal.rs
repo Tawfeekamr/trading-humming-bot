@@ -112,9 +112,11 @@ impl UnifiedTradeJournal {
         ];
         let mut total = 0usize;
         let conn = self.conn.lock().unwrap();
-        // Append from the per-engine journals (INSERT OR IGNORE dedupes by the
-        // unique index on engine+timestamp+pair+pnl). No clear — history is
-        // retained even after the journal modules are deleted (the DB files persist).
+        // Clear backfilled rows + rebuild from the per-engine journals each startup.
+        // Direct-writes from engines (exit_reason != 'backfilled') are preserved.
+        // This prevents the duplication bug where append-only backfills accumulated
+        // one copy per restart (10 restarts = 10× inflation).
+        let _ = conn.execute("DELETE FROM trades WHERE exit_reason = 'backfilled'", []);
         for (engine, db, tbl, col, pair_col, where_clause) in sources {
             if !std::path::Path::new(db).exists() { continue; }
             match Connection::open(db) {
