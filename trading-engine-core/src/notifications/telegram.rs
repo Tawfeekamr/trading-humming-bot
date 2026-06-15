@@ -118,17 +118,15 @@ impl TelegramBot {
     pub fn format_startup_message(
         &self,
         env: &str,
-        capital: f64,
         pairs: &str,
-        grid_levels: usize,
+        engines: &str,
     ) -> String {
         format!(
-            "🚀 <b>Trading Bot Started</b>\n\
+            "\u{1f680} <b>Trading Bot Started</b>\n\
              Env: {}\n\
-             Capital: ${:.2}\n\
              Pairs: {}\n\
-             Grid Levels: {}",
-            env, capital, pairs, grid_levels
+             Engines: {}",
+            env, pairs, engines,
         )
     }
 
