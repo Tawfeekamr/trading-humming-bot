@@ -76,7 +76,11 @@ jobs:
           context: .
           file: Dockerfile.rust
           push: true
-          no-cache: true
+          # Cache layers (deps + compile) in GHA — was no-cache:true, which forced
+          # a full Rust rebuild every deploy (~3m). Cache is content-addressed, so
+          # it invalidates automatically on Cargo.toml/Dockerfile/source change.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
           tags: |
             ${{ env.REGISTRY }}/tawfeekamr/trading-bot:latest
             ${{ env.REGISTRY }}/tawfeekamr/trading-bot:${{ github.sha }}
