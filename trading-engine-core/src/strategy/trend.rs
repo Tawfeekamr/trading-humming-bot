@@ -203,6 +203,7 @@ impl TrendStrategy {
                 &self.pair, side, entry_price, exit_price, amount, pnl,
                 stop_loss, take_profit, exit_reason, duration,
             );
+            crate::strategy::trade_journal::log_unified("trend", &self.pair, Some(entry_price), Some(exit_price), Some(amount), pnl, Some(exit_reason), Some(duration));
         }
     }
 

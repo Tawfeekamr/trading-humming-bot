@@ -147,6 +147,10 @@ async fn async_main() -> Result<()> {
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", api_port)).await?;
     info!("API server listening on port {}", api_port);
 
+    // Backfill the unified analytics table from the per-engine journals (once, when
+    // empty) so /pnl_all has history before any new trades close.
+    trading_engine_core::strategy::trade_journal::backfill_unified_if_empty();
+
     tokio::select! {
         result = engine.run() => {
             if let Err(e) = result {

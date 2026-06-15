@@ -461,6 +461,7 @@ impl Strategy for SwingStrategy {
                         let dur = (fill.timestamp - pos.entry_time) / 60_000;
                         let rm = format!("{:?}", self.config.runner_exit);
                         j.log_trade(&self.pair, pos.side, pos.entry_price, fill.price, fill.quantity, pnl, "ScaleOut", dur, &rm);
+                        crate::strategy::trade_journal::log_unified("swing", &self.pair, Some(pos.entry_price), Some(fill.price), Some(fill.quantity), pnl, Some("ScaleOut"), Some(dur));
                     }
                     let msg = format!("🔔 *Swing Scale-Out*\nPair: {}\nPrice: {:.4}\nPnL: {:.2} USDT", self.pair, fill.price, pnl);
                     let _ = self.telegram.send(&msg).await;
@@ -501,6 +502,7 @@ impl Strategy for SwingStrategy {
                         let dur = (fill.timestamp - pos.entry_time) / 60_000;
                         let rm = format!("{:?}", self.config.runner_exit);
                         j.log_trade(&self.pair, pos.side, pos.entry_price, fill.price, fill.quantity, pnl, reason, dur, &rm);
+                        crate::strategy::trade_journal::log_unified("swing", &self.pair, Some(pos.entry_price), Some(fill.price), Some(fill.quantity), pnl, Some(reason), Some(dur));
                     }
                     let msg = format!("🔔 *Swing Exit* ({})\nPair: {}\nPrice: {:.4}\nPnL: {:.2} USDT",
                                       reason, self.pair, fill.price, pnl);

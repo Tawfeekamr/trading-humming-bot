@@ -686,6 +686,7 @@ impl Strategy for GridStrategy {
                 .unwrap_or("?");
             journal.log_fill(&self.pair, fill.side, level, fill.price, fill.quantity, fill.fee, pnl, self.total_pnl);
         }
+        crate::strategy::trade_journal::log_unified("grid", &self.pair, None, Some(fill.price), Some(fill.quantity), pnl, Some("grid_fill"), None);
         self.save_state_internal();
         Ok(Vec::new())
     }

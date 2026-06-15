@@ -568,32 +568,20 @@ class TelegramCommandHandler:
             week = (now - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%S")
             month = (now - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%S")
             windows = [("Today", today), ("Week", week), ("Month", month)]
-            # (label, db, table, pnl column, extra WHERE). Only CLOSE rows count
-            # for signal (open/skip rows carry no realized PnL).
-            sources = [
-                ("Grid",   "data/grid_journal.db",            "grid_trades",   "realized_pnl", ""),
-                ("Trend",  "data/trend_journal.db",           "trend_trades",  "pnl", ""),
-                ("Swing",  "data/swing_journal.db",           "swing_trades",  "pnl", ""),
-                ("MR",     "data/mean_reversion_journal.db",  "mr_trades",     "pnl", ""),
-                ("Signal", "data/signal_journal.db",          "signal_trades", "realized_pnl", "AND action LIKE 'CLOSE%'"),
-            ]
+            # Single query against the unified trades table — every engine writes here.
+            conn = sqlite3.connect("data/trades.db")
             totals = [0.0, 0.0, 0.0]
             body = ""
-            for name, db, tbl, col, extra in sources:
+            for eng in ("Grid", "Trend", "Swing", "MR", "Signal"):
                 per = []
-                try:
-                    conn = sqlite3.connect(db)
-                    for i, (_, cutoff) in enumerate(windows):
-                        v = conn.execute(
-                            f"SELECT COALESCE(SUM({col}),0) FROM {tbl} WHERE timestamp >= ? {extra}",
-                            (cutoff,)).fetchone()[0] or 0.0
-                        per.append(v)
-                        totals[i] += v
-                    conn.close()
-                except Exception as e:
-                    logger.warning(f"pnl_all {name} ({db}): {e}")
-                    per = [0.0, 0.0, 0.0]
-                body += f"{name:<7}" + "".join(f"{self._fmt_pnl(v):>11}" for v in per) + "\n"
+                for i, (_, cutoff) in enumerate(windows):
+                    v = conn.execute(
+                        "SELECT COALESCE(SUM(pnl),0) FROM trades WHERE engine=? AND timestamp >= ?",
+                        (eng.lower(), cutoff)).fetchone()[0] or 0.0
+                    per.append(v)
+                    totals[i] += v
+                body += f"{eng:<7}" + "".join(f"{self._fmt_pnl(v):>11}" for v in per) + "\n"
+            conn.close()
             total_line = "TOTAL  " + "".join(f"{self._fmt_pnl(t):>11}" for t in totals)
             update.message.reply_text(
                 "📊 <b>Consolidated P&amp;L</b> (realized)\n"
@@ -602,7 +590,7 @@ class TelegramCommandHandler:
                 f"{body}"
                 "•••\n"
                 f"{total_line}\n"
-                "<i>signal = CLOSE rows (incl. pre-fix duplicates)</i>",
+                "<i>from unified trades table (all engines)</i>",
                 parse_mode="HTML"
             )
         except Exception as e:

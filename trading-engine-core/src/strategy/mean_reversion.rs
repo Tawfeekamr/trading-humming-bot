@@ -221,6 +221,7 @@ impl Strategy for MeanReversionStrategy {
                 if let Some(j) = &self.journal {
                     j.log_trade(&self.pair, self.entry_price, mid, self.position_qty, pnl, "TakeProfit", (now - self.entry_time) / 60_000);
                 }
+                crate::strategy::trade_journal::log_unified("mr", &self.pair, Some(self.entry_price), Some(mid), Some(self.position_qty), pnl, Some("TakeProfit"), Some((now - self.entry_time) / 60_000));
                 orders.push(OrderRequest {
                     symbol: self.pair.replace("-", ""), side: OrderSide::Sell,
                     order_type: OrderTypeReq::Market, price: None, quantity: self.position_qty,
@@ -243,6 +244,7 @@ impl Strategy for MeanReversionStrategy {
                 if let Some(j) = &self.journal {
                     j.log_trade(&self.pair, self.entry_price, mid, self.position_qty, pnl, "StopLoss", (now - self.entry_time) / 60_000);
                 }
+                crate::strategy::trade_journal::log_unified("mr", &self.pair, Some(self.entry_price), Some(mid), Some(self.position_qty), pnl, Some("StopLoss"), Some((now - self.entry_time) / 60_000));
                 orders.push(OrderRequest {
                     symbol: self.pair.replace("-", ""), side: OrderSide::Sell,
                     order_type: OrderTypeReq::Market, price: None, quantity: self.position_qty,
