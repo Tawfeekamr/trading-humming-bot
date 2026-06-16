@@ -124,9 +124,9 @@ impl Adx {
                 self.minus_dm_smooth = minus_dm;
                 self.tr_smooth = tr;
             } else {
-                self.plus_dm_smooth = self.plus_dm_smooth * (p - 1.0) + plus_dm;
-                self.minus_dm_smooth = self.minus_dm_smooth * (p - 1.0) + minus_dm;
-                self.tr_smooth = self.tr_smooth * (p - 1.0) + tr;
+                self.plus_dm_smooth = (self.plus_dm_smooth * (p - 1.0) + plus_dm) / p;
+                self.minus_dm_smooth = (self.minus_dm_smooth * (p - 1.0) + minus_dm) / p;
+                self.tr_smooth = (self.tr_smooth * (p - 1.0) + tr) / p;
             }
 
             // Update DI
