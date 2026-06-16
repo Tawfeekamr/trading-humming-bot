@@ -115,7 +115,7 @@ class TelegramCommandHandler:
                     "<b>Signal:</b> /signal_status /signal_pnl /signal_channels /signal_history /signal_pause /signal_resume /signal_close /signal_inject\n"
                     "<b>Swing:</b> /swing_status /swing_pnl\n"
                     "<b>Mean-Reversion:</b> /mean_status /mean_pnl\n"
-                    "<b>All:</b> /pnl_all /trades\n"
+                    "<b>All:</b> /pnl_all /trades /bots /status\n"
                     "••• /help for details"
                 )
                 self._tg_post("sendMessage", data={
@@ -168,6 +168,7 @@ class TelegramCommandHandler:
         return {
             # System
             "status": self._cmd_status,
+            "bots": self._cmd_bots,
             "system": self._cmd_server,
             "server": self._cmd_server,
             "help": self._cmd_help,
@@ -288,22 +289,64 @@ class TelegramCommandHandler:
             return 0.0
 
     def _cmd_status(self, update, context):
-        """Daily summary for all engines — per-pair format."""
+        """Server health: CPU, RAM, disk, containers, uptime."""
         try:
             logger.info("Telegram /status received")
-            strategy = self.strategy
+            import subprocess
+
             uptime_s = int(time.time() - self._started_at)
             hours, remainder = divmod(uptime_s, 3600)
             minutes, secs = divmod(remainder, 60)
-            mode = strategy.env.upper()
+
+            # System stats via psutil (or fallback)
+            try:
+                from src.monitoring.system_monitor import get_stats
+                stats = get_stats()
+                cpu = stats.cpu_percent
+                mem_used = stats.mem_percent
+                disk_used = stats.disk_percent
+                mem_str = f"{stats.mem_used_gb:.1f}/{stats.mem_total_gb:.1f} GB"
+                disk_str = f"{stats.disk_used_gb:.1f}/{stats.disk_total_gb:.1f} GB"
+            except Exception:
+                cpu = mem_used = disk_used = 0
+                mem_str = disk_str = "?"
+
+            # Container status
+            containers = []
+            try:
+                result = subprocess.run(
+                    ["docker", "ps", "--format", "{{.Names}}: {{.Status}}"],
+                    capture_output=True, text=True, timeout=5
+                )
+                containers = [c.strip() for c in result.stdout.strip().split("\n") if c.strip()]
+            except Exception:
+                containers = ["(docker unavailable)"]
 
             lines = [
-                f"📊 <b>Daily Status</b> — {mode}",
+                f"🖥️ <b>Server Status</b>",
                 f"•••",
-                f"⏱ Up: {hours}h {minutes}m",
+                f"⏱ Uptime: {hours}h {minutes}m",
+                f"💻 CPU: {cpu:.0f}%",
+                f"💾 RAM: {mem_used:.0f}% ({mem_str})",
+                f"📀 Disk: {disk_used:.0f}% ({disk_str})",
+                f"•••",
+                f"<b>Containers:</b>",
             ]
+            for c in containers:
+                if "healthy" in c.lower() or "up" in c.lower():
+                    lines.append(f"  🟢 {c}")
+                elif "restart" in c.lower():
+                    lines.append(f"  🔴 {c}")
+                else:
+                    lines.append(f"  🟡 {c}")
 
-            today_since = datetime.now(timezone.utc).strftime("%Y-%m-%d 00:00:00")
+            lines.append("•••")
+            lines.append("<i>Use /bots for engine status, /pnl_all for P&L</i>")
+
+            update.message.reply_text("\n".join(lines), parse_mode="HTML")
+        except Exception as e:
+            logger.error(f"Error in /status: {e}")
+            update.message.reply_text(f"⚠️ Error: {e}")
 
             # Per-pair Grid + Trend status
             if hasattr(strategy, 'pairs') and strategy.pairs:
@@ -730,6 +773,55 @@ class TelegramCommandHandler:
             )
         except Exception as e:
             logger.error(f"Error in /reset: {e}")
+            update.message.reply_text(f"⚠️ Error: {e}")
+
+    def _cmd_bots(self, update, context):
+        """Show all engine statuses from Rust API."""
+        try:
+            import html as _html
+            logger.info("Telegram /bots received")
+            strategies = self._rust_api("/api/v1/strategies") or []
+            if not strategies:
+                update.message.reply_text("⚠️ Rust engine API unavailable.")
+                return
+            lines = ["🤖 <b>Engine Status</b>", "•••"]
+            engines = {}
+            for s in strategies:
+                engines.setdefault(s.get("name", "?"), []).append(s)
+            for name in ["grid", "trend", "swing", "mean_reversion"]:
+                bots = engines.get(name, [])
+                if not bots:
+                    continue
+                display = name.replace("mean_reversion", "MR").upper()
+                total_pnl = sum(b.get("pnl", 0) for b in bots)
+                lines.append(f"<b>{display}</b> P&L: {'+' if total_pnl>=0 else ''}${total_pnl:.2f}")
+                for b in bots:
+                    pair = b.get("pair", "?").replace("-", "/")
+                    state = b.get("state", "?")
+                    details = b.get("details", "")
+                    emoji = "🟢" if state in ("Active", "IN_POSITION", "POSITION") else "🟡" if any(x in state for x in ["WAIT", "PAUSE", "SEARCH", "SCAN"]) else "⚪"
+                    line = f"  {emoji} {pair}: {state}"
+                    if details:
+                        line += f"  <i>{_html.escape(details)}</i>"
+                    lines.append(line)
+            try:
+                import json, sqlite3
+                pos = {}
+                try:
+                    with open("data/signal_positions.json") as f:
+                        pos = json.load(f)
+                except Exception:
+                    pass
+                open_pos = {k: v for k, v in pos.items() if not v.get("is_closed")}
+                c = sqlite3.connect("data/signal_journal.db")
+                sig_pnl = c.execute("SELECT COALESCE(SUM(realized_pnl),0) FROM signal_trades WHERE action LIKE 'CLOSE%'").fetchone()[0]
+                c.close()
+                lines.append(f"<b>SIGNAL</b> P&L: ${sig_pnl:.2f} | Open: {len(open_pos)}/5")
+            except Exception:
+                lines.append("<b>SIGNAL</b>: unavailable")
+            lines.append("•••")
+            update.message.reply_text("\n".join(lines), parse_mode="HTML")
+        except Exception as e:
             update.message.reply_text(f"⚠️ Error: {e}")
 
     def _cmd_trades(self, update, context):
