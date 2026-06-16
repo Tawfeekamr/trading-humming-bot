@@ -196,7 +196,7 @@ class TelegramCommandHandler:
             "signal_inject": self._cmd_signal_inject,
             # Trend history
             "trend_history": self._cmd_trend_history,
-            "trend_pnl": self._cmd_trend_pnl,
+            "trend_pnl": self._cmd_trend_status,
         }
 
     def _dispatch(self, handler, chat_id: str, msg: dict):
