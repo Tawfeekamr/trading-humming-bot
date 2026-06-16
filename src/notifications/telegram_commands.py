@@ -274,185 +274,61 @@ class TelegramCommandHandler:
             return 0.0
 
     def _cmd_status(self, update, context):
-        """Server health: CPU, RAM, disk, containers, uptime."""
+        """Server health — stdlib only (no psutil/docker dependency)."""
         try:
             logger.info("Telegram /status received")
-            import subprocess
-
+            import shutil, os
             uptime_s = int(time.time() - self._started_at)
             hours, remainder = divmod(uptime_s, 3600)
             minutes, secs = divmod(remainder, 60)
-
-            # System stats via psutil (or fallback)
+            # Disk (stdlib)
+            disk = shutil.disk_usage("/")
+            disk_total_gb = disk.total / (1024**3)
+            disk_used_gb = disk.used / (1024**3)
+            disk_pct = (disk.used / disk.total) * 100
+            # RAM from /proc/meminfo
             try:
-                from src.monitoring.system_monitor import get_stats
-                stats = get_stats()
-                cpu = stats.cpu_percent
-                mem_used = stats.mem_percent
-                disk_used = stats.disk_percent
-                mem_str = f"{stats.mem_used_gb:.1f}/{stats.mem_total_gb:.1f} GB"
-                disk_str = f"{stats.disk_used_gb:.1f}/{stats.disk_total_gb:.1f} GB"
+                with open("/proc/meminfo") as f:
+                    ml = {l.split(":")[0].strip(): l.split(":")[1].strip() for l in f if ":" in l}
+                mt = int(ml.get("MemTotal", "0 kB").split()[0]) * 1024
+                ma = int(ml.get("MemAvailable", "0 kB").split()[0]) * 1024
+                mu = mt - ma
+                mem_pct = (mu / mt) * 100 if mt > 0 else 0
+                mem_str = f"{mu/(1024**3):.1f}/{mt/(1024**3):.1f} GB"
             except Exception:
-                cpu = mem_used = disk_used = 0
-                mem_str = disk_str = "?"
-
-            # Container status
-            containers = []
+                mem_pct = 0
+                mem_str = "?"
+            # CPU from /proc/loadavg
             try:
-                result = subprocess.run(
-                    ["docker", "ps", "--format", "{{.Names}}: {{.Status}}"],
-                    capture_output=True, text=True, timeout=5
-                )
-                containers = [c.strip() for c in result.stdout.strip().split("\n") if c.strip()]
+                with open("/proc/loadavg") as f:
+                    load1 = float(f.read().split()[0])
+                cpu_pct = (load1 / (os.cpu_count() or 1)) * 100
             except Exception:
-                containers = ["(docker unavailable)"]
-
-            lines = [
-                f"🖥️ <b>Server Status</b>",
-                f"•••",
-                f"⏱ Uptime: {hours}h {minutes}m",
-                f"💻 CPU: {cpu:.0f}%",
-                f"💾 RAM: {mem_used:.0f}% ({mem_str})",
-                f"📀 Disk: {disk_used:.0f}% ({disk_str})",
-                f"•••",
-                f"<b>Containers:</b>",
+                cpu_pct = 0
+            # Rust engine health
+            try:
+                import urllib.request
+                req = urllib.request.Request(os.environ.get("RUST_ENGINE_URL", "http://localhost:3030") + "/api/v1/health")
+                urllib.request.urlopen(req, timeout=3)
+                engine = "\U0001f7e2 Rust engine: Online"
+            except Exception:
+                engine = "\U0001f534 Rust engine: Offline"
+            lines_out = [
+                "\U0001f5a5 Server Status",
+                "\u2022\u2022\u2022",
+                f"\u23f1 Uptime: {hours}h {minutes}m",
+                f"\U0001f4bb CPU: {cpu_pct:.0f}% (1m load avg)",
+                f"\U0001f4be RAM: {mem_pct:.0f}% ({mem_str})",
+                f"\U0001f4c0 Disk: {disk_pct:.0f}% ({disk_used_gb:.1f}/{disk_total_gb:.1f} GB)",
+                "\u2022\u2022\u2022",
+                engine,
+                "\u2022\u2022\u2022",
+                "<i>Use /bots for engine status, /pnl_all for P&L</i>",
             ]
-            for c in containers:
-                if "healthy" in c.lower() or "up" in c.lower():
-                    lines.append(f"  🟢 {c}")
-                elif "restart" in c.lower():
-                    lines.append(f"  🔴 {c}")
-                else:
-                    lines.append(f"  🟡 {c}")
-
-            lines.append("•••")
-            lines.append("<i>Use /bots for engine status, /pnl_all for P&L</i>")
-
-            update.message.reply_text("\n".join(lines), parse_mode="HTML")
+            update.message.reply_text("\n".join(lines_out), parse_mode="HTML")
         except Exception as e:
             logger.error(f"Error in /status: {e}")
-            update.message.reply_text(f"⚠️ Error: {e}")
-
-            # Per-pair Grid + Trend status
-            if hasattr(strategy, 'pairs') and strategy.pairs:
-                grid_by_pair = self.journal.summary_by_pair(today_since) if self.journal else {}
-                trend_journal = getattr(strategy, '_trend_journal', None)
-
-                for symbol, engine in strategy.pairs.items():
-                    # Grid line — show state with icon
-                    sm = strategy.state_machines.get(symbol)
-                    grid_state = sm.state.value if sm else "UNKNOWN"
-                    tracker = strategy.grid_order_trackers.get(symbol)
-                    pending = tracker.total_pending if tracker else 0
-                    pair_pnl = grid_by_pair.get(symbol, grid_by_pair.get(symbol.replace("-", "/"), {}))
-                    grid_pnl = pair_pnl.get("net_pnl", 0)
-                    grid_pnl_rust = sum(v for k, v in getattr(strategy, 'grid_pnl', {}).items() if k == symbol)
-                    grid_pnl = grid_pnl_rust if grid_pnl_rust != 0 else grid_pnl
-                    sign = "+" if grid_pnl >= 0 else ""
-                    state_icon = "🟢" if grid_state == "Active" else "🟡" if grid_state == "Paused" else "⚪"
-                    lines.append(
-                        f"🤖 <b>{engine.display_pair}:</b> {state_icon} {grid_state} | "
-                        f"P&L: {sign}${grid_pnl:.2f} | Orders: {pending}"
-                    )
-                    # Grid details from Rust (regime + ADX/CHOP/NATR)
-                    if sm and hasattr(sm, 'details') and sm.details:
-                        lines.append(f"  <i>{html.escape(sm.details)}</i>")
-
-                    # Trend line — read from Rust engine API status
-                    trend_statuses = getattr(strategy, '_trend_statuses', {})
-                    ts = trend_statuses.get(symbol)
-                    if ts:
-                        trend_state = ts.get("state", "WAITING")
-                        trend_pnl = ts.get("pnl", 0)
-                        t_sign = "+" if trend_pnl >= 0 else ""
-                        trend_details = ts.get("details", "")
-                        if trend_state == "POSITION":
-                            lines.append(
-                                f"📈 <b>{engine.display_pair}:</b> {trend_state} | "
-                                f"P&L: {t_sign}${trend_pnl:.2f}"
-                            )
-                        else:
-                            # Extract direction from details for compact display
-                            dir_str = ""
-                            if "dir:+1" in trend_details or "dir: +1" in trend_details:
-                                dir_str = "⬆"
-                            elif "dir:-1" in trend_details or "dir: -1" in trend_details:
-                                dir_str = "⬇"
-                            elif "dir:0" in trend_details or "dir: 0" in trend_details:
-                                dir_str = "➡"
-                            lines.append(
-                                f"📈 <b>{engine.display_pair}:</b> {trend_state} {dir_str} | "
-                                f"P&L: {t_sign}${trend_pnl:.2f}"
-                            )
-                        if trend_details:
-                            # Show compact: gate + dir + score on one line
-                            lines.append(f"  <i>{html.escape(trend_details)}</i>")
-
-            # Capital summary from Rust config
-            grid_cap = getattr(strategy, 'grid_pnl', {})
-            total_grid_pnl = sum(grid_cap.values()) if grid_cap else 0
-            trend_statuses = getattr(strategy, '_trend_statuses', {})
-            total_trend_pnl = sum(ts.get("pnl", 0) for ts in trend_statuses.values())
-            trend_capital = getattr(strategy, '_trend_capital', 0)
-            g_sign = "+" if total_grid_pnl >= 0 else ""
-            t_sign = "+" if total_trend_pnl >= 0 else ""
-            lines.append("•••")
-            lines.append(
-                f"💰 Grid P&L: {g_sign}${total_grid_pnl:.2f} | "
-                f"Trend P&L: {t_sign}${total_trend_pnl:.2f}"
-            )
-            if trend_capital:
-                lines.append(f"💰 Trend Capital: ${trend_capital:,.0f}")
-
-            # Circuit breaker
-            cb_status = "🛑 HALTED" if self.circuit_breaker.halted else "✅ OK"
-            lines.append(f"🛡️ CB: {cb_status}")
-
-            # Signal engine with unrealized P&L
-            sig = getattr(strategy, '_signal_engine', None)
-            if sig:
-                sig_stats = sig.get_status()
-                sig_mode = "AUDIT" if sig_stats.get("audit_mode") else "LIVE"
-                sig_state = sig_stats.get("state", "N/A")
-                open_pos = sig_stats.get("open_positions", 0)
-                risk = sig_stats.get("risk", {})
-                trades_today = risk.get("trades_today", 0)
-                max_trades = risk.get("max_trades", 10)
-                daily_pnl = risk.get("daily_pnl", 0)
-                unrealized = self._compute_signal_unrealized()
-                total_pnl = daily_pnl + unrealized
-                total_trades = trades_today + open_pos
-                lines.append(
-                    f"📡 <b>Signal ({sig_mode}):</b> {sig_state} | "
-                    f"Positions: {open_pos} | P&L: ${total_pnl:.2f} | "
-                    f"Trades: {total_trades}/{max_trades}"
-                )
-            else:
-                lines.append("📡 <b>Signal:</b> Disabled")
-
-            # ML regime — display from grid strategy details (populated by Rust engine)
-            # The grid details string contains "Active: ranging | ..." or "Paused: ML regime ..."
-            regime_parts = []
-            if hasattr(strategy, 'pairs') and strategy.pairs:
-                for symbol in strategy.pairs:
-                    sm = strategy.state_machines.get(symbol)
-                    if sm and hasattr(sm, 'details') and sm.details:
-                        detail = sm.details
-                        # Show first segment which contains state + regime reason
-                        first_seg = detail.split('|')[0].strip()
-                        regime_parts.append(f"{symbol}: {html.escape(first_seg)}")
-            if regime_parts:
-                lines.append(f"🧠 <b>Regime:</b> {' | '.join(regime_parts)}")
-
-            # System stats
-            stats = get_stats()
-            lines.append(f"•••")
-            lines.append(f"💻 CPU: {stats.cpu_percent:.0f}% | RAM: {stats.ram_percent:.0f}% | Disk: {stats.disk_percent:.0f}%")
-
-            update.message.reply_text("\n".join(lines), parse_mode="HTML")
-        except Exception as e:
-            logger.error(f"Error in /status: {e}")
-            update.message.reply_text(f"⚠️ Error: {e}")
+            update.message.reply_text(f"\u26a0 Error: {e}")
 
     def _cmd_grid_status(self, update, context):
         self._rust_strategy_status(update, "grid", "Grid Engine", "📊")
