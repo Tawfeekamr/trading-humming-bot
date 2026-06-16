@@ -109,14 +109,13 @@ class TelegramCommandHandler:
                 ping_text = (
                     "📡 <b>Telegram Command Handler Online</b>\n"
                     "•••\n"
-                    "<b>System:</b> /status /system /price /logs /errors /readiness\n"
-                    "<b>Grid:</b> /grid_status /pnl /balance /capital /trades /pending /fees /pause /resume /clear\n"
-                    "<b>Trend:</b> /trend_status /trend_capital /trend_pnl /trend_close /trend_history\n"
-                    "<b>Signal:</b> /signal_status /signal_pnl /signal_channels /signal_history /signal_pause /signal_resume /signal_close /signal_inject\n"
-                    "<b>Swing:</b> /swing_status /swing_pnl\n"
-                    "<b>Mean-Reversion:</b> /mean_status /mean_pnl\n"
-                    "<b>All:</b> /pnl_all /trades /bots /status\n"
-                    "••• /help for details"
+                    "<b>System:</b> /status /price /logs /errors /readiness\n"
+                    "<b>Overview:</b> /bots /pnl_all /trades\n"
+                    "<b>Grid:</b> /grid_status\n"
+                    "<b>Trend:</b> /trend_status /trend_pnl /trend_history\n"
+                    "<b>Swing:</b> /swing_status\n"
+                    "<b>Signal:</b> /signal_status /signal_channels /signal_history /signal_pause /signal_resume\n"
+                    "<b>MR:</b> /mean_status /mean_pnl\n"
                 )
                 self._tg_post("sendMessage", data={
                     "chat_id": self._chat_id,
