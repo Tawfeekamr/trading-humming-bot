@@ -171,7 +171,7 @@ mean_reversion:
 # XRP inconclusive. Capital modest to leave paper-balance headroom; tune via /swing.
 swing:
   enabled: true
-  enabled_pairs: ["ETH-USDT"]       # carrier pair only (backtest: ETH positive all stops/modes)
+  enabled_pairs: ["ETH-USDT", "BNB-USDT"]  # ETH validated GO; BNB testing in paper
   runner_exit: "band_or_chandelier"   # serde rename_all=snake_case on RunnerExitMode
   htf_period: "4h"                  # aggregate the 1h feed → 4h regime/band
   ltf_period: "1h"                  # LTF = the global feed
