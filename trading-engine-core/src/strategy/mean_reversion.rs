@@ -58,6 +58,9 @@ pub struct MeanReversionStrategy {
     trades: u32,
     wins: u32,
     entry_time: i64,
+    /// Cooldown after exit — prevents re-entering on the same flush signal
+    /// (churn loop: exit → flush still in window → immediate re-buy → exit → ...).
+    last_exit_time: i64,
     /// Real-clock startup time — used to skip the bar-replay warmup phase
     /// (same phantom-trade class as the trend replay bug). MR must not trade
     /// during the replay; it re-trades historical bars as if live.
@@ -86,6 +89,7 @@ impl MeanReversionStrategy {
             trades: 0,
             wins: 0,
             entry_time: 0,
+            last_exit_time: 0,
             startup_time_ms: chrono::Utc::now().timestamp_millis(),
         };
         me.load_state();
@@ -177,6 +181,11 @@ impl Strategy for MeanReversionStrategy {
 
         // 2. Core Logic
         if !self.in_position && regime_safe && self.tick_history.len() > 10 {
+            // 60s cooldown after exit — prevents churn loop where the same flush
+            // signal triggers immediate re-entry (buy → exit → buy → exit → ...).
+            if now - self.last_exit_time < 60_000 {
+                return Ok(orders);
+            }
             let oldest = self.tick_history.front().unwrap();
             let drop_pct = (oldest.price - mid) / oldest.price;
             
@@ -225,6 +234,7 @@ impl Strategy for MeanReversionStrategy {
                 if pnl > 0.0 { self.wins += 1; }
                 info!("📈 MeanReversion TP hit @ {} | PnL: ${:+.2}", mid, pnl);
                 self.in_position = false;
+                self.last_exit_time = now;
                 let pair = self.pair.clone();
                 let tg = self.telegram.clone_for_signal();
                 tokio::spawn(async move {
@@ -245,6 +255,7 @@ impl Strategy for MeanReversionStrategy {
                 if pnl > 0.0 { self.wins += 1; }
                 warn!("⚠️ MeanReversion SL hit @ {} | PnL: ${:+.2}", mid, pnl);
                 self.in_position = false;
+                self.last_exit_time = now;
                 let pair = self.pair.clone();
                 let tg = self.telegram.clone_for_signal();
                 tokio::spawn(async move {
