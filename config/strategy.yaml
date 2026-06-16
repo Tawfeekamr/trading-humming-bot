@@ -104,7 +104,7 @@ trend:
   min_signal_score: 3
   confirmation_ticks: 1
   risk_per_trade_pct: 2.0
-  max_position_pct: 80.0       # Raised from 25% to fix position sizing bottleneck
+  max_position_pct: 40.0       # Capped at 40% — balances ETH sizing with cheap-coin safety
   max_positions: 2
   max_total_positions: 2        # Claude: 3×2%=6% > 5% daily limit — reduced to 2
   exit_signal_threshold: 2      # Close position when signal score drops below this
