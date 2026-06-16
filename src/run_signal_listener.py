@@ -67,6 +67,31 @@ def _get_price(symbol):
     return 0.0
 
 
+def _telegram_send(message: str):
+    """Push a signal alert to Telegram. Sync POST, mirrors _signal_order.
+
+    Called from SignalEngine._notify for every trade event (entry, TP hits,
+    close). Must never raise — a send failure must not crash the signal tick.
+    """
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
+    if not token or not chat_id:
+        logger.warning("Telegram creds missing — skipping signal alert")
+        return
+    try:
+        import urllib.request, json
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        body = json.dumps({
+            "chat_id": chat_id,
+            "text": message,
+            "parse_mode": "HTML",
+        }).encode()
+        req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=10)
+    except Exception as e:
+        logger.error("Telegram send failed: %s", e)
+
+
 def _poll_commands(handler):
     """Background thread: poll Telegram for /commands every second."""
     while True:
@@ -125,7 +150,7 @@ async def main():
         engine = SignalEngine(
             config=signal_cfg,
             btc_regime_fn=lambda: ("RANGING", 0.0, 0.0),
-            telegram_send_fn=lambda msg: logger.info("Signal TG: %s", msg),
+            telegram_send_fn=_telegram_send,
             buy_fn=lambda symbol, amount, price, order_type="MARKET": _signal_order("BUY", symbol, amount, price),
             sell_fn=lambda symbol, amount, price, order_type="MARKET": _signal_order("SELL", symbol, amount, price),
             get_price_fn=lambda symbol: _get_price(symbol),
