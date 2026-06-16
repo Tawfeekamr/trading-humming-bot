@@ -112,8 +112,11 @@ impl UnifiedTradeJournal {
         ];
         let mut total = 0usize;
         let conn = self.conn.lock().unwrap();
-        // Clear backfilled rows (is_backfilled=1) + rebuild. Direct writes (0) preserved.
-        let _ = conn.execute("DELETE FROM trades WHERE is_backfilled = 1", []);
+        // Clear backfilled rows + rebuild. Catches both formats:
+        // - New format: is_backfilled=1 (real exit_reasons like tp3, stop_loss)
+        // - Old format: exit_reason='backfilled' (from before is_backfilled column existed)
+        // Direct writes from log_unified (is_backfilled=0, real exit_reason) are preserved.
+        let _ = conn.execute("DELETE FROM trades WHERE is_backfilled = 1 OR exit_reason = 'backfilled'", []);
         // Purge phantom MR trades from the bar-replay bug.
         let _ = conn.execute(
             "DELETE FROM trades WHERE engine = 'mr' AND timestamp LIKE '2026-06-15T22:39%'",

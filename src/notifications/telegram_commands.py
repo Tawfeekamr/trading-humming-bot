@@ -168,49 +168,35 @@ class TelegramCommandHandler:
         return {
             # System
             "status": self._cmd_status,
-            "bots": self._cmd_bots,
             "system": self._cmd_status,
             "server": self._cmd_status,
+            "bots": self._cmd_bots,
             "help": self._cmd_help,
             "logs": self._cmd_logs,
             "errors": self._cmd_errors,
             "price": self._cmd_price,
             "readiness": self._cmd_readiness,
-            # Grid
-            "grid_status": self._cmd_grid_status,
-            "pnl": self._cmd_pnl,
+            # P&L + trades
             "pnl_all": self._cmd_pnl_all,
             "trades": self._cmd_trades,
-            "balance": self._cmd_balance,
-            "capital": self._cmd_capital,
-            "pause": self._cmd_pause,
-            "resume": self._cmd_resume,
-            "reset": self._cmd_reset,
-            "trades": self._cmd_trades,
-            "pending": self._cmd_pending,
-            "fees": self._cmd_fees,
-            "clear": self._cmd_clear,
-            # Trend
+            # Engine status (Rust API)
+            "grid_status": self._cmd_grid_status,
             "trend_status": self._cmd_trend_status,
-            "trend_capital": self._cmd_trend_capital,
-            "trend_pnl": self._cmd_trend_pnl,
-            "trend_close": self._cmd_trend_close,
-            "trend_history": self._cmd_trend_history,
-            # Signal
+            "swing_status": self._cmd_swing_status,
+            "swing_pnl": self._cmd_swing_status,
             "signal_status": self._cmd_signal_status,
-            "signal_pnl": self._cmd_signal_pnl,
+            "signal_pnl": self._cmd_signal_status,
+            "mean_status": self._cmd_mean_status,
+            "mean_pnl": self._cmd_mean_status,
+            # Signal engine control
             "signal_channels": self._cmd_signal_channels,
             "signal_history": self._cmd_signal_history,
             "signal_pause": self._cmd_signal_pause,
             "signal_resume": self._cmd_signal_resume,
-            "signal_close": self._cmd_signal_close,
             "signal_inject": self._cmd_signal_inject,
-            # Swing
-            "swing_status": self._cmd_swing_status,
-            "swing_pnl": self._cmd_swing_status,
-            # Mean-Reversion
-            "mean_status": self._cmd_mean_status,
-            "mean_pnl": self._cmd_mean_status,
+            # Trend history
+            "trend_history": self._cmd_trend_history,
+            "trend_pnl": self._cmd_trend_pnl,
         }
 
     def _dispatch(self, handler, chat_id: str, msg: dict):
