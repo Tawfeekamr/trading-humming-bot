@@ -22,6 +22,51 @@ def load_config():
         return yaml.safe_load(f)
 
 
+def _signal_order(side, symbol, amount, price):
+    """Place a signal order via the Rust engine API. Returns a mock order_id."""
+    try:
+        import urllib.request, json
+        url = os.environ.get("RUST_ENGINE_URL", "http://localhost:3030") + "/api/v1/order"
+        body = json.dumps({
+            "symbol": symbol.replace("-", ""),
+            "side": side,
+            "order_type": "Market",
+            "quantity": amount,
+            "price": None,
+            "time_in_force": None,
+            "client_order_id": f"sig_{symbol.replace('-','_')}_{int(time.time())}",
+            "reduce_only": side == "SELL",
+        }).encode()
+        req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
+        resp = urllib.request.urlopen(req, timeout=10)
+        data = json.loads(resp.read())
+        oid = data.get("orderId", "unknown")
+        logger.info(f"Signal {side} placed: {symbol} qty={amount} -> {oid}")
+        return oid
+    except Exception as e:
+        logger.error(f"Signal {side} FAILED for {symbol}: {e}")
+        return None
+
+
+def _get_price(symbol):
+    """Get current price from Rust engine orderbook."""
+    try:
+        import urllib.request, json
+        sym = symbol.replace("-", "")
+        url = os.environ.get("RUST_ENGINE_URL", "http://localhost:3030") + f"/api/v1/orderbook?symbol={sym}&limit=1"
+        resp = urllib.request.urlopen(url, timeout=5)
+        data = json.loads(resp.read())
+        bids = data.get("bids", [])
+        asks = data.get("asks", [])
+        if bids and asks:
+            return (float(bids[0][0]) + float(asks[0][0])) / 2
+        elif bids:
+            return float(bids[0][0])
+    except Exception:
+        pass
+    return 0.0
+
+
 def _poll_commands(handler):
     """Background thread: poll Telegram for /commands every second."""
     while True:
@@ -81,9 +126,9 @@ async def main():
             config=signal_cfg,
             btc_regime_fn=lambda: ("RANGING", 0.0, 0.0),
             telegram_send_fn=lambda msg: logger.info("Signal TG: %s", msg),
-            buy_fn=lambda s, a, p, ot="MARKET": logger.info("Signal buy %s %s @ %s (Rust executes)", s, a, p),
-            sell_fn=lambda s, a, p, ot="MARKET": logger.info("Signal sell %s %s @ %s (Rust executes)", s, a, p),
-            get_price_fn=lambda s: 0.0,
+            buy_fn=lambda symbol, amount, price, order_type="MARKET": _signal_order("BUY", symbol, amount, price),
+            sell_fn=lambda symbol, amount, price, order_type="MARKET": _signal_order("SELL", symbol, amount, price),
+            get_price_fn=lambda symbol: _get_price(symbol),
         )
         engine.start_listener()
         logger.info("Signal Copy Engine started — listening to Telegram channels")
