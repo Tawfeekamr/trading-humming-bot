@@ -510,11 +510,20 @@ impl Strategy for GridStrategy {
         // Get mid price from order book
         let mid_price = match ctx.order_book.mid_price() {
             Some(price) => price,
-            None => return Ok(Vec::new()),
+            None => {
+                // During replay (no order book) — still log ADX state for diagnostics
+                debug!("[{}] ADX state: count={} initialized={} value={:.2}",
+                    self.pair, self.adx.count(), self.adx.is_initialized(), self.adx.adx());
+                return Ok(Vec::new());
+            }
         };
 
         // Store regime indicator diagnostics
         self.diag_adx = self.adx.adx();
+        if self.adx.count() > 0 && !self.adx.is_initialized() {
+            warn!("[{}] ADX NOT initialized after {} bars! count={} initialized={} dx_values={}",
+                self.pair, self.adx.count(), self.adx.count(), self.adx.is_initialized(), self.adx.count());
+        }
         self.diag_chop = self.choppiness.value();
         self.diag_natr = if self.atr.is_initialized() && mid_price > 0.0 {
             self.atr.value() / mid_price // matches Python: atr_14 / close (no ×100)
