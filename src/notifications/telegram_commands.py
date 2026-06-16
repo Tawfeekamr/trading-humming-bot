@@ -169,8 +169,8 @@ class TelegramCommandHandler:
             # System
             "status": self._cmd_status,
             "bots": self._cmd_bots,
-            "system": self._cmd_server,
-            "server": self._cmd_server,
+            "system": self._cmd_status,
+            "server": self._cmd_status,
             "help": self._cmd_help,
             "logs": self._cmd_logs,
             "errors": self._cmd_errors,
@@ -1070,18 +1070,27 @@ class TelegramCommandHandler:
                 data = json.loads(resp.read())
                 api_responsive = True
 
-                # Extract PnL data from all strategies
-                strategies = data.get("strategies", {})
-                for symbol, status in strategies.items():
+                # API returns a JSON array of strategy statuses
+                strategies = data if isinstance(data, list) else data.get("strategies", [])
+                for status in strategies:
                     pnl = status.get("pnl", 0)
                     total_paper_pnl += pnl
-
-                    # Count active strategies (POSITION or Scanning states)
                     state = status.get("state", "").upper()
-                    if state in ["POSITION", "SCANNING", "WAITING"]:
+                    if state in ["POSITION", "SCANNING", "WAITING", "SEARCHING"]:
                         active_strategies += 1
 
                 logger.info(f"Readiness: API responsive, {active_strategies} active strategies, P&L=${total_paper_pnl:.2f}")
+
+                # Also read from unified trades.db for total realized P&L (more accurate)
+                try:
+                    import sqlite3
+                    c = sqlite3.connect("data/trades.db")
+                    db_pnl = c.execute("SELECT COALESCE(SUM(pnl),0) FROM trades").fetchone()[0]
+                    c.close()
+                    if db_pnl > total_paper_pnl:
+                        total_paper_pnl = db_pnl  # Use the higher (trades.db has full history)
+                except Exception:
+                    pass
             except Exception as e:
                 logger.warning(f"Readiness: Rust API unavailable ({e}), using fallback values")
                 # Fallback: try to estimate from Python strategy
