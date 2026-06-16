@@ -84,6 +84,16 @@ impl UnifiedTradeJournal {
         exit_reason: Option<&str>,
         duration_mins: Option<i64>,
     ) {
+        // Subtract round-trip fees (0.1% maker each side = 0.2%) from the
+        // gross P&L so /pnl_all and /trades show NET profit. The paper engine
+        // already deducts fees from the balance; this makes the reporting match.
+        const FEE_RATE: f64 = 0.001; // per side
+        let net_pnl = if let (Some(ep), Some(xp), Some(qty)) = (entry_price, exit_price, quantity) {
+            let notional = (ep * qty) + (xp * qty); // entry + exit notional
+            pnl - (notional * FEE_RATE) // subtract round-trip fee
+        } else {
+            pnl // no notional info → log as-is (rare)
+        };
         let conn = self.conn.lock().unwrap();
         if let Err(e) = conn.execute(
             "INSERT OR IGNORE INTO trades
@@ -91,7 +101,7 @@ impl UnifiedTradeJournal {
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             rusqlite::params![
                 Utc::now().to_rfc3339(), engine, pair, side, entry_price, exit_price, quantity,
-                pnl, exit_reason, duration_mins,
+                net_pnl, exit_reason, duration_mins,
             ],
         ) {
             error!("Unified journal write failed: {}", e);
