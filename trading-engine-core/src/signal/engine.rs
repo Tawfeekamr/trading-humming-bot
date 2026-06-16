@@ -124,16 +124,36 @@ impl SignalEngine {
                 )).await;
             }
 
-            // TP3 hit
+            // TP3 hit — start trailing runner instead of full close
             if !pos.tp3_hit && pos.take_profits.len() >= 3 && current_price >= pos.take_profits[2] {
                 mgr.get_position_mut(&pos.symbol).map(|p| p.tp3_hit = true);
-                let pnl = mgr.close_position(&pos.symbol, pos.take_profits[2], "tp3");
+                // Move SL to TP3 (breakeven for the runner) — don't close.
+                // The remaining position trails upward, capturing TPs 4-8.
+                mgr.update_stop_loss(&pos.symbol, pos.take_profits[2]);
                 self.notify(&format!(
-                    "[{}] TP3 hit: {} @ ${:.2}, position closed",
+                    "[{}] TP3 hit: {} @ ${:.2}, SL → TP3 (trailing runner for TPs 4+)",
                     if self.config.audit_mode { "AUDIT" } else { "LIVE" },
                     pos.symbol, pos.take_profits[2]
                 )).await;
-                self.record_close(&pos, pos.take_profits[2], "tp3", pnl).await;
+            }
+
+            // Trailing runner after TP3: ratchet SL upward toward remaining TPs
+            if pos.tp3_hit && pos.take_profits.len() > 3 {
+                // Find the next un-hit TP level above current price
+                let next_tp_idx = (3..pos.take_profits.len())
+                    .find(|&i| pos.take_profits[i] > pos.stop_loss)
+                    .unwrap_or(pos.take_profits.len() - 1);
+                let next_tp = pos.take_profits[next_tp_idx];
+                // Trail: when price reaches the next TP, ratchet SL up to halfway
+                if current_price >= next_tp && next_tp > pos.stop_loss {
+                    let new_sl = (next_tp + pos.stop_loss) / 2.0;
+                    mgr.update_stop_loss(&pos.symbol, new_sl);
+                    self.notify(&format!(
+                        "[{}] Trail ratchet: {} SL → ${:.2} (approaching TP{})",
+                        if self.config.audit_mode { "AUDIT" } else { "LIVE" },
+                        pos.symbol, new_sl, next_tp_idx + 1
+                    )).await;
+                }
             }
         }
     }
