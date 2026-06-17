@@ -14,6 +14,24 @@ struct PaperOrder {
     price: Option<f64>,
     quantity: f64,
     order_type: OrderTypeReq,
+    reduce_only: bool,
+}
+
+/// Split a trading symbol into (base, quote), borrowing from the input.
+/// Handles "BTC-USDT" and "BTCUSDT" forms.
+fn split_pair(symbol: &str) -> (&str, &str) {
+    if let Some(pos) = symbol.find('-') {
+        (&symbol[..pos], &symbol[pos + 1..])
+    } else if symbol.ends_with("USDT") || symbol.ends_with("BUSD") {
+        let pos = symbol.len() - 4;
+        (&symbol[..pos], &symbol[pos..])
+    } else if symbol.ends_with("BTC") || symbol.ends_with("ETH") {
+        let pos = symbol.len() - 3;
+        (&symbol[..pos], &symbol[pos..])
+    } else {
+        let pos = symbol.len().saturating_sub(4);
+        (&symbol[..pos], &symbol[pos..])
+    }
 }
 
 pub struct PaperTradeEngine {
@@ -58,6 +76,7 @@ impl PaperTradeEngine {
             price: req.price,
             quantity: req.quantity,
             order_type: req.order_type,
+            reduce_only: req.reduce_only,
         });
 
         Ok(OrderResponse {
@@ -126,29 +145,29 @@ impl PaperTradeEngine {
             };
 
             if should_fill {
+                let (base, quote) = split_pair(&order.symbol);
+
+                // Enforce reduce_only: a reduce_only order may only CLOSE an
+                // existing position, never open one. Live exchanges reject these
+                // with no position; paper must match, or grid (flat) "sells"
+                // inventory it never bought — a naked short booked as fake profit.
+                if order.reduce_only {
+                    let base_bal = *self.balances.get(base).unwrap_or(&0.0);
+                    let blocked = match order.side {
+                        // Sell closes a long → need base_bal >= qty.
+                        OrderSide::Sell => base_bal < order.quantity - 1e-12,
+                        // Buy closes a short → need base_bal <= -qty.
+                        OrderSide::Buy => base_bal > -order.quantity + 1e-12,
+                    };
+                    if blocked {
+                        remaining.push(order);
+                        continue;
+                    }
+                }
+
                 let fill_price = order.price.unwrap_or(market_price);
                 let fill_qty = order.quantity;
                 let fee = fill_price * fill_qty * FEE_RATE;
-
-                // Extract base/quote from symbol (handles "BTCUSDT" and "BTC-USDT" formats)
-                let (base, quote) = if let Some(pos) = order.symbol.find('-') {
-                    (&order.symbol[..pos], &order.symbol[pos+1..])
-                } else if order.symbol.ends_with("USDT") {
-                    let pos = order.symbol.len() - 4;
-                    (&order.symbol[..pos], &order.symbol[pos..])
-                } else if order.symbol.ends_with("BUSD") {
-                    let pos = order.symbol.len() - 4;
-                    (&order.symbol[..pos], &order.symbol[pos..])
-                } else if order.symbol.ends_with("BTC") {
-                    let pos = order.symbol.len() - 3;
-                    (&order.symbol[..pos], &order.symbol[pos..])
-                } else if order.symbol.ends_with("ETH") {
-                    let pos = order.symbol.len() - 3;
-                    (&order.symbol[..pos], &order.symbol[pos..])
-                } else {
-                    let pos = order.symbol.len().saturating_sub(4);
-                    (&order.symbol[..pos], &order.symbol[pos..])
-                };
 
                 match order.side {
                     OrderSide::Buy => {
@@ -368,5 +387,47 @@ mod tests {
         assert_eq!(fills.len(), 1);
         // Maker fills at its resting price, not the market price.
         assert!((fills[0].price - 50_000.0).abs() < 1e-9);
+    }
+
+    fn limit_sell(qty: f64, reduce_only: bool) -> OrderRequest {
+        OrderRequest {
+            symbol: "BTCUSDT".to_string(),
+            side: OrderSide::Sell,
+            order_type: OrderTypeReq::Limit,
+            price: Some(51_000.0),
+            quantity: qty,
+            time_in_force: None,
+            client_order_id: None,
+            reduce_only,
+        }
+    }
+
+    /// A reduce_only sell must NOT fill when the account holds none of the base —
+    /// otherwise paper lets grid (and any flat strategy) "sell" inventory it never
+    /// bought, opening a naked short that shows as fake profit. Live exchanges
+    /// reject reduce_only sells with no position; paper must match.
+    #[test]
+    fn reduce_only_sell_does_not_fill_without_inventory() {
+        let mut bal = HashMap::new();
+        bal.insert("USDT".to_string(), 10_000.0); // no BTC held
+        let mut e = PaperTradeEngine::new(bal);
+        e.place_order(&limit_sell(0.5, true)).unwrap();
+        // Price rises to the sell limit — but no inventory ⇒ must not fill.
+        let fills = e.try_fill_at_price("BTCUSDT", 51_000.0);
+        assert!(fills.is_empty(), "reduce_only sell must NOT fill with no inventory");
+        let btc = e.balances().get("BTC").copied().unwrap_or(0.0);
+        assert!(btc >= 0.0, "reduce_only sell must never push base balance negative (no naked short)");
+    }
+
+    /// A reduce_only sell must still fill normally when the base IS held (closing a
+    /// long) — this is MR/swing/trend exits and a real grid round-trip.
+    #[test]
+    fn reduce_only_sell_fills_when_inventory_exists() {
+        let mut e = engine(); // holds 1.0 BTC
+        e.place_order(&limit_sell(0.5, true)).unwrap();
+        let fills = e.try_fill_at_price("BTCUSDT", 51_000.0);
+        assert_eq!(fills.len(), 1, "reduce_only sell must fill when you hold the base");
+        let btc = e.balances().get("BTC").copied().unwrap_or(0.0);
+        assert!((btc - 0.5).abs() < 1e-9, "BTC should drop 1.0 → 0.5");
     }
 }
