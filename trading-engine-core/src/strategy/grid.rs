@@ -699,19 +699,23 @@ impl Strategy for GridStrategy {
     }
 
     async fn on_fill(&mut self, fill: &Fill) -> Result<Vec<OrderRequest>> {
-        // Skip fills not placed by this grid (e.g., trend strategy fills).
-        // Grid orders use format "grid_{pair}_buy_{i}" or "grid_{pair}_sell_{i}".
-        if !fill.order_id.starts_with("grid_") {
+        // Identify OUR fills via client_order_id, which carries the "grid_…" marker
+        // the engine tagged ("owner:{idx}#grid_{pair}_{side}_{i}"). fill.order_id is
+        // the connector's own id ("paper_N") and must NOT be used for this check —
+        // doing so silently dropped every grid fill (no P&L, no cooldown, no notify).
+        let cid = fill.client_order_id.clone().unwrap_or_default();
+        let ours = cid.rsplit_once('#').map(|(_, rest)| rest).unwrap_or(&cid);
+        if !ours.starts_with("grid_") {
             return Ok(Vec::new());
         }
 
-        // Remove the filled order from tracking
-        self.orders.retain(|_, o| o.order_id != fill.order_id);
+        // Remove the filled order from tracking (keys are the un-tagged cids).
+        self.orders.retain(|_, o| o.order_id != ours);
 
-        // Set per-level cooldown from order_id (e.g., "grid_DOGE-USDT_buy_2" → "buy_2")
+        // Set per-level cooldown from the cid (e.g., "grid_DOGE-USDT_buy_2" → "buy_2")
         let mut level_key = String::new();
-        if let Some(idx) = fill.order_id.rfind("_buy_").or_else(|| fill.order_id.rfind("_sell_")) {
-            level_key = fill.order_id[idx + 1..].to_string(); // "buy_2" or "sell_0"
+        if let Some(idx) = ours.rfind("_buy_").or_else(|| ours.rfind("_sell_")) {
+            level_key = ours[idx + 1..].to_string(); // "buy_2" or "sell_0"
             info!("[{}] Grid fill: {} @ ${:.2} (level={})", self.pair, level_key, fill.price, level_key);
             self.level_cooldowns.insert(level_key.clone(), fill.timestamp);
         }
@@ -850,7 +854,18 @@ mod tests {
     }
 
     fn make_grid() -> GridStrategy {
-        GridStrategy::new("BTC-USDT", &test_config(), 0.01, 0.001, TelegramBot::disabled())
+        use std::sync::atomic::{AtomicU64, Ordering};
+        // Each call gets a unique temp state dir so no test reads or writes the
+        // real data/ (an on_fill → save_state would otherwise pollute other tests
+        // via load_state on the next make_grid). Unique per call + per process.
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let n = SEQ.fetch_add(1, Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!("grid_test_{}_{}", std::process::id(), n));
+        let _ = std::fs::create_dir_all(&dir);
+        GridStrategy::new_with_state_dir(
+            "BTC-USDT", &test_config(), 0.01, 0.001,
+            dir.to_str().unwrap(), TelegramBot::disabled(),
+        )
     }
 
     fn warm_adx(grid: &mut GridStrategy) {
@@ -1098,5 +1113,39 @@ mod tests {
         assert!(sell.contains("SELL"), "sell msg: {}", sell);
         assert!(!sell.contains("BUY"), "sell msg must not say BUY: {}", sell);
         assert!(sell.contains("DOGE-USDT") && sell.contains("sell_0"));
+    }
+
+    /// Grid must identify its OWN fills via client_order_id (which carries the
+    /// "grid_…" marker the engine tagged), NOT fill.order_id — the connector
+    /// assigns its own id ("paper_N") to order_id. Checking order_id made grid
+    /// silently drop every fill, so it never booked P&L, never set cooldowns,
+    /// never saved state, never notified (root cause of "grid 0 trades ever").
+    #[tokio::test]
+    async fn on_fill_processes_fill_identified_by_client_order_id() {
+        let mut grid = make_grid();
+        // A resting grid order the strategy is tracking (keyed by its cid).
+        grid.orders.insert(
+            "grid_BTC-USDT_sell_1".to_string(),
+            GridOrder { order_id: "grid_BTC-USDT_sell_1".to_string() },
+        );
+        let pnl_before = grid.realized_pnl();
+
+        // Engine tags cids as "owner:{idx}#{cid}"; connector order_id is "paper_N".
+        let fill = Fill {
+            fill_id: "f".into(),
+            order_id: "paper_16".into(), // connector id — does NOT start with "grid_"
+            client_order_id: Some("owner:0#grid_BTC-USDT_sell_1".into()),
+            symbol: "BTCUSDT".into(),
+            side: OrderSide::Sell,
+            price: 100.0,
+            quantity: 1.0,
+            fee: 0.1,
+            timestamp: 1,
+        };
+        grid.on_fill(&fill).await.unwrap();
+
+        assert!(grid.orders.is_empty(), "filled order must be removed from tracking");
+        assert!(grid.realized_pnl() > pnl_before, "sell fill must book positive PnL");
+        assert!(grid.has_level_cooldown("sell_1"), "level cooldown must be set after a fill");
     }
 }
