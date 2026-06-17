@@ -62,6 +62,10 @@ pub struct GridStrategy {
     // Per-level fill cooldown — prevents order churn loop
     // Key: level identity like "buy_2" or "sell_0", Value: epoch millis of fill
     level_cooldowns: HashMap<String, i64>,
+    // Resting order client-ids the strategy wants the engine to cancel next cycle.
+    // Drained on deactivation so a re-activation re-places at the fresh center
+    // instead of freezing on stale startup prices (root cause of 0 grid fills).
+    cancel_queue: Vec<String>,
     // Diagnostic values
     diag_price: f64,
     diag_rsi: f64,
@@ -99,6 +103,7 @@ impl GridStrategy {
             grid_layout: None,
             orders: HashMap::new(),
             level_cooldowns: HashMap::new(),
+            cancel_queue: Vec::new(),
             total_pnl: 0.0,
             peak_equity: config.capital_usdt,
             initial_capital: config.capital_usdt,
@@ -395,6 +400,12 @@ impl GridStrategy {
                     warn!("[{}] Grid DEACTIVATED: {}", self.pair, reason);
                     self.state = GridState::Paused;
                     self.pause_reason = reason;
+                    // Cancel resting orders and drop our tracking so the next
+                    // activation re-places at the current center. Without this the
+                    // stale order ids pin `pending_count > 0` and the grid freezes.
+                    for cid in self.orders.drain().map(|(_, o)| o.order_id) {
+                        self.cancel_queue.push(cid);
+                    }
                 }
             }
         }
@@ -716,6 +727,10 @@ impl Strategy for GridStrategy {
         Ok(())
     }
 
+    fn pending_cancels(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.cancel_queue)
+    }
+
     fn status(&self) -> StrategyStatus {
         let state_str = match self.state {
             GridState::Active => "Active",
@@ -1008,5 +1023,41 @@ mod tests {
     fn test_no_cooldown_when_no_fills() {
         let grid = make_grid();
         assert!(grid.level_cooldowns.is_empty());
+    }
+
+    /// When an active grid deactivates (regime turns against it), it must cancel
+    /// its resting orders AND clear its own tracking — otherwise the stale order
+    /// ids keep `pending_count > 0` forever and the grid can never re-place at the
+    /// new center. This is the root cause of grid completing 0 fills in production:
+    /// it placed one batch at startup and then froze as price drifted away.
+    #[test]
+    fn deactivation_cancels_resting_orders_and_clears_tracking() {
+        let mut grid = make_grid();
+        warm_adx(&mut grid);
+        warm_chop(&mut grid);
+        warm_atr(&mut grid);
+        grid.diag_bars_count = 50;
+        grid.state = GridState::Active;
+        // Resting orders placed at a (now stale) center.
+        for key in ["grid_BTC-USDT_buy_0", "grid_BTC-USDT_buy_1", "grid_BTC-USDT_sell_0"] {
+            grid.orders.insert(
+                key.to_string(),
+                GridOrder { order_id: key.to_string() },
+            );
+        }
+
+        // Regime turns to a strong trend → gate fails → grid must deactivate.
+        grid.diag_adx = 30.0; // > adx_range_max (22) ⇒ trending
+        grid.diag_chop = 65.0;
+        grid.diag_natr = 0.02;
+        grid.evaluate_state_with_ml(100.0, 90.0, 110.0, Some(0), 0.0);
+
+        assert_eq!(grid.state, GridState::Paused, "grid should deactivate on trend");
+        assert!(grid.orders.is_empty(), "stale orders must be cleared on deactivation");
+        let cancels = grid.pending_cancels();
+        assert_eq!(cancels.len(), 3, "all resting orders must be queued for cancel");
+        for key in ["grid_BTC-USDT_buy_0", "grid_BTC-USDT_buy_1", "grid_BTC-USDT_sell_0"] {
+            assert!(cancels.contains(&key.to_string()), "missing cancel for {}", key);
+        }
     }
 }
