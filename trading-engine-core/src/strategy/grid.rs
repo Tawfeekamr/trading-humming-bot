@@ -54,6 +54,11 @@ pub struct GridStrategy {
     peak_equity: f64,
     initial_capital: f64,
     current_capital: f64,
+    // Open inventory accumulated from BUY fills (avg-cost basis). In-memory only:
+    // paper balances reset on restart, so inventory must too. Only SELLS realize
+    // P&L (against this basis); buys are not losses.
+    inventory_qty: f64,
+    inventory_cost: f64,
     // Regime + volatility indicators
     adx: Adx,
     choppiness: Choppiness,
@@ -111,6 +116,8 @@ impl GridStrategy {
             peak_equity: config.capital_usdt,
             initial_capital: config.capital_usdt,
             current_capital: config.capital_usdt,
+            inventory_qty: 0.0,
+            inventory_cost: 0.0,
             adx: Adx::new(14),
             choppiness: Choppiness::new(14),
             atr: Atr::new(14),
@@ -468,12 +475,19 @@ fn round_down(value: f64, increment: f64) -> f64 {
     (value / increment).floor() * increment
 }
 
-/// Telegram message for a grid fill. Extracted so the format is unit-testable
-/// without a network send. `running_pnl` is the grid's cumulative realized P&L
-/// after this fill (grid records cash flow per fill).
-fn grid_fill_message(pair: &str, is_buy: bool, level: &str, price: f64, running_pnl: f64) -> String {
-    let (emoji, side) = if is_buy { ("📥", "BUY") } else { ("📤", "SELL") };
-    format!("{} Grid {} {} | {} @ ${:.4} | PnL ${:+.2}", emoji, side, pair, level, price, running_pnl)
+/// Telegram message for a grid BUY. Shows accumulated inventory + cost basis —
+/// NOT "PnL", because a buy is an asset swap (cash → inventory), not a loss.
+fn grid_buy_message(pair: &str, level: &str, price: f64, inv_qty: f64, inv_cost: f64) -> String {
+    let base = pair.split('-').next().unwrap_or(pair);
+    format!("📥 Grid BUY {} | {} @ ${:.4} | holding {:.4} {} (${:.2} basis)",
+        pair, level, price, inv_qty, base, inv_cost)
+}
+
+/// Telegram message for a grid SELL — the only event that realizes P&L.
+/// `realized` is this fill's profit vs avg cost; `total` is cumulative realized.
+fn grid_sell_message(pair: &str, level: &str, price: f64, realized: f64, total: f64) -> String {
+    format!("📤 Grid SELL {} | {} @ ${:.4} | realized ${:+.2} (total ${:+.2})",
+        pair, level, price, realized, total)
 }
 
 use crate::strategy::{Strategy, TickContext, StrategyStatus, MarketRegime};
@@ -716,31 +730,44 @@ impl Strategy for GridStrategy {
         let mut level_key = String::new();
         if let Some(idx) = ours.rfind("_buy_").or_else(|| ours.rfind("_sell_")) {
             level_key = ours[idx + 1..].to_string(); // "buy_2" or "sell_0"
-            info!("[{}] Grid fill: {} @ ${:.2} (level={})", self.pair, level_key, fill.price, level_key);
             self.level_cooldowns.insert(level_key.clone(), fill.timestamp);
         }
 
-        // Calculate rough PnL estimate from fill
-        let pnl = match fill.side {
-            OrderSide::Buy => -(fill.price * fill.quantity + fill.fee),
-            OrderSide::Sell => fill.price * fill.quantity - fill.fee,
-        };
-
-        self.record_pnl(pnl);
-
-        // Notify on every fill (entry = buy, win/lose = sell). Fire-and-forget so
-        // Telegram latency can't stall the fill loop. Grid was previously silent.
-        let msg = grid_fill_message(
-            &self.pair,
-            matches!(fill.side, OrderSide::Buy),
-            &level_key,
-            fill.price,
-            self.total_pnl,
-        );
         let tg = self.telegram.clone_for_signal();
-        tokio::spawn(async move { let _ = tg.send(&msg).await; });
-
-        crate::strategy::trade_journal::log_unified("grid", &self.pair, None, Some(fill.price), Some(fill.quantity), pnl, Some("grid_fill"), None);
+        match fill.side {
+            OrderSide::Buy => {
+                // A buy accumulates inventory at cost — it is NOT a realized loss.
+                self.inventory_qty += fill.quantity;
+                self.inventory_cost += fill.price * fill.quantity + fill.fee;
+                info!("[{}] Grid BUY {} @ ${:.4} (level={}) → holding {:.4} (${:.2} basis)",
+                    self.pair, fill.quantity, fill.price, level_key, self.inventory_qty, self.inventory_cost);
+                let msg = grid_buy_message(&self.pair, &level_key, fill.price, self.inventory_qty, self.inventory_cost);
+                tokio::spawn(async move { let _ = tg.send(&msg).await; });
+                // No trade-journal row: a buy opens inventory, it doesn't realize P&L.
+            }
+            OrderSide::Sell => {
+                // Realize profit against average cost. reduce_only guarantees we
+                // hold inventory; if not (e.g. restart wiped it), realize $0.
+                let mut realized = 0.0;
+                let mut avg_cost = fill.price;
+                if self.inventory_qty > 1e-12 {
+                    avg_cost = self.inventory_cost / self.inventory_qty;
+                    let cost_sold = (avg_cost * fill.quantity).min(self.inventory_cost);
+                    realized = (fill.price * fill.quantity - fill.fee) - cost_sold;
+                    self.inventory_qty = (self.inventory_qty - fill.quantity).max(0.0);
+                    self.inventory_cost = (self.inventory_cost - cost_sold).max(0.0);
+                }
+                self.record_pnl(realized);
+                info!("[{}] Grid SELL {} @ ${:.4} (level={}) → realized ${:+.2}",
+                    self.pair, fill.quantity, fill.price, level_key, realized);
+                let msg = grid_sell_message(&self.pair, &level_key, fill.price, realized, self.total_pnl);
+                tokio::spawn(async move { let _ = tg.send(&msg).await; });
+                // Only the SELL (a realized round-trip) is journaled — like other engines.
+                crate::strategy::trade_journal::log_unified(
+                    "grid", &self.pair, Some(avg_cost), Some(fill.price),
+                    Some(fill.quantity), realized, Some("grid_sell"), None);
+            }
+        }
         self.save_state_internal();
         Ok(Vec::new())
     }
@@ -866,6 +893,21 @@ mod tests {
             "BTC-USDT", &test_config(), 0.01, 0.001,
             dir.to_str().unwrap(), TelegramBot::disabled(),
         )
+    }
+
+    /// Build a fill with the engine-tagged client_order_id and connector order_id.
+    fn gf(cid: &str, side: OrderSide, price: f64, qty: f64) -> Fill {
+        Fill {
+            fill_id: "f".into(),
+            order_id: "paper_1".into(),
+            client_order_id: Some(cid.into()),
+            symbol: "BTCUSDT".into(),
+            side,
+            price,
+            quantity: qty,
+            fee: price * qty * 0.001,
+            timestamp: 1,
+        }
     }
 
     fn warm_adx(grid: &mut GridStrategy) {
@@ -1100,52 +1142,60 @@ mod tests {
         }
     }
 
-    /// A grid fill must ping Telegram with the side, pair, level, and running
-    /// P&L — grid was previously totally silent (no telegram calls at all).
-    #[test]
-    fn fill_message_distinguishes_buy_and_sell_with_pair_and_level() {
-        let buy = grid_fill_message("ETH-USDT", true, "buy_2", 1780.0, -5.0);
-        assert!(buy.contains("BUY"), "buy msg: {}", buy);
-        assert!(!buy.contains("SELL"), "buy msg must not say SELL: {}", buy);
-        assert!(buy.contains("ETH-USDT") && buy.contains("buy_2"));
-
-        let sell = grid_fill_message("DOGE-USDT", false, "sell_0", 0.085, 7.5);
-        assert!(sell.contains("SELL"), "sell msg: {}", sell);
-        assert!(!sell.contains("BUY"), "sell msg must not say BUY: {}", sell);
-        assert!(sell.contains("DOGE-USDT") && sell.contains("sell_0"));
+    /// Grid must identify its OWN fills via client_order_id (the engine-tagged
+    /// "owner:idx#grid_…"), never fill.order_id (the connector's "paper_N").
+    #[tokio::test]
+    async fn on_fill_ignores_non_grid_fills() {
+        let mut grid = make_grid();
+        // A trend-strategy fill (cid has no "grid_") must be ignored entirely.
+        grid.on_fill(&gf("owner:1#trend_BTC-USDT_entry", OrderSide::Buy, 100.0, 1.0)).await.unwrap();
+        assert_eq!(grid.realized_pnl(), 0.0, "non-grid fill must not affect grid");
     }
 
-    /// Grid must identify its OWN fills via client_order_id (which carries the
-    /// "grid_…" marker the engine tagged), NOT fill.order_id — the connector
-    /// assigns its own id ("paper_N") to order_id. Checking order_id made grid
-    /// silently drop every fill, so it never booked P&L, never set cooldowns,
-    /// never saved state, never notified (root cause of "grid 0 trades ever").
+    /// A BUY accumulates inventory at cost — it must NOT book realized P&L
+    /// (the old cash-flow accounting logged buys as fake "-$792 losses").
     #[tokio::test]
-    async fn on_fill_processes_fill_identified_by_client_order_id() {
+    async fn buy_accumulates_inventory_without_realizing_pnl() {
         let mut grid = make_grid();
-        // A resting grid order the strategy is tracking (keyed by its cid).
-        grid.orders.insert(
-            "grid_BTC-USDT_sell_1".to_string(),
-            GridOrder { order_id: "grid_BTC-USDT_sell_1".to_string() },
-        );
-        let pnl_before = grid.realized_pnl();
+        grid.on_fill(&gf("owner:0#grid_BTC-USDT_buy_0", OrderSide::Buy, 100.0, 1.0)).await.unwrap();
+        assert_eq!(grid.realized_pnl(), 0.0, "a buy must not book realized PnL");
+    }
 
-        // Engine tags cids as "owner:{idx}#{cid}"; connector order_id is "paper_N".
-        let fill = Fill {
-            fill_id: "f".into(),
-            order_id: "paper_16".into(), // connector id — does NOT start with "grid_"
-            client_order_id: Some("owner:0#grid_BTC-USDT_sell_1".into()),
-            symbol: "BTCUSDT".into(),
-            side: OrderSide::Sell,
-            price: 100.0,
-            quantity: 1.0,
-            fee: 0.1,
-            timestamp: 1,
-        };
-        grid.on_fill(&fill).await.unwrap();
+    /// A SELL realizes profit against the average buy cost — only this is real
+    /// grid P&L, and only this gets journaled (matches trend/MR/signal).
+    #[tokio::test]
+    async fn sell_realizes_profit_against_average_buy_cost() {
+        let mut grid = make_grid();
+        // Buy 1.0 @ 100 → cost basis 100 + 0.1 fee = 100.1
+        grid.on_fill(&gf("owner:0#grid_BTC-USDT_buy_0", OrderSide::Buy, 100.0, 1.0)).await.unwrap();
+        assert_eq!(grid.realized_pnl(), 0.0, "still nothing realized after buy");
+        // Sell 1.0 @ 110 → proceeds 110 − 0.11 fee = 109.89; realized 109.89 − 100.1 = 9.79
+        grid.on_fill(&gf("owner:0#grid_BTC-USDT_sell_0", OrderSide::Sell, 110.0, 1.0)).await.unwrap();
+        let r = grid.realized_pnl();
+        assert!((r - 9.79).abs() < 0.05, "realized should be ~9.79, got {}", r);
+    }
 
+    /// A sell must still set the per-level cooldown + clear order tracking.
+    #[tokio::test]
+    async fn sell_sets_cooldown_and_clears_tracking() {
+        let mut grid = make_grid();
+        grid.orders.insert("grid_BTC-USDT_sell_1".into(), GridOrder { order_id: "grid_BTC-USDT_sell_1".into() });
+        grid.on_fill(&gf("owner:0#grid_BTC-USDT_buy_0", OrderSide::Buy, 100.0, 2.0)).await.unwrap();
+        grid.on_fill(&gf("owner:0#grid_BTC-USDT_sell_1", OrderSide::Sell, 101.0, 1.0)).await.unwrap();
         assert!(grid.orders.is_empty(), "filled order must be removed from tracking");
-        assert!(grid.realized_pnl() > pnl_before, "sell fill must book positive PnL");
         assert!(grid.has_level_cooldown("sell_1"), "level cooldown must be set after a fill");
+    }
+
+    #[test]
+    fn buy_message_shows_inventory_not_pnl() {
+        let m = grid_buy_message("DOGE-USDT", "buy_0", 0.0858, 9235.0, 792.0);
+        assert!(m.contains("BUY") && m.contains("DOGE-USDT"));
+        assert!(!m.contains("PnL"), "buy message must not show PnL (it's inventory): {}", m);
+    }
+
+    #[test]
+    fn sell_message_shows_realized_pnl() {
+        let m = grid_sell_message("DOGE-USDT", "sell_0", 0.09, 9.79, 9.79);
+        assert!(m.contains("SELL") && m.contains("DOGE-USDT") && m.contains("realized"));
     }
 }
