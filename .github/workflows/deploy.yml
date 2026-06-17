@@ -34,9 +34,6 @@ jobs:
         with:
           workspaces: "trading-engine-core -> target"
 
-      - name: Build and install trading-engine-core wheel
-        run: pip install maturin && cd trading-engine-core && maturin build && pip install target/wheels/trading_engine_core*.whl
-
       - name: Run Rust tests
         run: cd trading-engine-core && cargo test --lib
 
@@ -50,7 +47,9 @@ jobs:
 
   build-rust:
     name: Build Rust Bot
-    needs: test
+    # No `needs: test` — runs in parallel with it. deploy still requires test
+    # (see below), so broken code never ships; this just stops the Docker build
+    # from waiting ~2.5m for the test job to finish.
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
     permissions:
@@ -87,7 +86,7 @@ jobs:
 
   build-signal:
     name: Build Signal Listener
-    needs: test
+    # Parallel with test (see build-rust note). deploy still gates on test.
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
     permissions:
@@ -121,7 +120,9 @@ jobs:
 
   deploy:
     name: Deploy to AWS Tokyo
-    needs: [build-rust, build-signal]
+    # Requires test AND both builds. Builds now run in parallel with test, so the
+    # critical path is max(test, build) + deploy (~4m) instead of test + build + deploy (~7m).
+    needs: [test, build-rust, build-signal]
     runs-on: ubuntu-latest
 
     steps:
