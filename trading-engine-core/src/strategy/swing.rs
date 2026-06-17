@@ -9,6 +9,7 @@ use crate::notifications::TelegramBot;
 use async_trait::async_trait;
 use anyhow::Result;
 use serde::{Serialize, Deserialize};
+use tracing::debug;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct SwingPosition {
@@ -65,6 +66,20 @@ fn round_step(value: f64, step: Option<f64>) -> f64 {
         Some(s) if s > 0.0 => (value / s).floor() * s,
         _ => value,
     }
+}
+
+/// Swing entry policy. The setup CORE — a ranging regime with price at/under the
+/// Donchian lower band (i.e. buying range lows) — is required. Each confirmation
+/// (RSI oversold, RSI bullish divergence, MACD turn-up, reversal candle, volume
+/// spike) adds a point; an entry needs `min_score` of them.
+///
+/// Reversal candle + volume spike used to be HARD gates, which left the strategy
+/// idle (0 entries in production): on the coarse 1h feed those signals fire far
+/// less often than the 5m timeframe the strategy was backtested on. They now
+/// boost the score instead of blocking. The R:R gate in `on_tick` still protects
+/// every entry.
+fn swing_entry_ready(ranging: bool, near_lower_band: bool, score: usize, min_score: usize) -> bool {
+    ranging && near_lower_band && score >= min_score
 }
 
 fn aggregate_closed_bars(bars: &[Bar], interval_ms: i64) -> Vec<Bar> {
@@ -321,14 +336,22 @@ impl Strategy for SwingStrategy {
                 
                 let rsi_oversold = rsi.value() < self.config.rsi_oversold;
                 let macd_turn = macd.histogram() > prev_macd_hist && prev_macd_hist < 0.0;
+                let volume_spike = curr.volume > volume_sma.value() * self.config.volume_multiplier;
+
+                // Each confirmation adds a point. Reversal candle + volume spike
+                // are NOT hard gates — on the 1h prod feed they fire far less often
+                // than the 5m this was backtested on, and hard-requiring them left
+                // the engine idle (0 entries). They still boost the score, and the
+                // R:R gate below still protects every entry.
                 let mut score = 0;
                 if rsi_oversold { score += 1; }
                 if rsi_divergence { score += 1; }
                 if macd_turn { score += 1; }
-                
-                let volume_spike = curr.volume > volume_sma.value() * self.config.volume_multiplier;
+                if is_reversal { score += 1; }
+                if volume_spike { score += 1; }
 
-                if ranging && near_lower_band && is_reversal && volume_spike && score >= 2 {
+                const SWING_MIN_SCORE: usize = 2;
+                if swing_entry_ready(ranging, near_lower_band, score, SWING_MIN_SCORE) {
                     let alloc = self.current_capital();
                     let risk_amt = alloc * (self.config.risk_per_trade_pct / 100.0);
                     let stop_dist = atr_val * self.config.atr_stop_mult;
@@ -359,6 +382,16 @@ impl Strategy for SwingStrategy {
                             self.pending_buy_ts = ctx.timestamp;
                         }
                     }
+                } else if ranging && near_lower_band {
+                    // Valid setup zone (ranging + at the lower band) but too few
+                    // confirmations — surface it so the strategy isn't silently
+                    // flat. debug! is filtered at the default info level.
+                    debug!(
+                        "[{}] Swing setup at range low, {}/{} confirmations \
+                         (rsi_oversold={} divergence={} macd_turn={} reversal={} vol_spike={})",
+                        self.pair, score, SWING_MIN_SCORE,
+                        rsi_oversold, rsi_divergence, macd_turn, is_reversal, volume_spike
+                    );
                 }
             }
         }
@@ -642,5 +675,21 @@ mod tests {
         assert!(orders.is_empty(), "stop fill closes, places nothing");
         assert!(s.position.is_none(), "position cleared by hard stop");
         assert!(s.resting_stop_cid.is_none() && s.resting_tp1_cid.is_none());
+    }
+
+    /// The entry policy must fire on the core setup (ranging + at the lower band)
+    /// with only 2 confirmations — WITHOUT hard-requiring a reversal candle or a
+    /// volume spike. Hard-requiring those left swing idle (0 entries) on the coarse
+    /// 1h production feed, where such candles fire far less often than the 5m the
+    /// strategy was backtested on.
+    #[test]
+    fn entry_fires_without_reversal_or_volume_when_core_setup_confirmed() {
+        // Core setup + 2 confirmations (e.g. RSI oversold + MACD turn) is enough.
+        assert!(swing_entry_ready(true, true, 2, 2));
+        // 5 confirmations but missing the core setup → no entry.
+        assert!(!swing_entry_ready(false, true, 5, 2), "ranging is required");
+        assert!(!swing_entry_ready(true, false, 5, 2), "near-lower-band is required");
+        // Core setup but only 1 confirmation → no entry.
+        assert!(!swing_entry_ready(true, true, 1, 2), "min 2 confirmations required");
     }
 }
