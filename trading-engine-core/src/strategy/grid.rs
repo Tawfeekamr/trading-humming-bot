@@ -4,6 +4,7 @@ use crate::config::GridConfig;
 use crate::models::order::OrderSide;
 use crate::indicators::{SupportResistance, LevelKind, Adx, Choppiness, Atr};
 // Journal removed — unified trades.db.
+use crate::notifications::TelegramBot;
 use tracing::{info, debug, warn};
 
 const MIN_NOTIONAL: f64 = 5.0;
@@ -45,6 +46,7 @@ pub struct GridStrategy {
     config: GridConfig,
     tick_size: f64,
     step_size: f64,
+    telegram: TelegramBot,
     state: GridState,
     grid_layout: Option<GridLayout>,
     orders: HashMap<String, GridOrder>,
@@ -88,17 +90,18 @@ struct GridOrder {
 }
 
 impl GridStrategy {
-    pub fn new(pair: &str, config: &GridConfig, tick_size: f64, step_size: f64) -> Self {
-        Self::new_with_state_dir(pair, config, tick_size, step_size, "data")
+    pub fn new(pair: &str, config: &GridConfig, tick_size: f64, step_size: f64, telegram: TelegramBot) -> Self {
+        Self::new_with_state_dir(pair, config, tick_size, step_size, "data", telegram)
     }
 
     /// Construct with an explicit state directory (tests use a temp dir).
-    pub fn new_with_state_dir(pair: &str, config: &GridConfig, tick_size: f64, step_size: f64, state_dir: &str) -> Self {
+    pub fn new_with_state_dir(pair: &str, config: &GridConfig, tick_size: f64, step_size: f64, state_dir: &str, telegram: TelegramBot) -> Self {
         let mut me = Self {
             pair: pair.to_string(),
             config: config.clone(),
             tick_size,
             step_size,
+            telegram,
             state: GridState::Paused,
             grid_layout: None,
             orders: HashMap::new(),
@@ -465,6 +468,14 @@ fn round_down(value: f64, increment: f64) -> f64 {
     (value / increment).floor() * increment
 }
 
+/// Telegram message for a grid fill. Extracted so the format is unit-testable
+/// without a network send. `running_pnl` is the grid's cumulative realized P&L
+/// after this fill (grid records cash flow per fill).
+fn grid_fill_message(pair: &str, is_buy: bool, level: &str, price: f64, running_pnl: f64) -> String {
+    let (emoji, side) = if is_buy { ("📥", "BUY") } else { ("📤", "SELL") };
+    format!("{} Grid {} {} | {} @ ${:.4} | PnL ${:+.2}", emoji, side, pair, level, price, running_pnl)
+}
+
 use crate::strategy::{Strategy, TickContext, StrategyStatus, MarketRegime};
 use crate::connector::types::{OrderRequest, Fill, OrderTypeReq, TimeInForceReq};
 use async_trait::async_trait;
@@ -698,10 +709,11 @@ impl Strategy for GridStrategy {
         self.orders.retain(|_, o| o.order_id != fill.order_id);
 
         // Set per-level cooldown from order_id (e.g., "grid_DOGE-USDT_buy_2" → "buy_2")
+        let mut level_key = String::new();
         if let Some(idx) = fill.order_id.rfind("_buy_").or_else(|| fill.order_id.rfind("_sell_")) {
-            let level_key = &fill.order_id[idx + 1..]; // "buy_2" or "sell_0"
+            level_key = fill.order_id[idx + 1..].to_string(); // "buy_2" or "sell_0"
             info!("[{}] Grid fill: {} @ ${:.2} (level={})", self.pair, level_key, fill.price, level_key);
-            self.level_cooldowns.insert(level_key.to_string(), fill.timestamp);
+            self.level_cooldowns.insert(level_key.clone(), fill.timestamp);
         }
 
         // Calculate rough PnL estimate from fill
@@ -711,6 +723,18 @@ impl Strategy for GridStrategy {
         };
 
         self.record_pnl(pnl);
+
+        // Notify on every fill (entry = buy, win/lose = sell). Fire-and-forget so
+        // Telegram latency can't stall the fill loop. Grid was previously silent.
+        let msg = grid_fill_message(
+            &self.pair,
+            matches!(fill.side, OrderSide::Buy),
+            &level_key,
+            fill.price,
+            self.total_pnl,
+        );
+        let tg = self.telegram.clone_for_signal();
+        tokio::spawn(async move { let _ = tg.send(&msg).await; });
 
         crate::strategy::trade_journal::log_unified("grid", &self.pair, None, Some(fill.price), Some(fill.quantity), pnl, Some("grid_fill"), None);
         self.save_state_internal();
@@ -826,7 +850,7 @@ mod tests {
     }
 
     fn make_grid() -> GridStrategy {
-        GridStrategy::new("BTC-USDT", &test_config(), 0.01, 0.001)
+        GridStrategy::new("BTC-USDT", &test_config(), 0.01, 0.001, TelegramBot::disabled())
     }
 
     fn warm_adx(grid: &mut GridStrategy) {
@@ -1059,5 +1083,20 @@ mod tests {
         for key in ["grid_BTC-USDT_buy_0", "grid_BTC-USDT_buy_1", "grid_BTC-USDT_sell_0"] {
             assert!(cancels.contains(&key.to_string()), "missing cancel for {}", key);
         }
+    }
+
+    /// A grid fill must ping Telegram with the side, pair, level, and running
+    /// P&L — grid was previously totally silent (no telegram calls at all).
+    #[test]
+    fn fill_message_distinguishes_buy_and_sell_with_pair_and_level() {
+        let buy = grid_fill_message("ETH-USDT", true, "buy_2", 1780.0, -5.0);
+        assert!(buy.contains("BUY"), "buy msg: {}", buy);
+        assert!(!buy.contains("SELL"), "buy msg must not say SELL: {}", buy);
+        assert!(buy.contains("ETH-USDT") && buy.contains("buy_2"));
+
+        let sell = grid_fill_message("DOGE-USDT", false, "sell_0", 0.085, 7.5);
+        assert!(sell.contains("SELL"), "sell msg: {}", sell);
+        assert!(!sell.contains("BUY"), "sell msg must not say BUY: {}", sell);
+        assert!(sell.contains("DOGE-USDT") && sell.contains("sell_0"));
     }
 }
