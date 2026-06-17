@@ -178,11 +178,7 @@ impl TrendStrategy {
         now_ts: i64,
         entry_time: i64,
     ) {
-        let duration = if now_ts > 0 && entry_time > 0 {
-            ((now_ts - entry_time) / 60).max(0)
-        } else {
-            0
-        };
+        let duration = duration_minutes(now_ts, entry_time);
         crate::strategy::trade_journal::log_unified("trend", &self.pair, Some(entry_price), Some(exit_price), Some(amount), pnl, Some(exit_reason), Some(duration));
     }
 
@@ -679,4 +675,32 @@ impl Strategy for TrendStrategy {
 
     fn current_capital(&self) -> f64 { self.config.capital + self.realized_pnl }
     fn initial_capital(&self) -> f64 { self.initial_capital }
+}
+
+/// Hold time in minutes from two millisecond timestamps. 0 if either is unset.
+///
+/// Timestamps here are ms (Binance/chrono epoch-ms). The previous code divided by
+/// 60, inflating durations 1000× — a 6-hour ETH hold logged as ~250 "days" in
+/// trades.db. MR and swing already divide by 60_000; this brings trend in line.
+fn duration_minutes(now_ts: i64, entry_time: i64) -> i64 {
+    if now_ts > 0 && entry_time > 0 {
+        ((now_ts - entry_time) / 60_000).max(0)
+    } else {
+        0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn duration_minutes_uses_millisecond_timestamps() {
+        let entry = 1_700_000_000_000_i64;
+        // 2 hours = 7,200,000 ms.
+        assert_eq!(duration_minutes(entry + 7_200_000, entry), 120, "2h hold = 120 min");
+        // Unset timestamps → 0, never negative.
+        assert_eq!(duration_minutes(0, entry), 0);
+        assert_eq!(duration_minutes(entry, 0), 0);
+    }
 }
