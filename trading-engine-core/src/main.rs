@@ -97,6 +97,7 @@ async fn async_main() -> Result<()> {
             &grid_cfg,
             pc.tick_size,
             pc.step_size,
+            telegram.clone_for_signal(),
         );
         engine.add_strategy(Box::new(grid));
 

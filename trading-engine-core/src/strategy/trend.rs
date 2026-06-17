@@ -360,6 +360,14 @@ impl TrendStrategy {
         let tg = self.telegram.clone_for_signal();
         tokio::spawn(async move { let _ = tg.send(&msg).await; });
     }
+
+    /// Ping on position open so a new trade is visible immediately (trend
+    /// previously only notified on exit). Mirrors notify_exit's fire-and-forget.
+    fn notify_entry(&self, entry_price: f64, qty: f64, stop_loss: f64) {
+        let msg = trend_entry_message(&self.pair, entry_price, qty, stop_loss);
+        let tg = self.telegram.clone_for_signal();
+        tokio::spawn(async move { let _ = tg.send(&msg).await; });
+    }
 }
 
 #[async_trait]
@@ -595,6 +603,7 @@ impl Strategy for TrendStrategy {
                     restored: false,
                 });
                 self.save_position();
+                self.notify_entry(fill.price, fill.quantity, stop_loss);
             }
             OrderSide::Sell => {
                 if let Some(mut pos) = self.position.take() {
@@ -690,6 +699,15 @@ fn duration_minutes(now_ts: i64, entry_time: i64) -> i64 {
     }
 }
 
+/// Telegram message for a trend ENTRY (position open). Extracted so the format
+/// is unit-testable without a network send.
+fn trend_entry_message(pair: &str, entry_price: f64, qty: f64, stop_loss: f64) -> String {
+    format!(
+        "🚀 Trend ENTRY {} | Buy @ ${:.2} | Qty {:.4} | Stop ${:.2}",
+        pair, entry_price, qty, stop_loss
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -702,5 +720,14 @@ mod tests {
         // Unset timestamps → 0, never negative.
         assert_eq!(duration_minutes(0, entry), 0);
         assert_eq!(duration_minutes(entry, 0), 0);
+    }
+
+    #[test]
+    fn entry_message_flags_a_new_trade_with_price_and_stop() {
+        let msg = trend_entry_message("ETH-USDT", 1795.93, 1.10, 1563.91);
+        assert!(msg.contains("ENTRY"), "must flag a new trade: {}", msg);
+        assert!(msg.contains("ETH-USDT"), "must name the pair: {}", msg);
+        assert!(msg.contains("1795.9"), "must show entry price: {}", msg);
+        assert!(msg.contains("1563.9"), "must show stop: {}", msg);
     }
 }
