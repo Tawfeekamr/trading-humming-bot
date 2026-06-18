@@ -176,7 +176,13 @@ swing:
   htf_period: "4h"                  # aggregate the 1h feed → 4h regime/band
   ltf_period: "1h"                  # LTF = the global feed
   donchian_period: 20
-  band_atr_mult: 0.5
+  band_atr_mult: 1.5              # Widened from 0.5: on the deployed 1h/4h feed,
+                                  # 0.5×ATR(1h) was a razor-thin zone (~0.5% above
+                                  # the 4h Donchian low) that 1h closes almost never
+                                  # landed in, so swing never entered even at valid
+                                  # range-low setups (BNB missed by $0.17). 1.5×ATR
+                                  # (~1.5% above the low) still means "buy the range
+                                  # low" but is attainable. Re-backtest before live.
   rsi_period: 14
   rsi_oversold: 30.0
   volume_multiplier: 1.5
