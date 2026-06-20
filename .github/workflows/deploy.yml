@@ -41,7 +41,10 @@ jobs:
           workspaces: "trading-engine-core -> target"
 
       - name: Run Rust tests
-        run: cd trading-engine-core && cargo test --lib
+        # Full suite (lib + integration tests/) — was `--lib`, which left the
+        # integration tests ungated so they rotted. --no-fail-fast reports all
+        # failures, not just the first.
+        run: cd trading-engine-core && cargo test --no-fail-fast
 
       - name: Validate production config parses
         # Guards against config typos crashing the bot on startup (e.g. the

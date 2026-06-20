@@ -1,4 +1,5 @@
 use trading_engine_core::config::GridConfig;
+use trading_engine_core::notifications::TelegramBot;
 use trading_engine_core::strategy::grid::GridStrategy;
 use trading_engine_core::strategy::Strategy;
 
@@ -24,13 +25,13 @@ fn test_state_roundtrips_through_file() {
     std::fs::create_dir_all(&dir).unwrap();
     let _ = std::fs::remove_file(dir.join("DOGE_USDT_grid_state.json"));
 
-    let mut grid = GridStrategy::new_with_state_dir("DOGE-USDT", &cfg(), 0.0001, 1.0, dir.to_str().unwrap());
+    let mut grid = GridStrategy::new_with_state_dir("DOGE-USDT", &cfg(), 0.0001, 1.0, dir.to_str().unwrap(), TelegramBot::disabled());
     grid.record_pnl(250.0);
     grid.set_level_cooldown("buy_2".to_string(), 1_700_000_000_000);
     grid.save_state_to(dir.to_str().unwrap());
 
     // Fresh instance loads the persisted state.
-    let grid2 = GridStrategy::new_with_state_dir("DOGE-USDT", &cfg(), 0.0001, 1.0, dir.to_str().unwrap());
+    let grid2 = GridStrategy::new_with_state_dir("DOGE-USDT", &cfg(), 0.0001, 1.0, dir.to_str().unwrap(), TelegramBot::disabled());
     assert!((grid2.realized_pnl() - 250.0).abs() < 1e-6, "realized_pnl restored");
     assert_eq!(grid2.peak_equity_pub(), 10250.0, "peak equity = initial + realized");
     assert!(grid2.has_level_cooldown("buy_2"), "cooldown restored");
@@ -41,7 +42,7 @@ fn test_corrupt_state_starts_fresh() {
     let dir = std::env::temp_dir().join("test_grid_state_corrupt");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("ETH_USDT_grid_state.json"), "{ not valid json").unwrap();
-    let grid = GridStrategy::new_with_state_dir("ETH-USDT", &cfg(), 0.0001, 1.0, dir.to_str().unwrap());
+    let grid = GridStrategy::new_with_state_dir("ETH-USDT", &cfg(), 0.0001, 1.0, dir.to_str().unwrap(), TelegramBot::disabled());
     assert!(grid.realized_pnl().abs() < 1e-6, "corrupt file -> fresh start, no panic");
 }
 
@@ -49,7 +50,7 @@ fn test_corrupt_state_starts_fresh() {
 fn test_mtm_uses_cached_balances() {
     let dir = std::env::temp_dir().join("test_grid_mtm");
     std::fs::create_dir_all(&dir).unwrap();
-    let mut grid = GridStrategy::new_with_state_dir("DOGE-USDT", &cfg(), 0.0001, 1.0, dir.to_str().unwrap());
+    let mut grid = GridStrategy::new_with_state_dir("DOGE-USDT", &cfg(), 0.0001, 1.0, dir.to_str().unwrap(), TelegramBot::disabled());
     grid.set_mtm_snapshot_for_test(5000.0, 9500.0, 0.12);
     let status = grid.status();
     // MTM = base*mid + quote = 5000*0.12 + 9500 = 10100

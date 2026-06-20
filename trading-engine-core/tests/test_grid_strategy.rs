@@ -1,4 +1,5 @@
 use trading_engine_core::strategy::grid::GridStrategy;
+use trading_engine_core::notifications::TelegramBot;
 use trading_engine_core::config::GridConfig;
 
 fn default_grid_config() -> GridConfig {
@@ -28,7 +29,7 @@ fn isolated_state_dir() -> String {
 #[test]
 fn test_calculate_grid_levels() {
     let config = default_grid_config();
-    let strategy = GridStrategy::new_with_state_dir("BTCUSDT", &config, 0.01, 0.00001, &isolated_state_dir());
+    let strategy = GridStrategy::new_with_state_dir("BTCUSDT", &config, 0.01, 0.00001, &isolated_state_dir(), TelegramBot::disabled());
 
     let layout = strategy.calculate_levels(50000.0, 500.0, 48000.0, 52000.0);
 
@@ -51,7 +52,7 @@ fn test_calculate_grid_levels() {
 #[test]
 fn test_grid_levels_respect_min_notional() {
     let config = default_grid_config();
-    let strategy = GridStrategy::new_with_state_dir("BTCUSDT", &config, 0.01, 0.00001, &isolated_state_dir());
+    let strategy = GridStrategy::new_with_state_dir("BTCUSDT", &config, 0.01, 0.00001, &isolated_state_dir(), TelegramBot::disabled());
 
     let layout = strategy.calculate_levels(50000.0, 500.0, 48000.0, 52000.0);
 
@@ -64,7 +65,7 @@ fn test_grid_levels_respect_min_notional() {
 #[test]
 fn test_sell_spacing_tighter_than_buy() {
     let config = default_grid_config();
-    let strategy = GridStrategy::new_with_state_dir("BTCUSDT", &config, 0.01, 0.00001, &isolated_state_dir());
+    let strategy = GridStrategy::new_with_state_dir("BTCUSDT", &config, 0.01, 0.00001, &isolated_state_dir(), TelegramBot::disabled());
 
     let layout = strategy.calculate_levels(50000.0, 500.0, 48000.0, 52000.0);
 
@@ -75,7 +76,7 @@ fn test_sell_spacing_tighter_than_buy() {
 #[test]
 fn test_grid_activates_with_ranging_regime() {
     let config = default_grid_config();
-    let mut strategy = GridStrategy::new_with_state_dir("BTCUSDT", &config, 0.01, 0.00001, &isolated_state_dir());
+    let mut strategy = GridStrategy::new_with_state_dir("BTCUSDT", &config, 0.01, 0.00001, &isolated_state_dir(), TelegramBot::disabled());
 
     assert_eq!(strategy.state(), trading_engine_core::strategy::grid::GridState::Paused);
 
@@ -88,7 +89,7 @@ fn test_grid_activates_with_ranging_regime() {
 #[test]
 fn test_grid_blocks_on_unknown_regime() {
     let config = default_grid_config();
-    let mut strategy = GridStrategy::new_with_state_dir("BTCUSDT", &config, 0.01, 0.00001, &isolated_state_dir());
+    let mut strategy = GridStrategy::new_with_state_dir("BTCUSDT", &config, 0.01, 0.00001, &isolated_state_dir(), TelegramBot::disabled());
 
     // Unknown regime (None) → should always block
     strategy.evaluate_state_with_ml(50000.0, 48000.0, 51500.0, None, 0.0);
@@ -98,7 +99,7 @@ fn test_grid_blocks_on_unknown_regime() {
 #[test]
 fn test_grid_pauses_in_danger_regime() {
     let config = default_grid_config();
-    let mut strategy = GridStrategy::new_with_state_dir("BTCUSDT", &config, 0.01, 0.00001, &isolated_state_dir());
+    let mut strategy = GridStrategy::new_with_state_dir("BTCUSDT", &config, 0.01, 0.00001, &isolated_state_dir(), TelegramBot::disabled());
 
     // First activate with Ranging regime
     strategy.evaluate_state_with_ml(50000.0, 48000.0, 51500.0, Some(0), 0.0);
@@ -111,7 +112,7 @@ fn test_grid_pauses_in_danger_regime() {
 #[test]
 fn test_auto_compound_increases_capital() {
     let config = default_grid_config();
-    let mut strategy = GridStrategy::new_with_state_dir("BTCUSDT", &config, 0.01, 0.00001, &isolated_state_dir());
+    let mut strategy = GridStrategy::new_with_state_dir("BTCUSDT", &config, 0.01, 0.00001, &isolated_state_dir(), TelegramBot::disabled());
 
     let initial_capital = strategy.current_capital();
 
@@ -125,7 +126,7 @@ fn test_auto_compound_increases_capital() {
 #[test]
 fn test_peak_equity_tracks_high_water_mark() {
     let config = default_grid_config();
-    let mut strategy = GridStrategy::new_with_state_dir("BTCUSDT", &config, 0.01, 0.00001, &isolated_state_dir());
+    let mut strategy = GridStrategy::new_with_state_dir("BTCUSDT", &config, 0.01, 0.00001, &isolated_state_dir(), TelegramBot::disabled());
 
     strategy.record_pnl(50.0);
     assert_eq!(strategy.peak_equity(), config.capital_usdt + 50.0);

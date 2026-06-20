@@ -12,9 +12,10 @@ fn test_telegram_formats_status_message() {
 #[test]
 fn test_telegram_formats_startup_message() {
     let bot = TelegramBot::new("test_token", "test_chat_id");
-    let msg = bot.format_startup_message("production", 5000.0, "BTCUSDT, ETHUSDT", 10);
+    let msg = bot.format_startup_message("production", "BTCUSDT, ETHUSDT", "Grid/Trend");
     assert!(msg.contains("production"));
-    assert!(msg.contains("5000"));
+    assert!(msg.contains("BTCUSDT, ETHUSDT"));
+    assert!(msg.contains("Grid/Trend"));
 }
 
 #[test]
