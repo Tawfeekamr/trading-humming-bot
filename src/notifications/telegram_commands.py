@@ -1682,41 +1682,52 @@ class TelegramCommandHandler:
             update.message.reply_text(f"⚠️ Error: {e}")
 
     def _cmd_signal_channels(self, update, context):
-        engine = getattr(self.strategy, '_signal_engine', None)
-        if engine is None:
-            update.message.reply_text("Signal engine not configured.")
-            return
+        try:
+            logger.info("Telegram /signal_channels received")
+            import yaml
+            from src.signals.signal_journal import SignalJournal
 
-        channel_ids_str = os.environ.get("SIGNAL_CHANNEL_IDS", "")
-        channel_count = len([c for c in channel_ids_str.split(",") if c.strip()])
-        mode_tag = "AUDIT" if engine._audit_mode else "LIVE"
+            channel_ids_str = os.environ.get("SIGNAL_CHANNEL_IDS", "")
+            channel_count = len([c for c in channel_ids_str.split(",") if c.strip()])
 
-        stats = engine._journal.channel_stats()
-        total_msgs = sum(s["messages"] for s in stats)
-        total_approved = sum(s["trades_approved"] for s in stats)
-        total_rejected = sum(s["trades_rejected"] for s in stats)
+            # Audit mode from config (the engine isn't reachable from the handler
+            # in the hybrid runner — read it from strategy.yaml directly).
+            audit = False
+            try:
+                with open("config/strategy.yaml") as f:
+                    cfg = yaml.safe_load(f) or {}
+                audit = bool((cfg.get("signal_copy") or {}).get("audit_mode", False))
+            except Exception:
+                pass
+            mode_tag = "AUDIT" if audit else "LIVE"
 
-        lines = [
-            f"📡 <b>SIGNAL CHANNELS</b> ({mode_tag})",
-            f"•••",
-            f"Listening: <b>{channel_count}</b> channel(s)",
-            f"Messages received: <b>{total_msgs}</b>",
-            f"Signals approved: <b>{total_approved}</b>",
-            f"Signals rejected: <b>{total_rejected}</b>",
-        ]
+            stats = SignalJournal().channel_stats()
+            total_msgs = sum(s["messages"] for s in stats)
+            total_approved = sum(s["trades_approved"] for s in stats)
+            total_rejected = sum(s["trades_rejected"] for s in stats)
 
-        if stats:
-            lines.append("•••")
-            for s in stats:
-                name = s["channel"]
-                lines.append(f"📋 <b>{name}</b>")
-                lines.append(f"  Messages: {s['messages']} | Signals: {s['signals']} | Noise: {s['not_signal']}")
-                lines.append(f"  Approved: {s['trades_approved']} | Rejected: {s['trades_rejected']} | P&L: ${s['trades_pnl'] or 0:.2f}")
-        else:
-            lines.append("•••")
-            lines.append("No messages received yet.")
+            lines = [
+                f"📡 <b>SIGNAL CHANNELS</b> ({mode_tag})",
+                f"•••",
+                f"Listening: <b>{channel_count}</b> channel(s)",
+                f"Messages received: <b>{total_msgs}</b>",
+                f"Signals approved: <b>{total_approved}</b>",
+                f"Signals rejected: <b>{total_rejected}</b>",
+            ]
 
-        update.message.reply_text("\n".join(lines), parse_mode="HTML")
+            if stats:
+                lines.append("•••")
+                for s in stats:
+                    lines.append(f"📋 <b>{s['channel']}</b>")
+                    lines.append(f"  Messages: {s['messages']} | Signals: {s['signals']} | Noise: {s['not_signal']}")
+                    lines.append(f"  Approved: {s['trades_approved']} | Rejected: {s['trades_rejected']} | P&L: ${s['trades_pnl'] or 0:.2f}")
+            else:
+                lines.append("•••")
+                lines.append("No messages received yet.")
+
+            update.message.reply_text("\n".join(lines), parse_mode="HTML")
+        except Exception as e:
+            update.message.reply_text(f"⚠️ Error: {e}")
 
     def _cmd_mean_status(self, update, context):
         """Show mean-reversion strategy status from Rust engine API."""
