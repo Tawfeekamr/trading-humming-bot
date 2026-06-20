@@ -156,6 +156,7 @@ class TelegramCommandHandler:
                     "•••\n"
                     "<b>System:</b> /status /price /logs /errors /readiness\n"
                     "<b>Overview:</b> /bots /pnl_all /trades\n"
+                    "<b>Capital:</b> /capital\n"
                     "<b>Grid:</b> /grid_status\n"
                     "<b>Trend:</b> /trend_status /trend_pnl /trend_history\n"
                     "<b>Swing:</b> /swing_status\n"
@@ -588,38 +589,6 @@ class TelegramCommandHandler:
         except Exception as e:
             logger.warning(f"Rust API {path} failed: {e}")
             return None
-
-    def _cmd_capital(self, update, context):
-        try:
-            # Hybrid runner: capital lives in config/strategy.yaml (the Rust engine
-            # reads it at startup), not a runtime-mutable Python attr. The legacy
-            # strategy.capital_usdt / grid_manager attrs are faked as {} by
-            # RunnerProxy, so the old read/write path crashed. Show configured
-            # capitals read-only.
-            import yaml
-            grid_cap = trend_cap = sig_cap = "?"
-            try:
-                with open("config/strategy.yaml") as f:
-                    cfg = yaml.safe_load(f) or {}
-                grid_cap = cfg.get("grid", {}).get("capital_usdt", "?")
-                trend_cap = cfg.get("trend", {}).get("capital", "?")
-                sig_cap = cfg.get("signal_copy", {}).get("max_capital_usdt", "?")
-            except Exception:
-                pass
-
-            update.message.reply_text(
-                f"📐 <b>Configured Capital</b> (config/strategy.yaml)\n"
-                f"•••\n"
-                f"Grid:   ${grid_cap}\n"
-                f"Trend:  ${trend_cap}\n"
-                f"Signal: ${sig_cap}\n"
-                f"•••\n"
-                f"Config-managed — edit the YAML + redeploy to change.",
-                parse_mode="HTML"
-            )
-        except Exception as e:
-            logger.error(f"Error in /capital: {e}")
-            update.message.reply_text(f"⚠️ Error: {e}")
 
     def _cmd_pause(self, update, context):
         try:
