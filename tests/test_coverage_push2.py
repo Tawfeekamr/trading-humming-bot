@@ -185,3 +185,31 @@ class TestSignalPositionManager:
         mgr = SignalPositionManager({"max_positions": 3})
         pos = mgr.get_position("NONEXIST")
         assert pos is None
+
+
+class TestMoreCommands2:
+    def test_pnl(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path); (tmp_path/"logs").mkdir(exist_ok=True)
+        monkeypatch.setattr("urllib.request.urlopen", _mock_api({"strategies": []}))
+        h = _handler(); u = _u(); h._cmd_pnl(u, None); assert u.message.reply_text.called
+
+    def test_signal_close_no_position(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        h = _handler(); u = _u(); h._cmd_signal_close(u, None); assert u.message.reply_text.called
+
+    def test_trend_close_no_position(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("urllib.request.urlopen", _mock_api({"strategies": []}))
+        h = _handler(); u = _u(); h._cmd_trend_close(u, None); assert u.message.reply_text.called
+
+    def test_signal_inject_help(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        h = _handler(); u = _u()
+        # No text arg — should show help text
+        u.message.text = "/signal_inject"
+        h._cmd_signal_inject(u, None); assert u.message.reply_text.called
+
+    def test_swing_status_empty(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("urllib.request.urlopen", _mock_api([]))
+        h = _handler(); u = _u(); h._cmd_swing_status(u, None); assert u.message.reply_text.called
