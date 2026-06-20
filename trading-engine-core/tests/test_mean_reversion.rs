@@ -31,14 +31,14 @@ fn make_tick(price: f64, bid_qty: f64) -> TickContext {
             symbol: "BTCUSDT".to_string(),
             bids: vec![(price, bid_qty)],
             asks: vec![(price, bid_qty)],
-            timestamp: 0,
+            timestamp: chrono::Utc::now().timestamp_millis(),
         },
         recent_bars: vec![],
         balances: HashMap::new(),
         open_orders: vec![],
         regime: None,
         regime_confidence: 0.0,
-        timestamp: 0,
+        timestamp: chrono::Utc::now().timestamp_millis(),
         capital: None,
     }
 }
@@ -53,7 +53,7 @@ fn make_fill(order_id: &str, side: OrderSide, price: f64, quantity: f64) -> Fill
         price,
         quantity,
         fee: price * quantity * 0.001,
-        timestamp: 0,
+        timestamp: chrono::Utc::now().timestamp_millis(),
     }
 }
 
@@ -82,7 +82,6 @@ async fn on_fill_entry_does_not_place_protective_backstop() {
 ///
 /// Proves the position is HELD while price stays within the stop/TP band and
 /// exits via the Layer-2 on_tick logic (+2% TP), not via any bogus backstop.
-#[ignore]  // flush-entry trigger changed; fails in clean CI. Pending rewrite.
 #[tokio::test]
 async fn position_holds_then_exits_at_take_profit_via_on_tick() {
     let mut s = make_strategy();
@@ -119,7 +118,6 @@ async fn position_holds_then_exits_at_take_profit_via_on_tick() {
 }
 
 /// The -4% Layer-2 stop must still protect the position after the backstop is gone.
-#[ignore]  // flush-entry trigger changed; fails in clean CI. Pending rewrite.
 #[tokio::test]
 async fn position_exits_at_layer2_stop_loss() {
     let mut s = make_strategy();
