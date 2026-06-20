@@ -82,7 +82,6 @@ async fn on_fill_entry_does_not_place_protective_backstop() {
 ///
 /// Proves the position is HELD while price stays within the stop/TP band and
 /// exits via the Layer-2 on_tick logic (+2% TP), not via any bogus backstop.
-#[ignore]  // OBSOLETE: MR P&L/exit accounting was refactored; pending rewrite.
 #[tokio::test]
 async fn position_holds_then_exits_at_take_profit_via_on_tick() {
     let mut s = make_strategy();
@@ -119,7 +118,6 @@ async fn position_holds_then_exits_at_take_profit_via_on_tick() {
 }
 
 /// The -4% Layer-2 stop must still protect the position after the backstop is gone.
-#[ignore]  // OBSOLETE: MR P&L/exit accounting was refactored; pending rewrite.
 #[tokio::test]
 async fn position_exits_at_layer2_stop_loss() {
     let mut s = make_strategy();

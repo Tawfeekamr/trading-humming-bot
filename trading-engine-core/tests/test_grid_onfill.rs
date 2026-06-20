@@ -21,10 +21,7 @@ fn grid_cfg() -> GridConfig {
     }
 }
 
-/// OBSOLETE: asserts pre-#13 accounting where a BUY fill was recorded as a
-/// realized loss (-cost-fee). Since #13, buys are cost-basis inventory moves and
-/// do NOT change realized_pnl. Ignored pending a rewrite against the current model.
-#[ignore]
+/// #13 cost-basis: a BUY fill persists state + does NOT realize a loss.
 #[tokio::test]
 async fn test_grid_on_fill_persists_state() {
     // Isolate the journal DB so the test doesn't write to the production path.
@@ -40,7 +37,7 @@ async fn test_grid_on_fill_persists_state() {
     let fill = Fill {
         fill_id: "f1".into(),
         order_id: "grid_DOGE-USDT_buy_2".into(),
-        client_order_id: None,
+        client_order_id: Some("grid_DOGE-USDT_buy_2".into()),
         symbol: "DOGEUSDT".into(),
         side: OrderSide::Buy,
         price: 0.10,
@@ -49,7 +46,7 @@ async fn test_grid_on_fill_persists_state() {
         timestamp: 1,
     };
     grid.on_fill(&fill).await.unwrap();
-    // Buy = cash out: -(price*qty + fee) = -(100 + 0.1)
-    assert!((grid.realized_pnl() - (-100.1)).abs() < 1e-3, "buy recorded as cash out");
+    // #13: a buy adds inventory at cost — it is NOT a realized loss.
+    assert!(grid.realized_pnl().abs() < 1e-9, "buy realizes no PnL, got {}", grid.realized_pnl());
     assert!(dir.join("DOGE_USDT_grid_state.json").exists(), "on_fill persisted grid state");
 }
