@@ -39,6 +39,7 @@ fn make_tick(price: f64, bid_qty: f64) -> TickContext {
         regime: None,
         regime_confidence: 0.0,
         timestamp: 0,
+        capital: None,
     }
 }
 
@@ -135,4 +136,11 @@ async fn position_exits_at_layer2_stop_loss() {
     let stop = s.on_tick(&make_tick(90.0, 10.0)).await.unwrap();
     assert_eq!(stop.len(), 1, "should emit exactly one stop-loss sell");
     assert_eq!(stop[0].side, OrderSide::Sell);
+}
+
+
+#[test]
+fn test_deployed_capital_zero_when_flat() {
+    let strategy = make_strategy();
+    assert!(strategy.deployed_capital() < 1e-9, "flat MR has no deployed capital");
 }

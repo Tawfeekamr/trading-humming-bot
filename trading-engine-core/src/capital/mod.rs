@@ -1,20 +1,22 @@
-//! Centralized capital accounting for the Rust engine (Phase A: visibility).
+//! Centralized capital accounting + allocation for the Rust engine.
 //!
-//! Tracks total portfolio equity, a configurable global reserve, free (deployable)
-//! capital, and a per-strategy capital snapshot. This is READ-ONLY accounting — it
-//! does not move money or change strategy behavior (that is Phase B). The engine
-//! pushes balances + strategy capital here each tick; the API and the `/capital`
-//! Telegram command read the snapshot.
+//! Phase A: visibility (total equity, reserve, free capital, per-strategy
+//! deployed capital). Phase B: allocation — strategies `request_capital` before
+//! entry so the shared free-capital pool caps how much any one can deploy.
 //!
-//! Model (derived from balances, no strategy edits required):
+//! Model:
 //!   total_equity      = USDT + Σ(base × mid)          [portfolio_equity_mtm]
 //!   locked_in_positions = total_equity − USDT          (inventory MTM value)
 //!   reserve           = reserve_limit_pct × total_equity
 //!   free_capital      = max(0, USDT − reserve)         (deployable USDT)
+//!   deployed[name]    = Σ each strategy's open-position cost basis
+//!                       (Strategy::deployed_capital) — real, per strategy
 //!
-//! `strategy_capital` (each strategy's `current_capital()`) is reported separately
-//! as budgets and is deliberately NOT summed into `free_capital`: budgets are config
-//! amounts, not deployed capital, so summing them would understate free capital.
+//! `request_capital(name, desired)` grants min(desired, free − already-granted
+//! this tick). A per-tick grant map prevents two strategies that tick in the same
+//! cycle from both spending the same free capital; it is reset each tick_strategies.
+//! Cross-tick truth comes from real open positions (deployed[]), so closing a
+//! position replenishes free automatically — no explicit release call needed.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
@@ -30,20 +32,23 @@ pub struct CapitalSnapshot {
     pub reserve_limit_pct: f64,
     pub reserve: f64,
     pub free_capital: f64,
-    /// Per-strategy working capital (`Strategy::current_capital`), labelled as
-    /// budgets. Mean-reversion reports 0.0 (it has no budget concept).
-    pub strategy_capital: BTreeMap<String, f64>,
+    /// Real capital deployed in open positions, per strategy (cost basis).
+    pub deployed_capital: BTreeMap<String, f64>,
 }
 
 #[derive(Debug, Clone)]
 struct CapitalState {
     total_equity: f64,
     usdt_balance: f64,
-    strategy_capital: BTreeMap<String, f64>,
+    /// Real deployed capital per strategy (from Strategy::deployed_capital).
+    deployed: BTreeMap<String, f64>,
+    /// Capital granted via request_capital in the current tick (prevents intra-tick
+    /// over-allocation). Reset each tick by the engine.
+    tick_grants: BTreeMap<String, f64>,
 }
 
-/// Shared capital accountant. Clone-cheap (Arc inside) so the engine and the API
-/// server share one instance — engine writes, API reads.
+/// Shared capital accountant + allocator. Clone-cheap (Arc inside) so the engine,
+/// strategies (via TickContext), and the API server share one instance.
 #[derive(Clone)]
 pub struct CapitalManager {
     reserve_limit_pct: f64,
@@ -57,12 +62,13 @@ impl CapitalManager {
             state: Arc::new(RwLock::new(CapitalState {
                 total_equity: 0.0,
                 usdt_balance: 0.0,
-                strategy_capital: BTreeMap::new(),
+                deployed: BTreeMap::new(),
+                tick_grants: BTreeMap::new(),
             })),
         }
     }
 
-    /// Record the latest mark-to-market equity + USDT balance (engine, each tick).
+    /// Latest mark-to-market equity + USDT balance (engine pushes each tick).
     pub fn sync_equity(&self, total_equity: f64, usdt_balance: f64) {
         if let Ok(mut s) = self.state.write() {
             s.total_equity = total_equity;
@@ -70,17 +76,45 @@ impl CapitalManager {
         }
     }
 
-    /// Record each strategy's working capital (engine, each tick).
-    pub fn set_strategy_capital(&self, strategy_capital: BTreeMap<String, f64>) {
+    /// Real per-strategy deployed capital (engine pushes each tick from
+    /// Strategy::deployed_capital).
+    pub fn set_deployed(&self, deployed: BTreeMap<String, f64>) {
         if let Ok(mut s) = self.state.write() {
-            s.strategy_capital = strategy_capital;
+            s.deployed = deployed;
+        }
+    }
+
+    /// Clear the per-tick grant map (engine calls at the start of each tick cycle).
+    pub fn reset_tick_grants(&self) {
+        if let Ok(mut s) = self.state.write() {
+            s.tick_grants.clear();
+        }
+    }
+
+    /// Grant up to `desired` USDT to `name` for entry sizing this tick, capped by
+    /// free capital not already granted this tick. Returns the granted amount
+    /// (0 if nothing free). Mutates the grant map, so two strategies ticking in the
+    /// same cycle can't both spend the same free capital.
+    pub fn request_capital(&self, name: &str, desired: f64) -> f64 {
+        if desired <= 0.0 {
+            return 0.0;
+        }
+        if let Ok(mut s) = self.state.write() {
+            let reserve = self.reserve_limit_pct / 100.0 * s.total_equity;
+            let free = (s.usdt_balance - reserve).max(0.0);
+            let already_granted: f64 = s.tick_grants.values().sum();
+            let available = (free - already_granted).max(0.0);
+            let grant = desired.min(available);
+            *s.tick_grants.entry(name.to_string()).or_insert(0.0) += grant;
+            grant
+        } else {
+            0.0
         }
     }
 
     /// Public snapshot. `reserve = pct × equity`; `free = max(0, USDT − reserve)`;
     /// `locked = max(0, equity − USDT)`.
     pub fn snapshot(&self) -> CapitalSnapshot {
-        // Recover from a poisoned lock rather than panicking the API/engine.
         let s = self.state.read().unwrap_or_else(|e| e.into_inner());
         let reserve = self.reserve_limit_pct / 100.0 * s.total_equity;
         let locked = (s.total_equity - s.usdt_balance).max(0.0);
@@ -92,7 +126,7 @@ impl CapitalManager {
             reserve_limit_pct: self.reserve_limit_pct,
             reserve,
             free_capital: free,
-            strategy_capital: s.strategy_capital.clone(),
+            deployed_capital: s.deployed.clone(),
         }
     }
 }
@@ -125,16 +159,18 @@ mod tests {
     }
 
     #[test]
-    fn strategy_budgets_are_not_summed_into_free() {
+    fn deployed_is_reported_per_strategy() {
         let m = mgr();
         m.sync_equity(10_000.0, 4_000.0);
-        let mut sc = BTreeMap::new();
-        sc.insert("grid".to_string(), 10_000.0); // budgets far exceed equity
-        sc.insert("trend".to_string(), 10_000.0);
-        m.set_strategy_capital(sc);
+        let mut d = BTreeMap::new();
+        d.insert("grid".to_string(), 3_000.0);
+        d.insert("swing".to_string(), 1_000.0);
+        m.set_deployed(d);
         let snap = m.snapshot();
-        assert!((snap.free_capital - 2_000.0).abs() < 1e-6); // unchanged by budgets
-        assert_eq!(snap.strategy_capital.get("grid"), Some(&10_000.0));
+        assert_eq!(snap.deployed_capital.get("grid"), Some(&3_000.0));
+        assert_eq!(snap.deployed_capital.get("swing"), Some(&1_000.0));
+        // free is from USDT, NOT reduced by deployed (deployed is already non-USDT)
+        assert!((snap.free_capital - 2_000.0).abs() < 1e-6);
     }
 
     #[test]
@@ -143,5 +179,39 @@ mod tests {
         let clone = m.clone();
         m.sync_equity(5_000.0, 1_000.0);
         assert!((clone.snapshot().total_equity - 5_000.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn request_capital_grants_up_to_free() {
+        let m = mgr();
+        m.sync_equity(10_000.0, 4_000.0); // free = 2_000
+        assert!((m.request_capital("swing", 5_000.0) - 2_000.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn request_capital_prevents_intra_tick_double_spend() {
+        let m = mgr();
+        m.sync_equity(10_000.0, 4_000.0); // free = 2_000
+        // First strategy takes the whole free pool this tick
+        assert!((m.request_capital("grid", 2_000.0) - 2_000.0).abs() < 1e-6);
+        // Second strategy, same tick, sees nothing left
+        assert!((m.request_capital("trend", 2_000.0) - 0.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn reset_tick_grants_replenishes_next_tick() {
+        let m = mgr();
+        m.sync_equity(10_000.0, 4_000.0); // free = 2_000
+        assert!((m.request_capital("grid", 2_000.0) - 2_000.0).abs() < 1e-6);
+        m.reset_tick_grants();
+        // Next tick: free pool available again
+        assert!((m.request_capital("trend", 2_000.0) - 2_000.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn request_capital_grants_zero_when_nothing_free() {
+        let m = mgr();
+        m.sync_equity(10_000.0, 1_000.0); // reserve 2k > USDT 1k → free 0
+        assert!((m.request_capital("swing", 500.0) - 0.0).abs() < 1e-6);
     }
 }

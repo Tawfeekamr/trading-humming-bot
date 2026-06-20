@@ -46,6 +46,7 @@ fn make_tick(bars: Vec<Bar>) -> TickContext {
         regime: None,
         regime_confidence: 0.0,
         timestamp: 0,
+        capital: None,
     }
 }
 
@@ -62,4 +63,12 @@ async fn test_swing_strategy_skips_insufficient_bars() {
 
     let orders = strategy.on_tick(&make_tick(bars)).await.unwrap();
     assert!(orders.is_empty(), "Should not trade without enough bars");
+}
+
+
+#[test]
+fn test_deployed_capital_zero_when_flat() {
+    let config = default_config();
+    let strategy = SwingStrategy::new("BTC-USDT", &config, TelegramBot::new("", ""));
+    assert!(strategy.deployed_capital() < 1e-9, "flat swing has no deployed capital");
 }

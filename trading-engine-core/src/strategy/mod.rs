@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use crate::connector::types::{OrderRequest, Fill};
 use crate::models::bar::Bar;
 use crate::connector::types::OrderBook;
+use crate::capital::CapitalManager;
 
 /// Context provided to strategies on each tick
 pub struct TickContext {
@@ -24,6 +25,9 @@ pub struct TickContext {
     /// instead of being fabricated per-regime. 0.0 when no regime data available.
     pub regime_confidence: f64,
     pub timestamp: i64,
+    /// Central capital allocator (Phase B). None when capital management isn't
+    /// wired (strategies then size from their own config, uncapped).
+    pub capital: Option<CapitalManager>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -70,4 +74,7 @@ pub trait Strategy: Send {
     /// Cumulative realized PnL (closed trades only). Used by the engine to feed
     /// the portfolio circuit breaker on a stable (non-MTM) basis.
     fn realized_pnl(&self) -> f64 { 0.0 }
+    /// Real capital currently deployed in this strategy's open positions (cost
+    /// basis). Used by the CapitalManager for per-strategy visibility. Default 0.
+    fn deployed_capital(&self) -> f64 { 0.0 }
 }
