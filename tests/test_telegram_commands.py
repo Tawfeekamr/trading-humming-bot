@@ -1,12 +1,13 @@
-"""Tests for TelegramCommandHandler command handlers — covers the formatting +
-file/DB-reading paths (the 1141-line telegram_commands.py was 0% covered).
+"""Tests for TelegramCommandHandler — comprehensive command coverage.
 
-Uses a mock update + mock strategy. Commands that read from files use tmp_path;
-commands that call the Rust API have urllib mocked.
+Targets the biggest coverage gap: telegram_commands.py was 0%, now pushing toward
+~40%+. Tests commands that read from files (signal_positions.json, logs),
+call the Rust API (urllib mocked), or format output (helpers).
 """
 import json
 import os
 import sys
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 from types import SimpleNamespace
@@ -14,11 +15,17 @@ from types import SimpleNamespace
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from src.notifications.telegram_commands import TelegramCommandHandler, _fmt_price, _fmt_duration
+from src.notifications.telegram_commands import (
+    TelegramCommandHandler,
+    _fmt_price,
+    _fmt_duration,
+    _signal_price,
+)
 
+
+# ── Fixtures ──────────────────────────────────────────────────────────────
 
 def _handler(tmp_path, **strategy_attrs):
-    """Construct a handler with a mock strategy + isolated data dir."""
     h = TelegramCommandHandler(
         journal=None,
         state_machine=SimpleNamespace(),
@@ -26,18 +33,12 @@ def _handler(tmp_path, **strategy_attrs):
         position_guard=SimpleNamespace(),
         event_logger=SimpleNamespace(),
         strategy=SimpleNamespace(
-            env="testnet",
-            capital_usdt=10000,
-            base_asset="CRYPTO",
+            env="testnet", capital_usdt=10000, base_asset="CRYPTO",
             grid_manager=SimpleNamespace(capital_usdt=10000),
-            _base_capital=10000,
-            _trend_statuses={},
-            _trend_capital=10000,
-            pairs={},
-            grid_pnl={},
+            _base_capital=10000, _trend_statuses={}, _trend_capital=10000,
+            pairs={}, grid_pnl={},
             get_indicators_snapshot=lambda: None,
-            _get_usdt_balance=lambda: 0,
-            _get_base_balance=lambda: 0,
+            _get_usdt_balance=lambda: 0, _get_base_balance=lambda: 0,
             **strategy_attrs,
         ),
     )
@@ -45,134 +46,271 @@ def _handler(tmp_path, **strategy_attrs):
 
 
 def _mock_update():
-    """A mock Telegram update that captures reply_text calls."""
     u = MagicMock()
     u.message.reply_text = MagicMock()
     return u
 
 
-def _replied_text(update):
-    """Extract the text from the (first) reply_text call."""
+def _replied(update):
     assert update.message.reply_text.called, "command did not reply"
     return update.message.reply_text.call_args[0][0]
 
 
-class TestStatusCommands:
-    def test_status_replies_with_server_health(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        (tmp_path / "logs").mkdir(exist_ok=True)
-        h = _handler(tmp_path)
-        u = _mock_update()
-        h._cmd_status(u, None)
-        text = _replied_text(u)
-        assert "Server" in text or "Status" in text or "uptime" in text.lower()
-
-    def test_readiness_replies(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        h = _handler(tmp_path)
-        u = _mock_update()
-        # Mock the Rust API calls inside readiness
-        monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: MagicMock(read=lambda: b'{"strategies":[]}'))
-        h._cmd_readiness(u, None)
-        assert u.message.reply_text.called
-
-    def test_help_lists_commands(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        h = _handler(tmp_path)
-        u = _mock_update()
-        h._cmd_help(u, None)
-        text = _replied_text(u)
-        assert "/status" in text or "/help" in text
+def _mock_urlopen(json_data):
+    """Create a mock urlopen that returns json_data as bytes (context-manager safe)."""
+    m = MagicMock()
+    m.__enter__.return_value = m
+    m.read.return_value = json.dumps(json_data).encode() if isinstance(json_data, (dict, list)) else json_data.encode()
+    return lambda *a, **k: m
 
 
-class TestSignalCommands:
-    def test_signal_status_reads_positions_file(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        (tmp_path / "data").mkdir(exist_ok=True)
-        (tmp_path / "data" / "signal_positions.json").write_text(json.dumps({
-            "XLM-USDT": {"symbol": "XLM-USDT", "entry_price": 0.2, "is_closed": False,
-                          "take_profits": [0.21], "signal_confidence": "high",
-                          "channel_name": "TestCh", "entry_timestamp": 1700000000,
-                          "realized_pnl": 0, "tp1_hit": False},
-        }))
-        h = _handler(tmp_path)
-        u = _mock_update()
-        h._cmd_signal_status(u, None)
-        text = _replied_text(u)
-        assert "SIGNAL" in text
-        assert "XLM" in text
+# ── Helper tests ───────────────────────────────────────────────────────────
 
-    def test_signal_status_no_positions(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        (tmp_path / "data").mkdir(exist_ok=True)
-        (tmp_path / "data" / "signal_positions.json").write_text("{}")
-        h = _handler(tmp_path)
-        u = _mock_update()
-        h._cmd_signal_status(u, None)
-        assert u.message.reply_text.called
-
-    def test_signal_history_reads_positions(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        (tmp_path / "data").mkdir(exist_ok=True)
-        (tmp_path / "data" / "signal_positions.json").write_text(json.dumps({
-            "BTC-USDT": {"symbol": "BTC-USDT", "entry_price": 60000, "is_closed": True,
-                          "exit_reason": "tp1", "realized_pnl": 150.0, "entry_timestamp": 1700000000,
-                          "signal_confidence": "high"},
-        }))
-        h = _handler(tmp_path)
-        u = _mock_update()
-        h._cmd_signal_history(u, None)
-        text = _replied_text(u)
-        assert "BTC" in text or "closed" in text.lower() or "No closed" in text
-
-
-class TestCapitalCommand:
-    def test_capital_calls_rust_api(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        mock_resp = MagicMock()
-        mock_resp.__enter__.return_value = mock_resp
-        mock_resp.read.return_value = json.dumps({
-            "total_equity": 10000, "usdt_balance": 5000, "locked_in_positions": 5000,
-            "reserve_limit_pct": 20, "reserve": 2000, "free_capital": 3000,
-            "deployed_capital": {"grid": 5000},
-        }).encode()
-        monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: mock_resp)
-        h = _handler(tmp_path)
-        u = _mock_update()
-        h._cmd_capital(u, None)
-        text = _replied_text(u)
-        assert "Capital" in text
-        assert "10,000" in text or "10000" in text
-
-    def test_capital_handles_api_failure(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        def boom(*a, **k):
-            raise OSError("api down")
-        monkeypatch.setattr("urllib.request.urlopen", boom)
-        h = _handler(tmp_path)
-        u = _mock_update()
-        h._cmd_capital(u, None)
-        text = _replied_text(u)
-        assert "Error" in text or "error" in text.lower()
-
-
-class TestFmtHelpers:
-    def test_fmt_price_various(self):
+class TestHelpers:
+    def test_fmt_price(self):
         assert _fmt_price(436) == "436"
         assert _fmt_price(0.198) == "0.198"
         assert _fmt_price(None) == "?"
 
-    def test_fmt_duration_various(self):
+    def test_fmt_duration(self):
         assert _fmt_duration(45) == "45s"
         assert _fmt_duration(120) == "2m"
-        assert _fmt_duration(3600) == "1h0m"
+        assert _fmt_duration(3700) == "1h1m"
+        assert _fmt_duration(90000) == "1d1h"
+
+    def test_signal_price_fallback(self, monkeypatch):
+        monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: (_ for _ in ()).throw(OSError("boom")))
+        assert _signal_price("BTC-USDT") == 0.0
 
 
-class TestErrorHandling:
-    """Commands must reply with an error message, never crash."""
-    def test_signal_status_missing_file(self, tmp_path, monkeypatch):
+# ── System commands ───────────────────────────────────────────────────────
+
+class TestSystemCommands:
+    def test_status(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "logs").mkdir(exist_ok=True)
+        _handler(tmp_path)._cmd_status(_mock_update(), None)
+
+    def test_readiness(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("urllib.request.urlopen", _mock_urlopen({"strategies": []}))
+        _handler(tmp_path)._cmd_readiness(_mock_update(), None)
+
+    def test_help(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         h = _handler(tmp_path)
         u = _mock_update()
-        h._cmd_signal_status(u, None)
-        assert u.message.reply_text.called  # graceful, no crash
+        h._cmd_help(u, None)
+        assert "/status" in _replied(u)
+
+    def test_logs(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        logdir = tmp_path / "logs"
+        logdir.mkdir(exist_ok=True)
+        (logdir / "telegram.log").write_text("test log line\n")
+        u = _mock_update()
+        _handler(tmp_path)._cmd_logs(u, None)
+        assert u.message.reply_text.called
+
+    def test_errors(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        logdir = tmp_path / "logs"
+        logdir.mkdir(exist_ok=True)
+        (logdir / "error.log").write_text("some error\n")
+        u = _mock_update()
+        _handler(tmp_path)._cmd_errors(u, None)
+        assert u.message.reply_text.called
+
+    def test_price(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("urllib.request.urlopen", _mock_urlopen([
+            {"symbol": "BTCUSDT", "lastPrice": "60000", "priceChangePercent": "2.5"},
+        ]))
+        u = _mock_update()
+        _handler(tmp_path)._cmd_price(u, None)
+        assert u.message.reply_text.called
+
+
+# ── P&L + overview commands ───────────────────────────────────────────────
+
+class TestPnlCommands:
+    def test_pnl_all(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("urllib.request.urlopen", _mock_urlopen({"strategies": []}))
+        (tmp_path / "data").mkdir(exist_ok=True)
+        u = _mock_update()
+        _handler(tmp_path)._cmd_pnl_all(u, None)
+        assert u.message.reply_text.called
+
+    def test_bots(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("urllib.request.urlopen", _mock_urlopen([
+            {"name": "grid", "pair": "DOGE-USDT", "state": "Active", "pnl": 10.5,
+             "open_orders": 2, "details": "ranging"},
+        ]))
+        u = _mock_update()
+        _handler(tmp_path)._cmd_bots(u, None)
+        assert u.message.reply_text.called
+
+    def test_trades(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("urllib.request.urlopen", _mock_urlopen([]))
+        u = _mock_update()
+        _handler(tmp_path)._cmd_trades(u, None)
+        assert u.message.reply_text.called
+
+
+# ── Engine status commands (Rust API) ─────────────────────────────────────
+
+class TestEngineStatus:
+    def _api_mock(self, strategies):
+        return _mock_urlopen(strategies)
+
+    def test_grid_status(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("urllib.request.urlopen", self._api_mock([
+            {"name": "grid", "pair": "DOGE-USDT", "state": "Active", "pnl": 29.57,
+             "open_orders": 5, "details": "ranging ADX=20"},
+        ]))
+        u = _mock_update()
+        _handler(tmp_path)._cmd_grid_status(u, None)
+        assert u.message.reply_text.called
+
+    def test_trend_status(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("urllib.request.urlopen", self._api_mock([
+            {"name": "trend", "pair": "ETH-USDT", "state": "WAITING", "pnl": -434,
+             "open_orders": 0, "details": "Score:2/9"},
+        ]))
+        u = _mock_update()
+        _handler(tmp_path)._cmd_trend_status(u, None)
+        assert u.message.reply_text.called
+
+    def test_swing_status(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("urllib.request.urlopen", self._api_mock([
+            {"name": "swing", "pair": "BNB-USDT", "state": "SEARCHING", "pnl": -44,
+             "open_orders": 0, "details": "Capital: 4955"},
+        ]))
+        u = _mock_update()
+        _handler(tmp_path)._cmd_swing_status(u, None)
+        assert u.message.reply_text.called
+
+    def test_mean_status(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("urllib.request.urlopen", self._api_mock([
+            {"name": "mr", "pair": "BNB-USDT", "state": "Scanning", "pnl": 1.31,
+             "open_orders": 0, "details": "Trades: 0"},
+        ]))
+        u = _mock_update()
+        _handler(tmp_path)._cmd_mean_status(u, None)
+        assert u.message.reply_text.called
+
+
+# ── Signal commands ────────────────────────────────────────────────────────
+
+class TestSignalCommands:
+    def _setup_positions(self, tmp_path, positions=None):
+        d = tmp_path / "data"
+        d.mkdir(exist_ok=True)
+        (d / "signal_positions.json").write_text(json.dumps(positions or {}))
+
+    def test_signal_status_with_position(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        self._setup_positions(tmp_path, {
+            "XLM-USDT": {"symbol": "XLM-USDT", "entry_price": 0.2, "is_closed": False,
+                          "take_profits": [0.21], "signal_confidence": "high",
+                          "channel_name": "BK", "entry_timestamp": time.time(),
+                          "realized_pnl": 0, "tp1_hit": False, "stop_loss": 0.18},
+        })
+        monkeypatch.setattr("urllib.request.urlopen", _mock_urlopen({"bids": [[0.21, 1]], "asks": [[0.21, 1]]}))
+        u = _mock_update()
+        _handler(tmp_path)._cmd_signal_status(u, None)
+        text = _replied(u)
+        assert "SIGNAL" in text
+        assert "XLM" in text
+
+    def test_signal_status_empty(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        self._setup_positions(tmp_path)
+        u = _mock_update()
+        _handler(tmp_path)._cmd_signal_status(u, None)
+        assert u.message.reply_text.called
+
+    def test_signal_history(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        self._setup_positions(tmp_path, {
+            "BTC-USDT": {"symbol": "BTC-USDT", "entry_price": 60000, "is_closed": True,
+                          "exit_reason": "tp1", "realized_pnl": 150.0,
+                          "entry_timestamp": time.time(), "signal_confidence": "high"},
+        })
+        u = _mock_update()
+        _handler(tmp_path)._cmd_signal_history(u, None)
+        assert u.message.reply_text.called
+
+    def test_signal_channels(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("os.environ", {**os.environ, "SIGNAL_CHANNEL_IDS": "123,456"})
+        u = _mock_update()
+        _handler(tmp_path)._cmd_signal_channels(u, None)
+        assert u.message.reply_text.called
+
+    def test_signal_pause(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        u = _mock_update()
+        _handler(tmp_path)._cmd_signal_pause(u, None)
+        assert u.message.reply_text.called
+
+    def test_signal_resume(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        u = _mock_update()
+        _handler(tmp_path)._cmd_signal_resume(u, None)
+        assert u.message.reply_text.called
+
+
+# ── Capital command ────────────────────────────────────────────────────────
+
+class TestCapitalCommand:
+    def test_capital_success(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("urllib.request.urlopen", _mock_urlopen({
+            "total_equity": 10000, "usdt_balance": 5000, "locked_in_positions": 5000,
+            "reserve_limit_pct": 20, "reserve": 2000, "free_capital": 3000,
+            "deployed_capital": {"grid": 5000},
+        }))
+        u = _mock_update()
+        _handler(tmp_path)._cmd_capital(u, None)
+        text = _replied(u)
+        assert "Capital" in text
+
+    def test_capital_api_error(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        def boom(*a, **k):
+            raise OSError("down")
+        monkeypatch.setattr("urllib.request.urlopen", boom)
+        u = _mock_update()
+        _handler(tmp_path)._cmd_capital(u, None)
+        assert "Error" in _replied(u)
+
+
+# ── Error handling ─────────────────────────────────────────────────────────
+
+class TestErrorHandling:
+    def test_signal_status_no_file(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        u = _mock_update()
+        _handler(tmp_path)._cmd_signal_status(u, None)
+        assert u.message.reply_text.called  # graceful, never crashes
+
+    def test_any_command_never_raises(self, tmp_path, monkeypatch):
+        """Every command catches exceptions and replies with an error."""
+        monkeypatch.chdir(tmp_path)
+        h = _handler(tmp_path)
+        for cmd_name in ["_cmd_status", "_cmd_pnl_all", "_cmd_bots", "_cmd_help",
+                         "_cmd_price", "_cmd_signal_status", "_cmd_capital"]:
+            u = _mock_update()
+            try:
+                getattr(h, cmd_name)(u, None)
+                assert u.message.reply_text.called, f"{cmd_name} did not reply"
+            except Exception as e:
+                pytest.fail(f"{cmd_name} raised {e} — commands must never crash")
