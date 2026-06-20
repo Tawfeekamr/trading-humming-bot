@@ -232,6 +232,7 @@ class TelegramCommandHandler:
             "signal_pnl": self._cmd_signal_status,
             "mean_status": self._cmd_mean_status,
             "mean_pnl": self._cmd_mean_status,
+            "capital": self._cmd_capital,
             # Signal engine control
             "signal_channels": self._cmd_signal_channels,
             "signal_history": self._cmd_signal_history,
@@ -1697,6 +1698,35 @@ class TelegramCommandHandler:
                 sign = "+" if rpnl >= 0 else ""
                 lines.append(f"<b>{sym}</b> [{conf}] {_fmt_price(entry)} → {reason} · {sign}${rpnl:.2f}")
                 lines.append(f"  opened {when} UTC")
+            update.message.reply_text("\n".join(lines), parse_mode="HTML")
+        except Exception as e:
+            update.message.reply_text(f"⚠️ Error: {e}")
+
+    def _cmd_capital(self, update, context):
+        try:
+            logger.info("Telegram /capital received")
+            import urllib.request, json
+            url = os.environ.get("RUST_ENGINE_URL", "http://localhost:3030") + "/api/v1/capital"
+            req = urllib.request.Request(url)
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                d = json.loads(resp.read().decode())
+            te = float(d.get("total_equity") or 0)
+            usdt = float(d.get("usdt_balance") or 0)
+            locked = float(d.get("locked_in_positions") or 0)
+            reserve = float(d.get("reserve") or 0)
+            free = float(d.get("free_capital") or 0)
+            pct = float(d.get("reserve_limit_pct") or 0)
+            sc = d.get("strategy_capital") or {}
+            lines = ["💰 <b>Capital</b>", "•••"]
+            lines.append(f"Total equity: <b>${te:,.2f}</b>")
+            lines.append(f"USDT: ${usdt:,.2f} | Locked in positions: ${locked:,.2f}")
+            lines.append(f"Reserve ({pct:.0f}%): ${reserve:,.2f}")
+            lines.append(f"<b>Free capital: ${free:,.2f}</b>")
+            if sc:
+                lines.append("•••")
+                lines.append("Strategy budgets:")
+                for name, amt in sc.items():
+                    lines.append(f"  {name}: ${float(amt):,.2f}")
             update.message.reply_text("\n".join(lines), parse_mode="HTML")
         except Exception as e:
             update.message.reply_text(f"⚠️ Error: {e}")

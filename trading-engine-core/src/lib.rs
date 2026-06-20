@@ -9,6 +9,7 @@ pub mod config;
 pub mod connector;
 pub mod strategy;
 pub mod risk;
+pub mod capital;
 pub mod ml;
 pub mod notifications;
 pub mod signal;

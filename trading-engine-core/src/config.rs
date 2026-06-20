@@ -12,6 +12,8 @@ pub struct AppConfig {
     pub trend: TrendConfig,
     pub risk: RiskConfig,
     #[serde(default)]
+    pub capital: CapitalConfig,
+    #[serde(default)]
     pub telegram: TelegramConfig,
     #[serde(default)]
     pub mean_reversion: MeanReversionConfig,
@@ -24,6 +26,22 @@ pub struct AppConfig {
 }
 
 fn default_timeframe() -> String { "1m".to_string() }
+
+/// Centralized capital accounting config (Phase A: visibility only).
+#[derive(Debug, Deserialize)]
+pub struct CapitalConfig {
+    /// Minimum portfolio reserve kept in USDT, as a % of total equity.
+    #[serde(default = "default_reserve_pct")]
+    pub reserve_limit_pct: f64,
+}
+
+impl Default for CapitalConfig {
+    fn default() -> Self {
+        Self { reserve_limit_pct: 20.0 }
+    }
+}
+
+fn default_reserve_pct() -> f64 { 20.0 }
 
 #[derive(Debug, Deserialize, Default)]
 #[serde(from = "ExchangeRaw")]

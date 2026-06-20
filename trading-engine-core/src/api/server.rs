@@ -7,6 +7,7 @@ use crate::bar_cache::BarCache;
 use crate::connector::Connector;
 use crate::strategy::status_cache::StrategyStatusCache;
 use crate::strategy::regime_cache::RegimeCache;
+use crate::capital::CapitalManager;
 
 use super::handlers;
 
@@ -17,11 +18,12 @@ pub struct AppState {
     pub bars: BarCache,
     pub strategies: StrategyStatusCache,
     pub regime_cache: RegimeCache,
+    pub capital: CapitalManager,
 }
 
 impl AppState {
-    pub fn new(connector: Arc<dyn Connector>, bars: BarCache, strategies: StrategyStatusCache, regime_cache: RegimeCache) -> Self {
-        Self { connector, bars, strategies, regime_cache }
+    pub fn new(connector: Arc<dyn Connector>, bars: BarCache, strategies: StrategyStatusCache, regime_cache: RegimeCache, capital: CapitalManager) -> Self {
+        Self { connector, bars, strategies, regime_cache, capital }
     }
 }
 
@@ -38,6 +40,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/v1/klines", get(handlers::get_klines))
         .route("/api/v1/strategies", get(handlers::get_strategies))
         .route("/api/v1/regime", post(handlers::update_regime))
+        .route("/api/v1/capital", get(handlers::get_capital))
         .layer(CorsLayer::permissive())
         .with_state(state)
 }

@@ -182,6 +182,11 @@ pub async fn get_strategies(
     Json(statuses)
 }
 
+/// Centralized capital snapshot (total equity, reserve, free capital, per-strategy).
+pub async fn get_capital(State(state): State<AppState>) -> Json<crate::capital::CapitalSnapshot> {
+    Json(state.capital.snapshot())
+}
+
 // ── Regime update (pushed by Python ML) ───────────────────────────────
 
 pub async fn update_regime(
@@ -213,13 +218,14 @@ mod tests {
 
     use crate::api::server::{AppState, create_router};
     use crate::strategy::regime_cache::RegimeCache;
+    use crate::capital::CapitalManager;
 
     fn test_app() -> Router {
         let mut balances = HashMap::new();
         balances.insert("USDT".to_string(), 10000.0);
         let connector = Arc::new(PaperTradeConnector::new(balances)) as Arc<dyn Connector>;
         let regime_cache = RegimeCache::new("data/regime_cache.json", 180_000); // 3min TTL = 3×60s poll
-        create_router(AppState::new(connector, BarCache::new(), StrategyStatusCache::new(), regime_cache))
+        create_router(AppState::new(connector, BarCache::new(), StrategyStatusCache::new(), regime_cache, CapitalManager::new(20.0)))
     }
 
     #[tokio::test]
