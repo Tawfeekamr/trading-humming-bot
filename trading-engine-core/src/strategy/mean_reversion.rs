@@ -200,7 +200,12 @@ impl Strategy for MeanReversionStrategy {
                 };
 
                 if let Verdict::Trade { size_mult } = classify(&sig, &self.config.classifier) {
-                    let qty = (100.0 * size_mult) / mid; // 100 USDT base allocation
+                    // Phase B2: cap base to available free capital.
+                    let base = match &ctx.capital {
+                        Some(cm) => cm.request_capital("mean_reversion", 100.0),
+                        None => 100.0,
+                    };
+                    let qty = (base * size_mult) / mid;
                     
                     self.in_position = true;
                     self.entry_price = mid;
