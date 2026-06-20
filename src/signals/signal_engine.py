@@ -47,6 +47,11 @@ class SignalEngine:
         self._enabled = config.get("enabled", False)
         self._audit_mode = config.get("audit_mode", True)
         self._manual_pause = False
+        # Per-key notification cooldown: stops a persistent condition (broken buy
+        # path, active risk-guard cooldown, saturated positions) from alerting on
+        # every incoming signal. Trade events (entry/TP/close) bypass this.
+        self._notify_cooldowns: dict[str, float] = {}
+        self._notify_cooldown_seconds = float(config.get("notify_cooldown_seconds", 1800))
         self._state = SignalEngineState.LISTENING
 
         # Sub-components
@@ -270,7 +275,7 @@ class SignalEngine:
         valid, reason = self._validator.validate(signal)
         if not valid:
             logger.info(f"Signal rejected ({channel_name}): {reason}")
-            self._notify(f"Signal rejected: {signal.pair} — {reason}")
+            self._notify_dedupe(f"rejected:{signal.pair}", f"🚫 Signal rejected: {signal.pair} — {reason}")
             self._log_audit_trade(signal, channel_name, "rejected", 0, reason)
             return
 
@@ -278,13 +283,14 @@ class SignalEngine:
         btc_regime, _, _ = self._get_btc_regime()
         if btc_regime == "DANGER" and self._config.get("use_btc_correlation_gate", True):
             logger.info(f"Signal blocked by BTC DANGER: {signal.pair}")
-            self._notify(f"Signal blocked (BTC DANGER): {signal.pair}")
+            self._notify_dedupe("blocked_btc", f"🚫 Signal blocked (BTC DANGER): {signal.pair}")
             self._log_audit_trade(signal, channel_name, "blocked_btc", 0, "btc_danger")
             return
 
         # Risk checks
         if not self._risk.can_trade():
             logger.info("Signal blocked by risk guard")
+            self._notify_dedupe(f"blocked_risk:{signal.pair}", f"🚫 Signal blocked (risk guard): {signal.pair}")
             self._log_audit_trade(signal, channel_name, "blocked_risk", 0, "risk_limit")
             return
 
@@ -333,18 +339,19 @@ class SignalEngine:
         entry = signal.entry_high or signal.entry_low or 0
         if entry <= 0:
             logger.warning(f"Signal has no valid entry price: {signal.pair}")
+            self._notify_dedupe(f"no_entry:{signal.pair}", f"🚫 Signal rejected (no entry price): {signal.pair}")
             return
 
         # Pre-flight guards — abort before any order is placed
         if self._position_mgr.has_open_position(signal.pair):
             logger.warning(f"Signal skipped — position already open for {signal.pair}")
             self._log_audit_trade(signal, channel_name, "skipped_duplicate", entry, "duplicate_symbol")
-            self._notify(f"Signal skipped (already open): {signal.pair}")
+            self._notify_dedupe(f"skipped_duplicate:{signal.pair}", f"🚫 Signal skipped (already open): {signal.pair}")
             return
         if len(self._position_mgr.get_open_positions()) >= self._position_mgr.max_positions:
             logger.warning(f"Signal skipped — max positions ({self._position_mgr.max_positions}) reached")
             self._log_audit_trade(signal, channel_name, "skipped_max_positions", entry, "max_positions")
-            self._notify(f"Signal skipped (max positions reached): {signal.pair}")
+            self._notify_dedupe("skipped_max_positions", f"🚫 Signal skipped (max positions reached): {signal.pair}")
             return
 
         # MARKET entry fills at the current price; size + record cost basis from it
@@ -358,6 +365,7 @@ class SignalEngine:
         usdt_amount = self._risk.get_budget_for_trade(signal, equity)
         if usdt_amount <= 0:
             logger.warning(f"Signal budget is 0 for {signal.pair} (equity={equity})")
+            self._notify_dedupe(f"no_budget:{signal.pair}", f"🚫 Signal skipped (no budget): {signal.pair} (equity=${equity:.0f})")
             return
 
         if fill_price <= 0:
@@ -379,6 +387,7 @@ class SignalEngine:
                 )
             except Exception as e:
                 logger.error(f"Signal buy failed for {signal.pair}: {e}")
+                self._notify_dedupe(f"buy_error:{signal.pair}", f"🚫 Signal entry FAILED: {signal.pair} — {e}")
                 return
 
         if order_id:
@@ -408,6 +417,7 @@ class SignalEngine:
         else:
             logger.warning(f"Signal buy returned no order ID for {signal.pair}")
             self._log_audit_trade(signal, channel_name, "buy_failed", fill_price, "no_order_id")
+            self._notify_dedupe(f"no_order_id:{signal.pair}", f"🚫 Signal entry failed (no order ID): {signal.pair}")
 
     def _manage_positions(self, connector):
         """Check all signal positions for SL/TP hits."""
@@ -709,3 +719,17 @@ class SignalEngine:
                 self._telegram_send(message)
             except Exception as e:
                 logger.error(f"Signal notify failed: {e}")
+
+    def _notify_dedupe(self, key: str, message: str):
+        """Send a notification, suppressing repeats of `key` within the cooldown.
+
+        Prevents Telegram spam when a persistent condition would otherwise alert
+        on every incoming signal (e.g. a failing buy path, an active risk-guard
+        block, max-positions saturated). Time-sensitive trade events (entry / TP
+        / close) use _notify directly so they always fire.
+        """
+        now = time.time()
+        if now - self._notify_cooldowns.get(key, 0.0) < self._notify_cooldown_seconds:
+            return
+        self._notify_cooldowns[key] = now
+        self._notify(message)
