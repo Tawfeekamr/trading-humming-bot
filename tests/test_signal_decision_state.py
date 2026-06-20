@@ -101,5 +101,9 @@ class TestDecisionStateCapture:
         engine._journal.log_trade = lambda trade: None
         monkeypatch.setattr(engine, "_fetch_klines", lambda p, limit=250: [])
         monkeypatch.setattr(engine, "_compute_features", lambda k: None)
+        # _log_audit_trade submits the capture to a thread pool; run it inline here
+        # so the assertion is deterministic.
+        import src.signals.signal_engine as se_mod
+        monkeypatch.setattr(se_mod._CAPTURE_POOL, "submit", lambda fn, *a, **k: fn(*a, **k))
         engine._log_audit_trade(_signal(), "testchan", "blocked_risk", 0, "risk_limit")
         assert captured.get("decision") == "blocked_risk"

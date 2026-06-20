@@ -1,6 +1,7 @@
 use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{Instant, Duration};
 use tracing::{info, warn, error};
 use crate::config::AppConfig;
 use crate::connector::Connector;
@@ -28,6 +29,8 @@ pub struct Engine {
     status_cache: StrategyStatusCache,
     regime_cache: RegimeCache,
     capital: CapitalManager,
+    /// Throttle for risk-state persistence (see feed_breaker). None = save next tick.
+    last_risk_save: Option<Instant>,
     /// client_order_id (owner-tagged) → (symbol, exchange order_id) for orders
     /// this engine has placed, so strategies can cancel their own resting orders
     /// (e.g. swing's resting TP1 / hard stop) via `pending_cancels`.
@@ -57,6 +60,7 @@ impl Engine {
             status_cache,
             regime_cache,
             capital,
+            last_risk_save: None,
             placed_orders: HashMap::new(),
         };
         // Init signal engine after self.config is set
@@ -295,6 +299,7 @@ impl Engine {
             strategy_capital.insert(s.name().to_string(), s.current_capital());
         }
         self.capital.set_strategy_capital(strategy_capital);
+        let was_halted = self.risk.circuit_breaker.is_halted_raw();
         self.risk.record_equity(equity);
         // Daily reset at UTC midnight.
         let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
@@ -302,8 +307,18 @@ impl Engine {
             self.risk.circuit_breaker.set_start_of_day_equity(equity);
             self.risk.circuit_breaker.set_last_reset_date(today);
         }
+        // Persist risk state at most every 5s, or immediately when the halt flag
+        // changes. feed_breaker runs on every orderbook update (dozens/sec across
+        // pairs); writing risk_state.json (fs::write + rename) on every tick starves
+        // the Tokio worker with synchronous disk I/O. (#5 of the concurrency audit.)
         let path = std::env::var("RISK_STATE_PATH").unwrap_or_else(|_| "data/risk_state.json".to_string());
-        crate::risk::save_state(&self.risk.circuit_breaker, &path);
+        let now = Instant::now();
+        let halt_changed = was_halted != self.risk.circuit_breaker.is_halted_raw();
+        let due = self.last_risk_save.map_or(true, |t| now.duration_since(t) >= Duration::from_secs(5));
+        if halt_changed || due {
+            crate::risk::save_state(&self.risk.circuit_breaker, &path);
+            self.last_risk_save = Some(now);
+        }
     }
 
     async fn submit_orders(&mut self, orders: Vec<OrderRequest>) -> Result<()> {
