@@ -25,6 +25,51 @@ def _log(msg: str):
         f.write(f"{datetime.now():%Y-%m-%d %H:%M:%S} {msg}\n")
 
 
+def _fmt_price(value) -> str:
+    """Compact price formatting for Telegram: 436 -> '436', 0.198 -> '0.198'."""
+    if value is None:
+        return "?"
+    try:
+        return f"{float(value):.6g}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _fmt_duration(seconds: float) -> str:
+    """Human-readable hold time: 90 -> '1m', 3700 -> '1h2m', 90000 -> '1d1h'."""
+    try:
+        seconds = int(seconds)
+    except (TypeError, ValueError):
+        return "?"
+    if seconds < 60:
+        return f"{seconds}s"
+    m, _ = divmod(seconds, 60)
+    if m < 60:
+        return f"{m}m"
+    h, m = divmod(m, 60)
+    if h < 24:
+        return f"{h}h{m}m"
+    d, h = divmod(h, 24)
+    return f"{d}d{h}h"
+
+
+def _signal_price(symbol: str) -> float:
+    """Best-effort live mid-price from the Rust engine; 0.0 if unavailable."""
+    try:
+        import urllib.request
+        sym = symbol.replace("-", "")
+        url = os.environ.get("RUST_ENGINE_URL", "http://localhost:3030") + f"/api/v1/orderbook?symbol={sym}&limit=1"
+        data = json.loads(urllib.request.urlopen(url, timeout=4).read())
+        bids, asks = data.get("bids", []), data.get("asks", [])
+        if bids and asks:
+            return (float(bids[0][0]) + float(asks[0][0])) / 2
+        if bids:
+            return float(bids[0][0])
+    except Exception:
+        pass
+    return 0.0
+
+
 class TelegramCommandHandler:
     def __init__(self, journal, state_machine, circuit_breaker, position_guard, event_logger, strategy):
         self.journal = journal
@@ -1466,7 +1511,6 @@ class TelegramCommandHandler:
 
     def _cmd_signal_status(self, update, context):
         try:
-            import json, sqlite3
             logger.info("Telegram /signal_status received")
             pos = {}
             try:
@@ -1475,95 +1519,45 @@ class TelegramCommandHandler:
             except Exception:
                 pass
             open_pos = {k: v for k, v in pos.items() if not v.get("is_closed")}
-            c = sqlite3.connect("data/signal_journal.db")
-            summary = c.execute("SELECT COUNT(*), COALESCE(SUM(realized_pnl),0) FROM signal_trades WHERE action LIKE 'CLOSE%'").fetchone()
-            c.close()
+            realized_total = sum((p.get("realized_pnl") or 0) for p in pos.values())
+            n_closed = sum(1 for p in pos.values() if p.get("is_closed"))
+
             lines = ["📡 <b>SIGNAL ENGINE</b>", "•••"]
-            lines.append(f"State: LISTENING")
-            lines.append(f"Open positions: {len(open_pos)}/5")
-            lines.append(f"Realized P&L: ${summary[1]:.2f} ({summary[0]} trades)")
-            if open_pos:
+            lines.append(f"Open: {len(open_pos)} | Closed: {n_closed} | Realized P&L: ${realized_total:+.2f}")
+            if not open_pos:
+                lines.append("No open positions.")
+            else:
                 lines.append("•••")
-                lines.append("<b>Open Positions:</b>")
-                for sym, p in list(open_pos.items())[:5]:
-                    entry = p.get("entry_price", 0)
-                    rpn = p.get("realized_pnl", 0)
-                    tp_marks = "".join("✅" if p.get(f"tp{i}_hit") else "⬜" for i in range(1, 4))
-                    lines.append(f"  {sym}: ${entry:.4f} TPs={tp_marks} R:${rpn:.2f}")
+                for sym, p in list(open_pos.items())[:8]:
+                    entry = p.get("entry_price") or 0
+                    tps = p.get("take_profits") or []
+                    conf = p.get("signal_confidence", "?")
+                    ch = (p.get("channel_name") or "")[:18]
+                    realized = p.get("realized_pnl") or 0
+                    entry_ts = p.get("entry_timestamp") or 0
+                    hold = _fmt_duration(time.time() - entry_ts) if entry_ts else "?"
+                    now_price = _signal_price(sym)
+                    marks = []
+                    for i, tp in enumerate(tps):
+                        hit = p.get(f"tp{i+1}_hit") if i < 3 else None
+                        if hit:
+                            marks.append(f"✅{_fmt_price(tp)}")
+                        elif now_price and tp and now_price >= tp:
+                            marks.append(f"🎯{_fmt_price(tp)}")
+                        else:
+                            marks.append(f"⬜{_fmt_price(tp)}")
+                    tp_str = " ".join(marks) if marks else "N/A"
+                    now_str = ""
+                    if now_price and entry:
+                        now_str = f" | Now {_fmt_price(now_price)} ({(now_price-entry)/entry*100:+.1f}%)"
+                    lines.append(f"<b>{sym}</b> [{conf}] {ch}")
+                    lines.append(f"  Entry {_fmt_price(entry)}{now_str} | SL {_fmt_price(p.get('stop_loss'))}")
+                    lines.append(f"  TPs {tp_str}")
+                    lines.append(f"  Held {hold} | realized ${realized:+.2f}")
             lines.append("•••")
             update.message.reply_text("\n".join(lines), parse_mode="HTML")
         except Exception as e:
             update.message.reply_text(f"⚠️ Error: {e}")
-        return
-        engine = getattr(self.strategy, '_signal_engine', None)  # dead code below
-        if engine is None:
-            update.message.reply_text("Signal engine not configured.")
-            return
-        status = engine.get_status()
-        risk = status.get("risk", {})
-        positions = engine._position_mgr.get_open_positions()
-
-        # Read realized P&L from signal_positions.json (accurate, survives restarts)
-        total_realized = 0.0
-        rust_positions = {}
-        try:
-            with open("data/signal_positions.json", "r") as f:
-                rust_data = json.load(f)
-                for sym, pdata in rust_data.items():
-                    total_realized += pdata.get("realized_pnl", 0)
-                    if not pdata.get("is_closed", False):
-                        rust_positions[sym] = pdata
-        except Exception:
-            pass
-
-        # Filter: only show positions that Rust confirms as open
-        if rust_positions:
-            positions = [p for p in positions if p.symbol in rust_positions]
-
-        # Compute unrealized P&L
-        unrealized = self._compute_signal_unrealized()
-        total_pnl = total_realized + unrealized
-        open_count = len(rust_positions) if rust_positions else status["open_positions"]
-
-        mode_tag = "AUDIT" if status.get("audit_mode") else "LIVE"
-        lines = [
-            f"📡 <b>SIGNAL ENGINE ({mode_tag})</b>",
-            "•••",
-            f"State: <b>{status['state']}</b>",
-            f"Open positions: {open_count}/{engine._risk._max_positions}",
-            f"Trades today: {risk.get('trades_today', 0)}/{risk.get('max_trades', 0)}",
-            f"Realized P&L: ${total_realized:.2f}",
-            f"Unrealized P&L: ${unrealized:.2f}",
-            f"<b>Total P&L: ${total_pnl:.2f}</b>",
-        ]
-
-        if positions:
-            lines.append("•••")
-            lines.append("📈 <b>Open Positions:</b>")
-            last_price = getattr(self.strategy, '_last_price', {})
-            for pos in positions:
-                # Use Rust's TP state if available (more up-to-date)
-                rp = rust_positions.get(pos.symbol, {})
-                tp_hits = []
-                for i in range(len(pos.take_profits)):
-                    key = f"tp{i+1}_hit"
-                    tp_hits.append("✅" if rp.get(key, getattr(pos, f"tp{i+1}_hit", False)) else "⬜")
-                tp_str = "".join(tp_hits) if tp_hits else "N/A"
-
-                cur_price = last_price.get(pos.symbol, pos.entry_price)
-                unreal = (cur_price - pos.entry_price) * pos.remaining_amount if cur_price > 0 else 0
-                sign = "+" if unreal >= 0 else ""
-                realized = rp.get("realized_pnl", 0)
-
-                lines.append(
-                    f"  {pos.symbol}: ${pos.entry_price:.4f} SL=${pos.stop_loss:.4f} "
-                    f"TPs={tp_str}"
-                )
-                lines.append(
-                    f"    Realized: ${realized:.2f} | Unrealized: {sign}${unreal:.2f}"
-                )
-
-        update.message.reply_text("\n".join(lines), parse_mode="HTML")
 
     def _cmd_signal_pnl(self, update, context):
         engine = getattr(self.strategy, '_signal_engine', None)
@@ -1677,27 +1671,35 @@ class TelegramCommandHandler:
             update.message.reply_text(f"⚠️ Signal inject failed: {e}")
 
     def _cmd_signal_history(self, update, context):
-        engine = getattr(self.strategy, '_signal_engine', None)
-        if engine is None:
-            update.message.reply_text("Signal engine not configured.")
-            return
-
-        signals = engine._journal.recent_signals(limit=10)
-        if not signals:
-            update.message.reply_text("No signals received yet.")
-            return
-
-        lines = ["📨 <b>Recent Signals</b>", "•••"]
-        for s in signals:
-            ts = s.get("timestamp", "")[:16]
-            action = s.get("action", "?")
-            pair = s.get("pair", "?")
-            text = s.get("text", "")[:60]
-            score = s.get("quality_score", 0)
-            score_str = f" Q{score}/10" if score else ""
-            lines.append(f"{ts} [{action}]{score_str} {pair}: {text}")
-
-        update.message.reply_text("\n".join(lines), parse_mode="HTML")
+        try:
+            logger.info("Telegram /signal_history received")
+            pos = {}
+            try:
+                with open("data/signal_positions.json") as f:
+                    pos = json.load(f)
+            except Exception:
+                pass
+            closed = [p for p in pos.values() if p.get("is_closed")]
+            closed.sort(key=lambda p: (p.get("entry_timestamp") or 0), reverse=True)
+            closed = closed[:10]
+            if not closed:
+                update.message.reply_text("📨 No closed signal trades yet.")
+                return
+            lines = ["📨 <b>Signal History (last 10 closed)</b>", "•••"]
+            for p in closed:
+                sym = p.get("symbol", "?")
+                entry = p.get("entry_price") or 0
+                conf = p.get("signal_confidence", "?")
+                rpnl = p.get("realized_pnl") or 0
+                reason = p.get("exit_reason") or "?"
+                entry_ts = p.get("entry_timestamp") or 0
+                when = datetime.fromtimestamp(entry_ts, tz=timezone.utc).strftime("%m-%d %H:%M") if entry_ts else "?"
+                sign = "+" if rpnl >= 0 else ""
+                lines.append(f"<b>{sym}</b> [{conf}] {_fmt_price(entry)} → {reason} · {sign}${rpnl:.2f}")
+                lines.append(f"  opened {when} UTC")
+            update.message.reply_text("\n".join(lines), parse_mode="HTML")
+        except Exception as e:
+            update.message.reply_text(f"⚠️ Error: {e}")
 
     def _cmd_signal_channels(self, update, context):
         engine = getattr(self.strategy, '_signal_engine', None)

@@ -102,6 +102,16 @@ class TestRejectionNotifications:
         eng._execute_entry(sig, "testchan", None)
         assert any("entry" in m.lower() for m in sent), sent
 
+    def test_rejection_alerts_include_signal_detail(self, engine):
+        """Rejection alerts now carry the signal context (entry/score/channel)."""
+        eng, sent = engine
+        eng._buy_fn = _raising_buy
+        eng._execute_entry(_valid_signal(), "testchan", None)
+        msg = sent[-1]
+        assert "Score: 8/10" in msg
+        assert "Channel: testchan" in msg
+        assert "0.1" in msg  # entry zone
+
     def test_risk_guard_block_notifies_with_reason_and_detail(self, engine, monkeypatch):
         eng, sent = engine
         eng._parser.parse = lambda text: _valid_signal()

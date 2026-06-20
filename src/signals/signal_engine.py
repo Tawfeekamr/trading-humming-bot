@@ -39,6 +39,16 @@ def _fmt_price(value) -> str:
         return str(value)
 
 
+def _signal_detail(signal, channel_name: str) -> str:
+    """Standard signal-context block appended to rejection / skip alerts."""
+    return (
+        f"Entry: {_fmt_price(signal.entry_low)}-{_fmt_price(signal.entry_high)} | "
+        f"SL: {_fmt_price(signal.stop_loss)}\n"
+        f"TPs: {', '.join(_fmt_price(tp) for tp in signal.take_profits)}\n"
+        f"Score: {signal.quality_score}/10 ({signal.confidence.value}) | Channel: {channel_name}"
+    )
+
+
 class SignalEngineState(Enum):
     LISTENING = "LISTENING"
     PAUSED = "PAUSED"
@@ -305,7 +315,7 @@ class SignalEngine:
         valid, reason = self._validator.validate(signal)
         if not valid:
             logger.info(f"Signal rejected ({channel_name}): {reason}")
-            self._notify_dedupe(f"rejected:{signal.pair}", f"🚫 Signal rejected: {signal.pair} — {reason}")
+            self._notify_dedupe(f"rejected:{signal.pair}", f"🚫 Signal rejected: {signal.pair} — {reason}\n" + _signal_detail(signal, channel_name))
             self._log_audit_trade(signal, channel_name, "rejected", 0, reason)
             return
 
@@ -313,7 +323,7 @@ class SignalEngine:
         btc_regime, _, _ = self._get_btc_regime()
         if btc_regime == "DANGER" and self._config.get("use_btc_correlation_gate", True):
             logger.info(f"Signal blocked by BTC DANGER: {signal.pair}")
-            self._notify_dedupe("blocked_btc", f"🚫 Signal blocked (BTC DANGER): {signal.pair}")
+            self._notify_dedupe("blocked_btc", f"🚫 Signal blocked (BTC DANGER): {signal.pair}\n" + _signal_detail(signal, channel_name))
             self._log_audit_trade(signal, channel_name, "blocked_btc", 0, "btc_danger")
             return
 
@@ -324,12 +334,7 @@ class SignalEngine:
             self._notify_dedupe(
                 f"blocked_risk:{signal.pair}",
                 f"🚫 Signal blocked (risk guard): {signal.pair}\n"
-                f"Reason: {reason}\n"
-                f"Entry: {_fmt_price(signal.entry_low)}-{_fmt_price(signal.entry_high)} | "
-                f"SL: {_fmt_price(signal.stop_loss)}\n"
-                f"TPs: {', '.join(_fmt_price(tp) for tp in signal.take_profits)}\n"
-                f"Score: {signal.quality_score}/10 ({signal.confidence.value}) | "
-                f"Channel: {channel_name}",
+                f"Reason: {reason}\n" + _signal_detail(signal, channel_name),
             )
             self._log_audit_trade(signal, channel_name, "blocked_risk", 0, "risk_limit")
             return
@@ -379,19 +384,19 @@ class SignalEngine:
         entry = signal.entry_high or signal.entry_low or 0
         if entry <= 0:
             logger.warning(f"Signal has no valid entry price: {signal.pair}")
-            self._notify_dedupe(f"no_entry:{signal.pair}", f"🚫 Signal rejected (no entry price): {signal.pair}")
+            self._notify_dedupe(f"no_entry:{signal.pair}", f"🚫 Signal rejected (no entry price): {signal.pair}\n" + _signal_detail(signal, channel_name))
             return
 
         # Pre-flight guards — abort before any order is placed
         if self._position_mgr.has_open_position(signal.pair):
             logger.warning(f"Signal skipped — position already open for {signal.pair}")
             self._log_audit_trade(signal, channel_name, "skipped_duplicate", entry, "duplicate_symbol")
-            self._notify_dedupe(f"skipped_duplicate:{signal.pair}", f"🚫 Signal skipped (already open): {signal.pair}")
+            self._notify_dedupe(f"skipped_duplicate:{signal.pair}", f"🚫 Signal skipped (already open): {signal.pair}\n" + _signal_detail(signal, channel_name))
             return
         if len(self._position_mgr.get_open_positions()) >= self._position_mgr.max_positions:
             logger.warning(f"Signal skipped — max positions ({self._position_mgr.max_positions}) reached")
             self._log_audit_trade(signal, channel_name, "skipped_max_positions", entry, "max_positions")
-            self._notify_dedupe("skipped_max_positions", f"🚫 Signal skipped (max positions reached): {signal.pair}")
+            self._notify_dedupe("skipped_max_positions", f"🚫 Signal skipped (max positions reached): {signal.pair}\n" + _signal_detail(signal, channel_name))
             return
 
         # Entry-zone gate: only enter while live price is inside the signal's
@@ -429,7 +434,7 @@ class SignalEngine:
         usdt_amount = self._risk.get_budget_for_trade(signal, equity)
         if usdt_amount <= 0:
             logger.warning(f"Signal budget is 0 for {signal.pair} (equity={equity})")
-            self._notify_dedupe(f"no_budget:{signal.pair}", f"🚫 Signal skipped (no budget): {signal.pair} (equity=${equity:.0f})")
+            self._notify_dedupe(f"no_budget:{signal.pair}", f"🚫 Signal skipped (no budget): {signal.pair} (equity=${equity:.0f})\n" + _signal_detail(signal, channel_name))
             return
 
         if fill_price <= 0:
@@ -451,7 +456,7 @@ class SignalEngine:
                 )
             except Exception as e:
                 logger.error(f"Signal buy failed for {signal.pair}: {e}")
-                self._notify_dedupe(f"buy_error:{signal.pair}", f"🚫 Signal entry FAILED: {signal.pair} — {e}")
+                self._notify_dedupe(f"buy_error:{signal.pair}", f"🚫 Signal entry FAILED: {signal.pair} — {e}\n" + _signal_detail(signal, channel_name))
                 return
 
         if order_id:
@@ -481,7 +486,7 @@ class SignalEngine:
         else:
             logger.warning(f"Signal buy returned no order ID for {signal.pair}")
             self._log_audit_trade(signal, channel_name, "buy_failed", fill_price, "no_order_id")
-            self._notify_dedupe(f"no_order_id:{signal.pair}", f"🚫 Signal entry failed (no order ID): {signal.pair}")
+            self._notify_dedupe(f"no_order_id:{signal.pair}", f"🚫 Signal entry failed (no order ID): {signal.pair}\n" + _signal_detail(signal, channel_name))
 
     def _manage_positions(self, connector):
         """Check all signal positions for SL/TP hits."""
