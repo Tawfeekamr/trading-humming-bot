@@ -80,81 +80,89 @@ impl SignalEngine {
     pub async fn manage_positions(&self, connector: &dyn Connector) {
         if !self.enabled || self.manual_pause { return; }
 
-        let mut mgr = self.position_mgr.lock().await;
-        mgr.reload_state(); // Pick up new positions opened by Python since last tick
-        let positions: Vec<SignalPosition> = mgr.get_open_positions().into_iter().cloned().collect();
+        // Snapshot positions under a brief lock, then RELEASE. We must not hold the
+        // position lock across the per-pair HTTP price fetches (or the telegram /
+        // journal side-effects below) — doing so stalls all position management on
+        // network I/O. (#3 of the concurrency audit.)
+        let positions: Vec<SignalPosition> = {
+            let mut mgr = self.position_mgr.lock().await;
+            mgr.reload_state(); // Pick up new positions opened by Python since last tick
+            mgr.get_open_positions().into_iter().cloned().collect()
+        };
+        if positions.is_empty() { return; }
 
+        // Fetch each position's price WITHOUT the position lock held.
+        let mut prices: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
         for pos in &positions {
-            let current_price = self.get_current_price(connector, &pos.symbol).await;
-            if current_price <= 0.0 { continue; }
+            prices.insert(pos.symbol.clone(), self.get_current_price(connector, &pos.symbol).await);
+        }
 
-            // Stop-loss check
-            if current_price <= pos.stop_loss {
-                let pnl = mgr.close_position(&pos.symbol, current_price, "stop_loss");
-                self.notify(&format!(
-                    "[{}] 🛑 SL hit: {} @ ${:.2}, PnL: ${:.2}",
-                    if self.config.audit_mode { "AUDIT" } else { "LIVE" },
-                    pos.symbol, current_price, pnl.unwrap_or(0.0)
-                )).await;
-                self.record_close(&pos, current_price, "stop_loss", pnl).await;
-                continue;
-            }
+        // Apply decisions under the lock; collect side-effects to run after release.
+        let mode = if self.config.audit_mode { "AUDIT" } else { "LIVE" };
+        let mut notifications: Vec<String> = Vec::new();
+        let mut closes: Vec<(SignalPosition, f64, String, Option<f64>)> = Vec::new();
+        {
+            let mut mgr = self.position_mgr.lock().await;
+            for pos in &positions {
+                let current_price = match prices.get(&pos.symbol) { Some(p) => *p, None => continue };
+                if current_price <= 0.0 { continue; }
 
-            // TP1 hit
-            if !pos.tp1_hit && !pos.take_profits.is_empty() && current_price >= pos.take_profits[0] {
-                mgr.get_position_mut(&pos.symbol).map(|p| p.tp1_hit = true);
-                mgr.partial_close(&pos.symbol, pos.tp1_close_pct, pos.take_profits[0], "tp1");
-                mgr.update_stop_loss(&pos.symbol, pos.entry_price); // Move SL to breakeven
-                self.notify(&format!(
-                    "[{}] TP1 hit: {} @ ${:.2}, SL → breakeven",
-                    if self.config.audit_mode { "AUDIT" } else { "LIVE" },
-                    pos.symbol, pos.take_profits[0]
-                )).await;
-            }
+                // Stop-loss check
+                if current_price <= pos.stop_loss {
+                    let pnl = mgr.close_position(&pos.symbol, current_price, "stop_loss");
+                    notifications.push(format!("[{}] 🛑 SL hit: {} @ ${:.2}, PnL: ${:.2}", mode, pos.symbol, current_price, pnl.unwrap_or(0.0)));
+                    closes.push((pos.clone(), current_price, "stop_loss".to_string(), pnl));
+                    continue;
+                }
 
-            // TP2 hit
-            if !pos.tp2_hit && pos.take_profits.len() >= 2 && current_price >= pos.take_profits[1] {
-                mgr.get_position_mut(&pos.symbol).map(|p| p.tp2_hit = true);
-                mgr.partial_close(&pos.symbol, pos.tp2_close_pct, pos.take_profits[1], "tp2");
-                mgr.update_stop_loss(&pos.symbol, pos.take_profits[0]); // Move SL to TP1
-                self.notify(&format!(
-                    "[{}] TP2 hit: {} @ ${:.2}",
-                    if self.config.audit_mode { "AUDIT" } else { "LIVE" },
-                    pos.symbol, pos.take_profits[1]
-                )).await;
-            }
+                // TP1 hit
+                if !pos.tp1_hit && !pos.take_profits.is_empty() && current_price >= pos.take_profits[0] {
+                    mgr.get_position_mut(&pos.symbol).map(|p| p.tp1_hit = true);
+                    mgr.partial_close(&pos.symbol, pos.tp1_close_pct, pos.take_profits[0], "tp1");
+                    mgr.update_stop_loss(&pos.symbol, pos.entry_price); // Move SL to breakeven
+                    notifications.push(format!("[{}] TP1 hit: {} @ ${:.2}, SL → breakeven", mode, pos.symbol, pos.take_profits[0]));
+                }
 
-            // TP3 hit — start trailing runner instead of full close
-            if !pos.tp3_hit && pos.take_profits.len() >= 3 && current_price >= pos.take_profits[2] {
-                mgr.get_position_mut(&pos.symbol).map(|p| p.tp3_hit = true);
-                // Move SL to TP3 (breakeven for the runner) — don't close.
-                // The remaining position trails upward, capturing TPs 4-8.
-                mgr.update_stop_loss(&pos.symbol, pos.take_profits[2]);
-                self.notify(&format!(
-                    "[{}] TP3 hit: {} @ ${:.2}, SL → TP3 (trailing runner for TPs 4+)",
-                    if self.config.audit_mode { "AUDIT" } else { "LIVE" },
-                    pos.symbol, pos.take_profits[2]
-                )).await;
-            }
+                // TP2 hit
+                if !pos.tp2_hit && pos.take_profits.len() >= 2 && current_price >= pos.take_profits[1] {
+                    mgr.get_position_mut(&pos.symbol).map(|p| p.tp2_hit = true);
+                    mgr.partial_close(&pos.symbol, pos.tp2_close_pct, pos.take_profits[1], "tp2");
+                    mgr.update_stop_loss(&pos.symbol, pos.take_profits[0]); // Move SL to TP1
+                    notifications.push(format!("[{}] TP2 hit: {} @ ${:.2}", mode, pos.symbol, pos.take_profits[1]));
+                }
 
-            // Trailing runner after TP3: ratchet SL upward toward remaining TPs
-            if pos.tp3_hit && pos.take_profits.len() > 3 {
-                // Find the next un-hit TP level above current price
-                let next_tp_idx = (3..pos.take_profits.len())
-                    .find(|&i| pos.take_profits[i] > pos.stop_loss)
-                    .unwrap_or(pos.take_profits.len() - 1);
-                let next_tp = pos.take_profits[next_tp_idx];
-                // Trail: when price reaches the next TP, ratchet SL up to halfway
-                if current_price >= next_tp && next_tp > pos.stop_loss {
-                    let new_sl = (next_tp + pos.stop_loss) / 2.0;
-                    mgr.update_stop_loss(&pos.symbol, new_sl);
-                    self.notify(&format!(
-                        "[{}] Trail ratchet: {} SL → ${:.2} (approaching TP{})",
-                        if self.config.audit_mode { "AUDIT" } else { "LIVE" },
-                        pos.symbol, new_sl, next_tp_idx + 1
-                    )).await;
+                // TP3 hit — start trailing runner instead of full close
+                if !pos.tp3_hit && pos.take_profits.len() >= 3 && current_price >= pos.take_profits[2] {
+                    mgr.get_position_mut(&pos.symbol).map(|p| p.tp3_hit = true);
+                    // Move SL to TP3 (breakeven for the runner) — don't close.
+                    // The remaining position trails upward, capturing TPs 4-8.
+                    mgr.update_stop_loss(&pos.symbol, pos.take_profits[2]);
+                    notifications.push(format!("[{}] TP3 hit: {} @ ${:.2}, SL → TP3 (trailing runner for TPs 4+)", mode, pos.symbol, pos.take_profits[2]));
+                }
+
+                // Trailing runner after TP3: ratchet SL upward toward remaining TPs
+                if pos.tp3_hit && pos.take_profits.len() > 3 {
+                    // Find the next un-hit TP level above current price
+                    let next_tp_idx = (3..pos.take_profits.len())
+                        .find(|&i| pos.take_profits[i] > pos.stop_loss)
+                        .unwrap_or(pos.take_profits.len() - 1);
+                    let next_tp = pos.take_profits[next_tp_idx];
+                    // Trail: when price reaches the next TP, ratchet SL up to halfway
+                    if current_price >= next_tp && next_tp > pos.stop_loss {
+                        let new_sl = (next_tp + pos.stop_loss) / 2.0;
+                        mgr.update_stop_loss(&pos.symbol, new_sl);
+                        notifications.push(format!("[{}] Trail ratchet: {} SL → ${:.2} (approaching TP{})", mode, pos.symbol, new_sl, next_tp_idx + 1));
+                    }
                 }
             }
+        } // position lock released
+
+        // Side-effects (telegram + journal + unified-journal) run WITHOUT the lock.
+        for msg in &notifications {
+            self.notify(msg).await;
+        }
+        for (pos, price, reason, pnl) in &closes {
+            self.record_close(pos, *price, reason, *pnl).await;
         }
     }
 

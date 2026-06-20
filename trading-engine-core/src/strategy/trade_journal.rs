@@ -4,6 +4,7 @@ use rusqlite::Connection;
 use rusqlite_migration::{M, Migrations};
 use std::path::PathBuf;
 use std::sync::Mutex;
+use std::sync::OnceLock;
 use tracing::{error, info};
 
 /// Unified trade journal — ONE table every engine writes closed trades to, so
@@ -166,6 +167,11 @@ impl UnifiedTradeJournal {
 
 /// One-shot write used by each engine's close path. Opens a transient connection
 /// (fine at close frequency) so engines need no field/init/import — just one call.
+/// Cached journal so connection setup + migrations run exactly once, not on every
+/// log call (which raced under concurrent closes and churned a fresh connection +
+/// migration-check per insert). (#2 of the concurrency audit.)
+static JOURNAL: OnceLock<Option<UnifiedTradeJournal>> = OnceLock::new();
+
 #[allow(clippy::too_many_arguments)]
 pub fn log_unified(
     engine: &str,
@@ -177,7 +183,8 @@ pub fn log_unified(
     exit_reason: Option<&str>,
     duration_mins: Option<i64>,
 ) {
-    if let Ok(j) = UnifiedTradeJournal::new() {
+    let journal = JOURNAL.get_or_init(|| UnifiedTradeJournal::new().ok());
+    if let Some(j) = journal.as_ref() {
         j.log_trade(engine, pair, Some("BUY"), entry_price, exit_price, quantity, pnl, exit_reason, duration_mins);
     }
 }

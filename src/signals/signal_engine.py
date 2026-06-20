@@ -10,6 +10,7 @@ import os
 import time
 import json
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from decimal import Decimal
 from enum import Enum
@@ -23,6 +24,11 @@ from .signal_position import SignalPositionManager, SignalPosition
 from .signal_journal import SignalJournal, SignalTrade
 
 logger = logging.getLogger(__name__)
+
+# Offload decision-state capture (kline fetch + ML compute) so it never blocks the
+# signal tick (position monitoring / message processing). Single worker serializes
+# captures — they share _peak_equity / _kline_cache. (#1 of the concurrency audit.)
+_CAPTURE_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="rl-state-capture")
 
 
 def _fmt_price(value) -> str:
@@ -857,7 +863,9 @@ class SignalEngine:
             is_audit=1 if self._audit_mode else 0,
         ))
         # Persist market + portfolio state at this decision for offline RL.
-        self._capture_decision_state(signal, channel_name, action, ts)
+        # Offloaded to a worker so the kline fetch + ML compute never blocks the
+        # signal tick. (#1 of the concurrency audit.)
+        _CAPTURE_POOL.submit(self._capture_decision_state, signal, channel_name, action, ts)
 
     def _log_position_trade(self, pos: SignalPosition, price: float, reason: str):
         self._journal.log_trade(SignalTrade(
