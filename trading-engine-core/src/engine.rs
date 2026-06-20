@@ -7,6 +7,7 @@ use crate::connector::Connector;
 use crate::connector::binance_ws::{BinanceWs, WsEvent};
 use crate::connector::types::*;
 use crate::risk::RiskManager;
+use crate::capital::CapitalManager;
 use crate::notifications::TelegramBot;
 use crate::strategy::{Strategy, TickContext, MarketRegime};
 use crate::strategy::status_cache::StrategyStatusCache;
@@ -26,6 +27,7 @@ pub struct Engine {
     order_books: HashMap<String, OrderBook>,
     status_cache: StrategyStatusCache,
     regime_cache: RegimeCache,
+    capital: CapitalManager,
     /// client_order_id (owner-tagged) → (symbol, exchange order_id) for orders
     /// this engine has placed, so strategies can cancel their own resting orders
     /// (e.g. swing's resting TP1 / hard stop) via `pending_cancels`.
@@ -41,6 +43,7 @@ impl Engine {
         bar_cache: BarCache,
         status_cache: StrategyStatusCache,
         regime_cache: RegimeCache,
+        capital: CapitalManager,
     ) -> Self {
         let mut engine = Self {
             config,
@@ -53,6 +56,7 @@ impl Engine {
             order_books: HashMap::new(),
             status_cache,
             regime_cache,
+            capital,
             placed_orders: HashMap::new(),
         };
         // Init signal engine after self.config is set
@@ -283,6 +287,14 @@ impl Engine {
     async fn feed_breaker(&mut self) {
         let balances = self.connector.get_balances().await.unwrap_or_default();
         let equity = Self::portfolio_equity_mtm(&balances, &self.order_books);
+        let usdt = balances.get("USDT").copied().unwrap_or(0.0);
+        // Phase A capital accounting: equity + USDT + per-strategy budgets.
+        self.capital.sync_equity(equity, usdt);
+        let mut strategy_capital = std::collections::BTreeMap::new();
+        for s in self.strategies.iter() {
+            strategy_capital.insert(s.name().to_string(), s.current_capital());
+        }
+        self.capital.set_strategy_capital(strategy_capital);
         self.risk.record_equity(equity);
         // Daily reset at UTC midnight.
         let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
