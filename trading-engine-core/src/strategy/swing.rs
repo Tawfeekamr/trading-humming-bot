@@ -365,6 +365,13 @@ impl Strategy for SwingStrategy {
                             let max_qty = alloc / mid_price;
                             if qty > max_qty { qty = max_qty; }
 
+                            // Phase B2: cap to available free capital.
+                            if let Some(cm) = &ctx.capital {
+                                let notional = qty * mid_price;
+                                let granted = cm.request_capital("swing", notional);
+                                if notional > 0.0 { qty *= granted / notional; }
+                            }
+
                             self.entry_stop = mid_price - stop_dist;
                             self.entry_qty = qty;
                             self.entry_tp1 = donchian.mid_band();

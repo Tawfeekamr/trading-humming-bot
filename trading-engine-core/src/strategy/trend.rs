@@ -566,6 +566,15 @@ impl Strategy for TrendStrategy {
             if self.should_activate(current_price) {
                 let stop_loss = self.calculate_stop_loss(current_price);
                 let quantity = self.calculate_quantity(current_price, stop_loss);
+                // Phase B2: cap to available free capital (compute-then-cap).
+                let quantity = match &ctx.capital {
+                    Some(cm) => {
+                        let notional = quantity * current_price;
+                        let granted = cm.request_capital("trend", notional);
+                        if notional > 0.0 { quantity * granted / notional } else { 0.0 }
+                    }
+                    None => quantity,
+                };
                 if quantity > 0.0 {
                     orders.push(OrderRequest {
                         symbol: self.pair.clone(), side: OrderSide::Buy, reduce_only: false,

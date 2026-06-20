@@ -54,6 +54,7 @@ pub struct GridStrategy {
     peak_equity: f64,
     initial_capital: f64,
     current_capital: f64,
+    granted_capital: f64,  // Phase B2: capped by CapitalManager
     // Open inventory accumulated from BUY fills (avg-cost basis). In-memory only:
     // paper balances reset on restart, so inventory must too. Only SELLS realize
     // P&L (against this basis); buys are not losses.
@@ -116,6 +117,7 @@ impl GridStrategy {
             peak_equity: config.capital_usdt,
             initial_capital: config.capital_usdt,
             current_capital: config.capital_usdt,
+            granted_capital: config.capital_usdt,
             inventory_qty: 0.0,
             inventory_cost: 0.0,
             adx: Adx::new(14),
@@ -210,7 +212,7 @@ impl GridStrategy {
         bb_lower: f64,
         bb_upper: f64,
     ) -> GridLayout {
-        let available = self.config.capital_usdt - self.config.min_reserve;
+        let available = self.granted_capital - self.config.min_reserve;
 
         // ATR-based spacing
         let atr_spacing = atr_value * self.config.spacing_multiplier;
@@ -636,6 +638,10 @@ impl Strategy for GridStrategy {
             (bb_lower + bb_upper) / 2.0
         };
 
+        // Phase B2: claim capital for the grid layout from the shared pool.
+        if let Some(cm) = &ctx.capital {
+            self.granted_capital = cm.request_capital("grid", self.config.capital_usdt);
+        }
         let layout = self.calculate_levels(center, atr_estimate, bb_lower, bb_upper);
         self.grid_layout = Some(layout.clone());
 
