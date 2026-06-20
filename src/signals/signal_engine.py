@@ -25,6 +25,20 @@ from .signal_journal import SignalJournal, SignalTrade
 logger = logging.getLogger(__name__)
 
 
+def _fmt_price(value) -> str:
+    """Compact price formatting for Telegram alerts.
+
+    Handles both cheap alts and expensive coins without fixed decimals:
+    436 -> '436', 0.198 -> '0.198', 469.805 -> '469.805'.
+    """
+    if value is None:
+        return "?"
+    try:
+        return f"{float(value):.6g}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
 class SignalEngineState(Enum):
     LISTENING = "LISTENING"
     PAUSED = "PAUSED"
@@ -288,9 +302,19 @@ class SignalEngine:
             return
 
         # Risk checks
-        if not self._risk.can_trade():
-            logger.info("Signal blocked by risk guard")
-            self._notify_dedupe(f"blocked_risk:{signal.pair}", f"🚫 Signal blocked (risk guard): {signal.pair}")
+        reason = self._risk.block_reason()
+        if reason:
+            logger.info(f"Signal blocked by risk guard: {signal.pair} — {reason}")
+            self._notify_dedupe(
+                f"blocked_risk:{signal.pair}",
+                f"🚫 Signal blocked (risk guard): {signal.pair}\n"
+                f"Reason: {reason}\n"
+                f"Entry: {_fmt_price(signal.entry_low)}-{_fmt_price(signal.entry_high)} | "
+                f"SL: {_fmt_price(signal.stop_loss)}\n"
+                f"TPs: {', '.join(_fmt_price(tp) for tp in signal.take_profits)}\n"
+                f"Score: {signal.quality_score}/10 ({signal.confidence.value}) | "
+                f"Channel: {channel_name}",
+            )
             self._log_audit_trade(signal, channel_name, "blocked_risk", 0, "risk_limit")
             return
 

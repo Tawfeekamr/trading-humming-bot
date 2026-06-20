@@ -5,6 +5,7 @@ signal_risk.py — Risk management for signal copy trading.
 import logging
 import time
 from datetime import datetime, timezone
+from typing import Optional
 
 from .signal_parser import ParsedSignal, SignalConfidence
 
@@ -32,14 +33,25 @@ class SignalRiskGuard:
         self._last_reset_date = ""
 
     def can_trade(self) -> bool:
+        """True iff no risk rule blocks a new trade."""
+        return self.block_reason() is None
+
+    def block_reason(self) -> Optional[str]:
+        """Why a new trade is currently blocked, or None if it isn't.
+
+        Single source of truth — can_trade() delegates here, so the reason
+        surfaced in the Telegram block alert always matches the decision. Order
+        mirrors the historical can_trade checks: halt > max-trades > cooldown.
+        """
         self._maybe_reset_daily()
         if self._halted:
-            return False
+            return "halted (daily loss limit hit)"
         if self._trades_today >= self._max_trades_per_day:
-            return False
-        if time.time() - self._last_trade_time < self._cooldown_seconds:
-            return False
-        return True
+            return f"max trades/day reached ({self._trades_today}/{self._max_trades_per_day})"
+        remaining = self._cooldown_seconds - (time.time() - self._last_trade_time)
+        if remaining > 0:
+            return f"cooldown active ({int(remaining)}s left)"
+        return None
 
     def get_budget_for_trade(self, signal: ParsedSignal, total_equity: float) -> float:
         """Calculate position size based on confidence and risk per trade."""
