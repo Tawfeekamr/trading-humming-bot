@@ -30,9 +30,40 @@ def _seed(tmp_path):
     )
     conn.execute("INSERT INTO signal_trades VALUES (1,'2023-11-14T22:13:40+00:00','XLM-USDT','OPEN_LONG',0.198,0,'')")
     conn.execute("INSERT INTO signal_trades VALUES (2,'2023-11-14T23:00:00+00:00','XLM-USDT','CLOSE_TP1',0.21,12.5,'tp1')")
+    # Phase 2 decision-state row, matching the OPEN_LONG trade by timestamp+symbol
+    conn.execute(
+        "CREATE TABLE signal_decision_states (id INTEGER PRIMARY KEY, timestamp TEXT, "
+        "symbol TEXT, decision TEXT, equity REAL, open_positions INTEGER, open_notional REAL, "
+        "drawdown_pct REAL, pair_features TEXT, btc_features TEXT, btc_regime TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO signal_decision_states (timestamp, symbol, decision, equity, "
+        "open_positions, open_notional, drawdown_pct, pair_features, btc_features, btc_regime) "
+        "VALUES ('2023-11-14T22:13:40+00:00','XLM-USDT','OPEN_LONG',12345.0,0,0.0,0.0,"
+        "'[0.1]','[0.2]','RANGING')"
+    )
     conn.commit()
     conn.close()
     return data
+
+
+def test_export_writes_states_and_joins_onto_decisions(tmp_path):
+    data = _seed(tmp_path)
+    out = tmp_path / "out"
+    exp.export(str(data), str(out))
+
+    # standalone states CSV
+    state_rows = list(csv.DictReader(open(out / "signal_states_export.csv")))
+    assert len(state_rows) == 1
+    assert state_rows[0]["symbol"] == "XLM-USDT"
+    assert state_rows[0]["equity"] == "12345.0"
+
+    # decisions CSV now carries the joined state vector for the matching row
+    dec_rows = list(csv.DictReader(open(out / "signal_decisions_export.csv")))
+    assert "equity" in dec_rows[0]
+    open_row = next(r for r in dec_rows if r["action"] == "OPEN_LONG")
+    assert open_row["equity"] == "12345.0"
+    assert open_row["btc_regime"] == "RANGING"
 
 
 def test_export_writes_positions_and_decisions_csv(tmp_path):

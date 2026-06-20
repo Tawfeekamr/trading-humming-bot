@@ -49,6 +49,16 @@ def _signal_detail(signal, channel_name: str) -> str:
     )
 
 
+# The 14 regime-classifier features output by src.data.feature_engineering.
+# Captured per decision for offline RL state.
+REGIME_FEATURE_COLS = [
+    "returns", "volatility_ratio", "normalized_atr", "trend_strength", "rsi_14",
+    "volume_ratio", "close_location_value", "adx_14", "macd_histogram",
+    "distance_to_vwap", "obv_roc_14", "choppiness_index",
+    "fractal_dimension_index", "aroon_oscillator",
+]
+
+
 class SignalEngineState(Enum):
     LISTENING = "LISTENING"
     PAUSED = "PAUSED"
@@ -82,6 +92,11 @@ class SignalEngine:
         self._seen_signal_ids_path = "data/seen_signal_ids.json"
         self._seen_signal_ids_max = 2000
         self._load_seen_signal_ids()
+        # Phase 2: decision-state capture for offline RL (state at each decision).
+        self._peak_equity = 0.0
+        self._current_connector = None
+        self._kline_cache: dict = {}          # pair -> (fetched_at, klines)
+        self._kline_cache_ttl = 60.0
         self._state = SignalEngineState.LISTENING
 
         # Sub-components
@@ -255,6 +270,7 @@ class SignalEngine:
         """Full pipeline: parse → validate → execute."""
         text = msg["text"]
         channel_name = msg.get("channel_name", "unknown")
+        self._current_connector = connector  # for decision-state capture
 
         # Skip already-processed signals (survives restarts via the persisted set;
         # edits share the original message_id, so always let them through).
@@ -678,6 +694,87 @@ class SignalEngine:
         logger.info(f"Signal equity fallback: using ${fallback} (connector balance unavailable)")
         return float(fallback)
 
+    def _fetch_klines(self, pair: str, limit: int = 250) -> list:
+        """Fetch OHLCV klines from Gate.io (cached briefly). Returns [] on failure.
+
+        Gate.io spot candlestick row: [ts, volume, close, high, low, amount].
+        `calculate_technical_features` consumes high/low/close/volume only, so
+        `open` is synthesized from close.
+        """
+        now = time.time()
+        cached = self._kline_cache.get(pair)
+        if cached and now - cached[0] < self._kline_cache_ttl:
+            return cached[1]
+        try:
+            gate_pair = pair.replace("-", "_")
+            url = (f"https://api.gateio.ws/api/v4/spot/candlesticks?"
+                   f"currency_pair={gate_pair}&interval=1h&limit={limit}")
+            req = urllib.request.Request(url, headers={"User-Agent": "signal-engine"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode())
+            klines = [{
+                "open": float(d[2]), "high": float(d[3]), "low": float(d[4]),
+                "close": float(d[2]), "volume": float(d[1]),
+            } for d in data]
+            self._kline_cache[pair] = (now, klines)
+            return klines
+        except Exception as e:
+            logger.debug(f"Kline fetch failed for {pair}: {e}")
+            return []
+
+    def _compute_features(self, klines: list) -> Optional[list]:
+        """The 14 regime features for klines, or None if unavailable (no ML deps / too few bars)."""
+        if not klines or len(klines) < 50:
+            return None
+        try:
+            import pandas as pd
+            from src.data.feature_engineering import calculate_technical_features
+            df = calculate_technical_features(pd.DataFrame(klines))
+            if df.empty:
+                return None
+            last = df.iloc[[-1]]
+            return [float(last[c].iloc[0]) for c in REGIME_FEATURE_COLS]
+        except Exception as e:
+            logger.debug(f"Feature computation unavailable: {e}")
+            return None
+
+    def _capture_decision_state(self, signal: ParsedSignal, channel_name: str,
+                                action: str, timestamp: str):
+        """Persist market + portfolio state at a decision point for offline RL.
+
+        Best-effort: portfolio state is always captured; features need klines +
+        the ML deps (present in the signal container). Never raises.
+        """
+        try:
+            equity = self._get_equity(self._current_connector)
+            if equity > self._peak_equity:
+                self._peak_equity = equity
+            drawdown_pct = ((self._peak_equity - equity) / self._peak_equity * 100.0
+                            if self._peak_equity > 0 else 0.0)
+            positions = self._position_mgr.get_open_positions()
+            open_notional = sum((p.entry_price * p.amount) for p in positions)
+            try:
+                btc_regime = str(self._get_btc_regime()[0])
+            except Exception:
+                btc_regime = ""
+            pair_features = self._compute_features(self._fetch_klines(signal.pair or "BTC-USDT"))
+            btc_features = self._compute_features(self._fetch_klines("BTC-USDT"))
+            self._journal.log_decision_state(
+                timestamp=timestamp,
+                symbol=signal.pair or "",
+                channel_name=channel_name,
+                decision=action,
+                equity=equity,
+                open_positions=len(positions),
+                open_notional=open_notional,
+                drawdown_pct=drawdown_pct,
+                pair_features=json.dumps(pair_features) if pair_features is not None else None,
+                btc_features=json.dumps(btc_features) if btc_features is not None else None,
+                btc_regime=btc_regime,
+            )
+        except Exception as e:
+            logger.warning(f"Decision-state capture failed: {e}")
+
     def _execute_close(self, pos: SignalPosition, price: float, reason: str,
                        amount: Optional[float] = None):
         """Place a MARKET sell to close (part of) a signal position.
@@ -740,8 +837,9 @@ class SignalEngine:
 
     def _log_audit_trade(self, signal: ParsedSignal, channel_name: str,
                          action: str, price: float, reason: str):
+        ts = datetime.now(timezone.utc).isoformat()
         self._journal.log_trade(SignalTrade(
-            timestamp=datetime.now(timezone.utc).isoformat(),
+            timestamp=ts,
             symbol=signal.pair or "",
             channel_name=channel_name,
             action=action,
@@ -758,6 +856,8 @@ class SignalEngine:
             parse_reasoning=signal.parse_reasoning,
             is_audit=1 if self._audit_mode else 0,
         ))
+        # Persist market + portfolio state at this decision for offline RL.
+        self._capture_decision_state(signal, channel_name, action, ts)
 
     def _log_position_trade(self, pos: SignalPosition, price: float, reason: str):
         self._journal.log_trade(SignalTrade(

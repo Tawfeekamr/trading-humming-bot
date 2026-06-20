@@ -49,6 +49,12 @@ def _load_positions(data_dir):
 
 
 def _load_decisions(data_dir):
+    """signal_trades rows LEFT JOINed to their decision state (by timestamp+symbol).
+
+    The state columns (equity, open_positions, open_notional, drawdown_pct,
+    pair_features, btc_features, btc_regime) are appended when the Phase 2
+    signal_decision_states table exists; older DBs fall back to trades only.
+    """
     path = os.path.join(data_dir, JOURNAL_PATH)
     rows = []
     if not os.path.exists(path):
@@ -56,7 +62,38 @@ def _load_decisions(data_dir):
     try:
         conn = sqlite3.connect(path)
         conn.row_factory = sqlite3.Row
-        cur = conn.execute("SELECT * FROM signal_trades")
+        has_states = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='signal_decision_states'"
+        ).fetchone() is not None
+        if has_states:
+            cur = conn.execute(
+                "SELECT st.*, sds.equity, sds.open_positions, sds.open_notional, "
+                "sds.drawdown_pct, sds.pair_features, sds.btc_features, sds.btc_regime "
+                "FROM signal_trades st "
+                "LEFT JOIN signal_decision_states sds "
+                "ON st.timestamp = sds.timestamp AND st.symbol = sds.symbol "
+                "ORDER BY st.id"
+            )
+        else:
+            cur = conn.execute("SELECT * FROM signal_trades")
+        for r in cur:
+            rows.append({k: r[k] for k in r.keys()})
+        conn.close()
+    except sqlite3.Error:
+        pass
+    return rows
+
+
+def _load_states(data_dir):
+    """All decision-state rows (the clean RL state table, one per decision)."""
+    path = os.path.join(data_dir, JOURNAL_PATH)
+    rows = []
+    if not os.path.exists(path):
+        return rows
+    try:
+        conn = sqlite3.connect(path)
+        conn.row_factory = sqlite3.Row
+        cur = conn.execute("SELECT * FROM signal_decision_states ORDER BY id")
         for r in cur:
             rows.append({k: r[k] for k in r.keys()})
         conn.close()
@@ -137,15 +174,31 @@ def export(data_dir, out_dir):
         for d in decisions:
             w.writerow({k: d.get(k, "") for k in all_cols})
 
+    # decision-state table (the RL state vectors) as its own CSV
+    states = _load_states(data_dir)
+    state_cols = []
+    for s in states:
+        for k in s.keys():
+            if k not in state_cols:
+                state_cols.append(k)
+    state_path = os.path.join(out_dir, "signal_states_export.csv")
+    with open(state_path, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=state_cols or ["id"])
+        w.writeheader()
+        for s in states:
+            w.writerow({k: s.get(k, "") for k in state_cols})
+
     closed = [p for p in positions.values() if p.get("is_closed")]
     realized = sum((p.get("realized_pnl") or 0) for p in closed)
     wins = sum(1 for p in closed if (p.get("realized_pnl") or 0) > 0)
     print(f"positions: {len(positions)} total / {len(closed)} closed")
     print(f"decisions: {len(decisions)} rows")
+    print(f"decision states: {len(states)} rows")
     if closed:
         print(f"closed realized PnL: ${realized:+.2f} | win rate: {wins}/{len(closed)} ({wins/len(closed)*100:.0f}%)")
     print(f"wrote: {pos_path}")
     print(f"wrote: {dec_path}")
+    print(f"wrote: {state_path}")
     return pos_path, dec_path
 
 

@@ -92,6 +92,24 @@ class SignalJournal:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_st_timestamp ON signal_trades(timestamp)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_st_channel ON signal_trades(channel_name)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_rm_timestamp ON raw_messages(timestamp)")
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS signal_decision_states (
+                    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp      TEXT NOT NULL,
+                    symbol         TEXT,
+                    channel_name   TEXT,
+                    decision       TEXT,
+                    equity         REAL,
+                    open_positions INTEGER,
+                    open_notional  REAL,
+                    drawdown_pct   REAL,
+                    pair_features  TEXT,
+                    btc_features   TEXT,
+                    btc_regime     TEXT
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_sds_ts ON signal_decision_states(timestamp)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_sds_symbol ON signal_decision_states(symbol)")
             # Migration: persist the DeepSeek quality score so /signal_history
             # can show it. CREATE TABLE above only adds these on a brand-new DB;
             # this ALTERs the existing EC2 database idempotently (SQLite has no
@@ -143,6 +161,39 @@ class SignalJournal:
                     )
             except Exception as e:
                 logger.error(f"Signal trade journal write failed: {e}")
+
+    def log_decision_state(self, timestamp: str, symbol: str, channel_name: str,
+                           decision: str, equity: float, open_positions: int,
+                           open_notional: float, drawdown_pct: float,
+                           pair_features, btc_features, btc_regime: str):
+        """Persist market + portfolio state at a signal decision (Phase 2 RL data).
+
+        pair_features / btc_features are JSON strings of the 14 regime features,
+        or None when feature computation was unavailable.
+        """
+        with self._lock:
+            try:
+                with self._conn() as conn:
+                    conn.execute(
+                        "INSERT INTO signal_decision_states "
+                        "(timestamp, symbol, channel_name, decision, equity, open_positions, "
+                        "open_notional, drawdown_pct, pair_features, btc_features, btc_regime) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (timestamp, symbol, channel_name, decision, equity, open_positions,
+                         open_notional, drawdown_pct, pair_features, btc_features, btc_regime),
+                    )
+            except Exception as e:
+                logger.error(f"Decision state journal write failed: {e}")
+
+    def decision_states(self) -> list:
+        """All decision-state rows (for the RL dataset export)."""
+        try:
+            with self._conn() as conn:
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute("SELECT * FROM signal_decision_states").fetchall()
+                return [dict(r) for r in rows]
+        except Exception:
+            return []
 
     def summary(self, days: int = 0) -> dict:
         """Get P&L summary. days=0 means today, -1 means all time."""
