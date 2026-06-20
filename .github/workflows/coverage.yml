@@ -1,0 +1,30 @@
+name: Coverage
+
+# Rust line-coverage via cargo-tarpaulin. Report-only (prints the % to the run
+# log + uploads the report as an artifact). Add `--fail-under N` later once a
+# floor is agreed.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-tarpaulin
+        uses: taiki-e/install-action@cargo-tarpaulin
+
+      - name: Generate coverage
+        working-directory: trading-engine-core
+        run: cargo tarpaulin --workspace --engine llvm --out xml --output-dir coverage -- --test-threads 2
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-coverage-report
+          path: trading-engine-core/coverage/

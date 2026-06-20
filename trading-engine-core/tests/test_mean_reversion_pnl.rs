@@ -32,7 +32,7 @@ fn cleanup(pair: &str) {
     let _ = std::fs::remove_file(format!("data/{}_mean_reversion_state.json", pair.replace("-", "_")));
 }
 
-#[ignore]  // OBSOLETE: MR P&L/exit accounting was refactored; pending rewrite.
+#[ignore]  // CI: state-dependent (on_tick load_state overwrites set_position_for_test); needs rewrite.
 #[tokio::test]
 async fn test_mr_tp_realizes_profit_and_counts_win() {
     let pair = "TESTMRTP-USDT";
@@ -48,7 +48,7 @@ async fn test_mr_tp_realizes_profit_and_counts_win() {
     cleanup(pair);
 }
 
-#[ignore]  // OBSOLETE: MR P&L/exit accounting was refactored; pending rewrite.
+#[ignore]  // CI: state-dependent (on_tick load_state overwrites set_position_for_test); needs rewrite.
 #[tokio::test]
 async fn test_mr_sl_realizes_loss_not_a_win() {
     let pair = "TESTMRSL-USDT";
@@ -64,7 +64,7 @@ async fn test_mr_sl_realizes_loss_not_a_win() {
     cleanup(pair);
 }
 
-#[ignore]  // OBSOLETE: MR P&L/exit accounting was refactored; pending rewrite.
+#[ignore]  // CI: state-dependent (on_tick load_state overwrites set_position_for_test); needs rewrite.
 #[tokio::test]
 async fn test_mr_pnl_persists_across_restart() {
     let pair = "TESTMRSV-USDT";

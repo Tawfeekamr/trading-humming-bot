@@ -30,62 +30,46 @@ fn isolated_state_dir(tag: &str) -> String {
     dir.to_str().unwrap().to_string()
 }
 
-/// OBSOLETE: asserts pre-#13 accounting where a BUY fill reduced current_capital
-/// by cost+fee. Since #13 (realized cost-basis), buys add inventory at cost and do
-/// NOT change current_capital — so this assertion no longer holds. Ignored pending a
-/// rewrite against the current cost-basis model.
-#[ignore]
+/// #13 cost-basis: a BUY adds inventory at cost — it does NOT realize a loss.
 #[tokio::test]
-async fn test_buy_fill_records_negative_pnl() {
+async fn test_buy_fill_accumulates_inventory_at_cost() {
     let config = default_grid_config();
     let mut strategy = GridStrategy::new_with_state_dir("BTCUSDT", &config, 0.01, 0.00001, &isolated_state_dir("buy"), TelegramBot::disabled());
-    let initial_capital = strategy.current_capital();
 
     let fill = Fill {
         fill_id: "fill_1".to_string(),
         order_id: "grid_buy_0".to_string(),
-        client_order_id: None,
+        client_order_id: Some("grid_buy_0".to_string()),
         symbol: "BTCUSDT".to_string(),
         side: OrderSide::Buy,
         price: 49500.0,
         quantity: 0.01,
-        fee: 49500.0 * 0.01 * 0.001, // 0.1% fee = 0.495
+        fee: 49500.0 * 0.01 * 0.001, // 0.495
         timestamp: 0,
     };
 
     let orders = strategy.on_fill(&fill).await.unwrap();
+    assert!(orders.is_empty(), "no replacement orders on fill");
 
-    // on_fill returns empty vec (no replacement orders — known gap)
-    assert!(
-        orders.is_empty(),
-        "Grid on_fill should return empty Vec (no replenishment)"
-    );
-
-    // Capital should decrease: -(price * qty + fee)
-    let expected_pnl = -(49500.0 * 0.01 + fill.fee);
-    let actual_change = strategy.current_capital() - initial_capital;
-    assert!(
-        (actual_change - expected_pnl).abs() < 0.01,
-        "Capital should decrease by cost + fee. Expected change: {}, got: {}",
-        expected_pnl,
-        actual_change
-    );
+    // Buy must NOT realize a loss (cost-basis accounting)...
+    assert!(strategy.realized_pnl().abs() < 1e-9, "buy realizes no PnL, got {}", strategy.realized_pnl());
+    // ...and inventory is held at cost = price*qty + fee.
+    let cost = 49500.0 * 0.01 + fill.fee;
+    assert!((strategy.deployed_capital() - cost).abs() < 1e-6,
+        "deployed_capital should equal inventory cost basis {}, got {}", cost, strategy.deployed_capital());
 }
 
-/// OBSOLETE: asserts pre-#13 gross-revenue accounting on SELL. Since #13, sells
-/// realize NET P&L (sell − avg cost basis − fees), not gross revenue. Ignored
-/// pending a rewrite against the current cost-basis model.
-#[ignore]
+/// #13 cost-basis: a SELL realizes NET PnL = sell_revenue − avg_cost_basis_sold.
 #[tokio::test]
-async fn test_sell_fill_records_positive_pnl() {
+async fn test_sell_fill_realizes_net_round_trip() {
     let config = default_grid_config();
     let mut strategy = GridStrategy::new_with_state_dir("BTCUSDT", &config, 0.01, 0.00001, &isolated_state_dir("sell"), TelegramBot::disabled());
 
-    // First simulate a buy to have inventory
+    // Buy @ 49500 qty 0.01 fee 0.495 → inventory_cost = 495.495
     let buy_fill = Fill {
         fill_id: "fill_buy".to_string(),
         order_id: "grid_buy_0".to_string(),
-        client_order_id: None,
+        client_order_id: Some("grid_buy_0".to_string()),
         symbol: "BTCUSDT".to_string(),
         side: OrderSide::Buy,
         price: 49500.0,
@@ -95,13 +79,11 @@ async fn test_sell_fill_records_positive_pnl() {
     };
     strategy.on_fill(&buy_fill).await.unwrap();
 
-    let capital_after_buy = strategy.current_capital();
-
-    // Now sell at higher price
+    // Sell @ 50500 qty 0.01 fee 0.505 → realized = (505 − 0.505) − 495.495 = 9.0
     let sell_fill = Fill {
         fill_id: "fill_sell".to_string(),
         order_id: "grid_sell_0".to_string(),
-        client_order_id: None,
+        client_order_id: Some("grid_sell_0".to_string()),
         symbol: "BTCUSDT".to_string(),
         side: OrderSide::Sell,
         price: 50500.0,
@@ -109,30 +91,11 @@ async fn test_sell_fill_records_positive_pnl() {
         fee: 0.505,
         timestamp: 0,
     };
+    strategy.on_fill(&sell_fill).await.unwrap();
 
-    let orders = strategy.on_fill(&sell_fill).await.unwrap();
-    assert!(orders.is_empty());
-
-    // Capital should increase: +(price * qty - fee)
-    let expected_pnl = 50500.0 * 0.01 - 0.505;
-    let actual_change = strategy.current_capital() - capital_after_buy;
-    assert!(
-        (actual_change - expected_pnl).abs() < 0.01,
-        "Capital should increase by revenue - fee. Expected change: {}, got: {}",
-        expected_pnl,
-        actual_change
-    );
-
-    // Net P&L across both fills: sell revenue - buy cost - both fees
-    let net_pnl = strategy.current_capital() - config.capital_usdt;
-    // buy cost: 49500*0.01 = 495 + fee 0.495 = -495.495
-    // sell revenue: 50500*0.01 = 505 - fee 0.505 = +504.495
-    // net = +504.495 - 495.495 = +9.0
-    assert!(
-        net_pnl > 0.0,
-        "Net P&L should be positive after buy low + sell high, got {}",
-        net_pnl
-    );
+    assert!((strategy.realized_pnl() - 9.0).abs() < 1e-2,
+        "net round-trip PnL should be ~9.0, got {}", strategy.realized_pnl());
+    assert!(strategy.realized_pnl() > 0.0, "buy-low sell-high is profitable");
 }
 
 
