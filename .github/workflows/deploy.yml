@@ -5,6 +5,12 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Only one deploy run at a time — a new push to main cancels any in-progress
+# deploy, so back-to-back merges produce one run instead of N racing in parallel.
+concurrency:
+  group: deploy-main
+  cancel-in-progress: true
+
 env:
   PYTHON_VERSION: "3.12"
   AWS_REGION: "ap-northeast-1"
