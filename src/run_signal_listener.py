@@ -31,7 +31,10 @@ def _signal_order(side, symbol, amount, price):
             "symbol": symbol.replace("-", ""),
             "side": side,
             "order_type": "Market",
-            "quantity": amount,
+            # signal_engine passes amount as Decimal; json.dumps can't serialize
+            # Decimal, which silently broke every live signal buy (prod bug,
+            # 2026-06-20). Coerce to float at this JSON boundary.
+            "quantity": float(amount),
             "price": None,
             "time_in_force": None,
             "client_order_id": f"sig_{symbol.replace('-','_')}_{int(time.time())}",
