@@ -51,12 +51,12 @@ def _make_engine(price=60.0, audit=False, max_positions=3):
     return engine
 
 
-def _signal(pair="HYPE-USDT"):
+def _signal(pair="HYPE-USDT", entry_low=60.0, entry_high=60.0):
     return ParsedSignal(
         action=SignalAction.OPEN_LONG,
         pair=pair,
-        entry_low=60.0,
-        entry_high=60.0,
+        entry_low=entry_low,
+        entry_high=entry_high,
         stop_loss=55.0,
         take_profits=[65.0, 68.0],
         confidence=SignalConfidence.HIGH,
@@ -102,9 +102,13 @@ class TestEntryGuards:
 
 class TestOrderTypes:
     def test_entry_is_market_order_at_live_price(self):
-        engine = _make_engine(price=61.5)  # market above signal entry zone
+        # Entry zone 60-62; live price 61.5 sits inside it, so the entry-zone
+        # gate lets the trade through and the MARKET fill records the live price
+        # as cost basis (not the stale entry-zone low). The engine must NOT buy
+        # when live price is outside the zone — covered in test_signal_rejection_notify.
+        engine = _make_engine(price=61.5)
 
-        engine._execute_entry(_signal(), "chan", connector=None)
+        engine._execute_entry(_signal(entry_high=62.0), "chan", connector=None)
 
         assert engine._buy_fn.call_count == 1
         kwargs = engine._buy_fn.call_args.kwargs

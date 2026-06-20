@@ -7,6 +7,7 @@ so the operator was never told valid signals were not becoming trades. These tes
 pin that each path fires an alert, and that repeats are de-duplicated by a per-key
 cooldown so a persistent failure can't spam Telegram.
 """
+import os
 import sys
 from pathlib import Path
 
@@ -40,7 +41,7 @@ def _raising_buy(**kwargs):
 
 
 @pytest.fixture
-def engine(monkeypatch):
+def engine(monkeypatch, tmp_path):
     # Avoid Gate.io network + Telethon/DeepSeek clients doing real work on init.
     monkeypatch.setattr(SignalEngine, "_refresh_available_pairs", lambda self: None)
 
@@ -56,16 +57,21 @@ def engine(monkeypatch):
         buy_fn=lambda **kw: "oid-ok",
         get_price_fn=lambda symbol: 0.11,
     )
-    # Deterministic price/equity + no DB/audit side effects in tests.
+    # Deterministic price/equity + no DB/audit/disk side effects in tests.
     eng._get_current_price = lambda conn, pair: 0.11
     eng._get_equity = lambda conn: 10000.0
     eng._log_audit_trade = lambda *a, **k: None
     eng._journal.log_raw_message = lambda *a, **k: None
     eng._risk.get_budget_for_trade = lambda sig, eq: 500.0
+    eng._risk.record_trade_opened = lambda: None
     # Position manager persists to disk; isolate from any pre-existing state so
     # every _execute_entry test reaches the buy/budget code under test.
     eng._position_mgr.has_open_position = lambda pair: False
     eng._position_mgr.get_open_positions = lambda: []
+    eng._position_mgr.open_position = lambda **kw: None
+    # Isolate the message_id dedup set to a temp file per test.
+    eng._seen_signal_ids = set()
+    eng._seen_signal_ids_path = str(tmp_path / "seen_signal_ids.json")
     return eng, sent
 
 
@@ -131,3 +137,88 @@ class TestNotifyDedupe:
         t[0] = 1100.0  # past the 60s cooldown configured in the fixture
         eng._notify_dedupe("k", "second")
         assert len(sent) == 2
+
+
+class TestEntryZoneGate:
+    """The engine must only enter while live price is inside [entry_low, entry_high].
+
+    Background: it used to MARKET-buy at the current price the instant a signal
+    arrived, ignoring the entry zone. A stale signal (price already well above the
+    zone, often above tp1) then got opened above its own first take-profit, so the
+    Rust exit logic 'hit tp1' at a loss and closed the position within seconds.
+    """
+
+    def _engine_with_price_and_buy_tracker(self, engine, price):
+        eng, sent = engine
+        eng._get_current_price = lambda conn, pair: price
+        buys = []
+
+        def tracking_buy(**kw):
+            buys.append(kw)
+            return "oid-ok"
+
+        eng._buy_fn = tracking_buy
+        return eng, sent, buys
+
+    def test_above_zone_skips_and_notifies(self, engine):
+        # valid signal zone is 0.10-0.12; 0.20 is above it (the bug case)
+        eng, sent, buys = self._engine_with_price_and_buy_tracker(engine, 0.20)
+        eng._execute_entry(_valid_signal(), "testchan", None)
+        assert buys == [], "must not chase above the entry zone"
+        assert any("above entry zone" in m for m in sent), sent
+
+    def test_below_zone_skips_and_notifies(self, engine):
+        eng, sent, buys = self._engine_with_price_and_buy_tracker(engine, 0.05)
+        eng._execute_entry(_valid_signal(), "testchan", None)
+        assert buys == [], "must not buy before price reaches the entry zone"
+        assert any("below entry zone" in m for m in sent), sent
+
+    def test_in_zone_buys(self, engine):
+        eng, sent, buys = self._engine_with_price_and_buy_tracker(engine, 0.11)
+        eng._execute_entry(_valid_signal(), "testchan", None)
+        assert len(buys) == 1, "price inside the zone should enter"
+
+
+class TestMessageIdDedup:
+    """A container restart must not re-execute old channel signals.
+
+    Background: the listener persists every arriving message to signal_queue.jsonl
+    but never drains consumed ones, so on restart it replays the whole backlog
+    (a 06-19 signal re-ran on 06-20). Engine-level message_id dedup, persisted to
+    disk, stops that. Channel edits ('[EDIT] …') share the original message_id, so
+    they are exempt — they're usually result updates, not new entries.
+    """
+
+    def test_replay_is_skipped_before_parse(self, engine):
+        eng, sent = engine
+        parse_calls = []
+
+        def fake_parse(text):
+            parse_calls.append(text)
+            return _valid_signal()
+
+        eng._parser.parse = fake_parse
+        eng._validator.validate = lambda sig: (True, "ok")
+        msg = {"text": "sig", "channel_name": "c", "message_id": 4242}
+        eng._process_message(msg, None)
+        eng._process_message(msg, None)  # replay
+        assert len(parse_calls) == 1, "replay must be skipped before the LLM parse"
+
+    def test_edits_are_not_deduped(self, engine):
+        eng, sent = engine
+        parse_calls = []
+        eng._parser.parse = lambda text: (parse_calls.append(text), _valid_signal())[1]
+        eng._validator.validate = lambda sig: (True, "ok")
+        msg = {"text": "[EDIT] sig", "channel_name": "c", "message_id": 4242}
+        eng._process_message(msg, None)
+        eng._process_message(msg, None)  # edit replay — still parses
+        assert len(parse_calls) == 2, "edits must always be processed"
+
+    def test_seen_set_persisted_to_disk(self, engine):
+        eng, sent = engine
+        eng._parser.parse = lambda text: _valid_signal()
+        eng._validator.validate = lambda sig: (True, "ok")
+        msg = {"text": "sig", "channel_name": "c", "message_id": 7777}
+        eng._process_message(msg, None)
+        assert 7777 in eng._seen_signal_ids
+        assert os.path.exists(eng._seen_signal_ids_path), "seen set must persist"
