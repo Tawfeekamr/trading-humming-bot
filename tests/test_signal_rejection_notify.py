@@ -102,15 +102,22 @@ class TestRejectionNotifications:
         eng._execute_entry(sig, "testchan", None)
         assert any("entry" in m.lower() for m in sent), sent
 
-    def test_risk_guard_block_notifies(self, engine, monkeypatch):
+    def test_risk_guard_block_notifies_with_reason_and_detail(self, engine, monkeypatch):
         eng, sent = engine
         eng._parser.parse = lambda text: _valid_signal()
         eng._validator.validate = lambda sig: (True, "ok")
-        # Bypass can_trade() internals (its daily-reset clears _halted) — we only
-        # want to prove the risk-guard *branch* notifies when trading is blocked.
-        monkeypatch.setattr(eng._risk, "can_trade", lambda: False)
+        # The engine reads block_reason() (can_trade delegates to it); stub it so
+        # the risk-guard branch fires with a concrete reason.
+        monkeypatch.setattr(eng._risk, "block_reason", lambda: "cooldown (120s left)")
         eng._process_message({"text": "x", "channel_name": "testchan"}, None)
-        assert any("risk" in m.lower() or "blocked" in m.lower() for m in sent), sent
+        assert sent, "risk-guard block must notify"
+        msg = sent[-1]
+        assert "blocked" in msg.lower() and "risk guard" in msg.lower()
+        assert "cooldown (120s left)" in msg       # the reason
+        assert "0.1" in msg and "0.12" in msg      # entry zone (0.10-0.12)
+        assert "8/10" in msg                       # quality score
+        assert "high" in msg                       # confidence
+        assert "testchan" in msg                   # channel
 
 
 class TestNotifyDedupe:
