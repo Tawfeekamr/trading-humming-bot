@@ -300,25 +300,6 @@ class TelegramCommandHandler:
         )
         return False
 
-    def _compute_signal_unrealized(self) -> float:
-        """Compute unrealized P&L for open signal positions using current prices."""
-        try:
-            sig = getattr(self.strategy, '_signal_engine', None)
-            if not sig:
-                return 0.0
-            positions = sig._position_mgr.get_open_positions()
-            if not positions:
-                return 0.0
-            total = 0.0
-            last_price = getattr(self.strategy, '_last_price', {})
-            for pos in positions:
-                price = last_price.get(pos.symbol, 0)
-                if price > 0 and pos.entry_price > 0:
-                    total += (price - pos.entry_price) * pos.remaining_amount
-            return total
-        except Exception:
-            return 0.0
-
     def _cmd_status(self, update, context):
         """Server health — stdlib only (no psutil/docker dependency)."""
         try:

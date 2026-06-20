@@ -1,0 +1,12 @@
+# Signal-listener-only deps — a subset of requirements.txt.
+# The listener imports only: yaml (pyyaml), dotenv (python-dotenv), psutil,
+# pandas + pandas_ta (Phase-2 feature compute via src.data.feature_engineering),
+# and telethon (channel listener). Everything else in requirements.txt
+# (scikit-learn, python-binance, websockets, aiohttp, apscheduler,
+# python-telegram-bot, ...) is unused by this image.
+pyyaml>=6.0
+python-dotenv==1.1.0
+psutil==7.0.0
+pandas==2.3.3
+pandas_ta==0.4.71b0
+telethon>=1.37.0

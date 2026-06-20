@@ -1,47 +1,23 @@
 # ════════════════════════════════════════════════════════════════════
-# Hybrid Dockerfile — Python bot WITHOUT Hummingbot
-# Talks to the Rust trading engine via HTTP API for all exchange ops
+# Hybrid Dockerfile — Python signal listener WITHOUT Hummingbot and WITHOUT
+# the Rust PyO3 wheel. Talks to the Rust trading engine via HTTP API for all
+# exchange ops.
+#
+# The listener never imports `trading_engine_core`, so the Stage-1 Rust wheel
+# build this image used to carry (~2-3 min of CI per deploy) was pure waste.
+# It also needs only a small subset of requirements.txt (see
+# requirements.signal.txt), not the full ML/Hummingbot dep set.
 # ════════════════════════════════════════════════════════════════════
 
-# Stage 1: Build Rust wheel (for PyO3 indicator bindings)
-FROM python:3.13-slim AS rust-builder
-RUN apt-get update && apt-get install -y --no-install-recommends curl build-essential pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-ENV PATH="/root/.cargo/bin:${PATH}"
-RUN pip install --no-cache-dir maturin
-
-# --- Dependency caching layer ---
-COPY trading-engine-core/Cargo.toml trading-engine-core/Cargo.lock /build/trading-engine-core/
-WORKDIR /build/trading-engine-core
-RUN mkdir src && echo "fn main(){}" > src/main.rs
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/build/target \
-    cargo build --release --features python 2>/dev/null || true
-RUN rm -rf src
-
-# --- Source build layer ---
-COPY trading-engine-core/src/ /build/trading-engine-core/src/
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/build/target \
-    maturin build --release --features python --out /build/wheels 2>&1 || (echo "WHEEL_BUILD_FAILED" && ls -la /build/wheels/ 2>/dev/null || true)
-
-# Stage 2: Python runtime
 FROM python:3.13-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Install Python dependencies
-COPY requirements.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir -r /tmp/requirements.txt && rm /tmp/requirements.txt
-
-# Install trading-engine-core Rust wheel (PyO3 indicator bindings)
-# Wheel is optional — runner handles missing wheel gracefully
-COPY --from=rust-builder /build/wheels/*.whl /tmp/wheels/
-RUN ls -la /tmp/wheels/ && \
-    (pip install --no-cache-dir /tmp/wheels/trading_engine_core*.whl || echo "WARNING: wheel install failed, strategies will be disabled") && \
-    rm -rf /tmp/wheels
+# Install only the deps the signal listener actually imports.
+COPY requirements.signal.txt /tmp/requirements.signal.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.signal.txt && rm /tmp/requirements.signal.txt
 
 # Copy Python source modules
 COPY src/ /app/src/
@@ -49,11 +25,8 @@ COPY src/ /app/src/
 # Copy utility scripts
 COPY scripts/ /app/scripts/
 
-# Ensure data/logs/models dirs exist
-RUN mkdir -p /app/data /app/logs /app/models /app/config
-
-# Copy pre-trained ML model
-COPY models/ /app/models/
+# Ensure data/logs/config dirs exist (mounted as volumes at runtime)
+RUN mkdir -p /app/data /app/logs /app/config
 
 # Default: use Rust engine for execution
 ENV EXECUTION_MODE=rust
