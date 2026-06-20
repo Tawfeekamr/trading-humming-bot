@@ -58,8 +58,8 @@ fn make_tick(price: f64, bars: &mut Vec<Bar>) -> TickContext {
         regime: None,
         regime_confidence: 0.0,
         timestamp: 0,
+        capital: None,
     }
-    capital: None,
 }
 
 fn make_fill(side: OrderSide, price: f64, quantity: f64) -> Fill {
