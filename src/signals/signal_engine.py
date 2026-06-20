@@ -52,6 +52,12 @@ class SignalEngine:
         # every incoming signal. Trade events (entry/TP/close) bypass this.
         self._notify_cooldowns: dict[str, float] = {}
         self._notify_cooldown_seconds = float(config.get("notify_cooldown_seconds", 1800))
+        # Persisted message_id dedup: a restart must not re-execute old channel
+        # signals (the listener's queue file replays consumed messages on restart).
+        self._seen_signal_ids: set[int] = set()
+        self._seen_signal_ids_path = "data/seen_signal_ids.json"
+        self._seen_signal_ids_max = 2000
+        self._load_seen_signal_ids()
         self._state = SignalEngineState.LISTENING
 
         # Sub-components
@@ -226,6 +232,16 @@ class SignalEngine:
         text = msg["text"]
         channel_name = msg.get("channel_name", "unknown")
 
+        # Skip already-processed signals (survives restarts via the persisted set;
+        # edits share the original message_id, so always let them through).
+        msg_id = msg.get("message_id", 0)
+        if msg_id and not text.startswith("[EDIT]"):
+            if msg_id in self._seen_signal_ids:
+                logger.debug(f"Skipping already-processed signal (msg {msg_id})")
+                return
+            self._seen_signal_ids.add(msg_id)
+            self._save_seen_signal_ids()
+
         # Parse with GLM
         signal = self._parser.parse(text)
         if signal.action == SignalAction.NOT_A_SIGNAL:
@@ -354,11 +370,35 @@ class SignalEngine:
             self._notify_dedupe("skipped_max_positions", f"🚫 Signal skipped (max positions reached): {signal.pair}")
             return
 
-        # MARKET entry fills at the current price; size + record cost basis from it
+        # Entry-zone gate: only enter while live price is inside the signal's
+        # [entry_low, entry_high] zone. Buying above the zone (a stale signal can
+        # already be above tp1) means Rust's TP logic instantly "hits" tp1 at a
+        # loss and closes the position on arrival.
+        entry_low = signal.entry_low or signal.entry_high or entry
+        entry_high = signal.entry_high or signal.entry_low or entry
         current_price = self._get_current_price(connector, signal.pair)
-        fill_price = current_price if current_price > 0 else entry
+        if current_price <= 0:
+            current_price = entry_high  # price feed unavailable — assume zone top
+        if current_price > entry_high:
+            logger.info(f"Signal skipped — above entry zone: {signal.pair} "
+                        f"zone={entry_low}-{entry_high} now={current_price}")
+            self._notify_dedupe(f"above_zone:{signal.pair}",
+                                f"🚫 Signal skipped (above entry zone): {signal.pair} "
+                                f"— zone ${entry_low}-{entry_high}, now ${current_price}")
+            self._log_audit_trade(signal, channel_name, "skipped_above_zone", current_price, "above_entry_zone")
+            return
+        if current_price < entry_low:
+            logger.info(f"Signal skipped — below entry zone: {signal.pair} "
+                        f"zone={entry_low}-{entry_high} now={current_price}")
+            self._notify_dedupe(f"below_zone:{signal.pair}",
+                                f"🚫 Signal skipped (below entry zone): {signal.pair} "
+                                f"— zone ${entry_low}-{entry_high}, now ${current_price}")
+            self._log_audit_trade(signal, channel_name, "skipped_below_zone", current_price, "below_entry_zone")
+            return
+
+        fill_price = current_price
         equity = self._get_equity(connector)
-        logger.info(f"Signal execution: pair={signal.pair} entry_zone={entry} "
+        logger.info(f"Signal execution: pair={signal.pair} entry_zone={entry_low}-{entry_high} "
                      f"fill_price={fill_price} equity={equity}")
 
         # Calculate position size from risk guard
@@ -733,3 +773,22 @@ class SignalEngine:
             return
         self._notify_cooldowns[key] = now
         self._notify(message)
+
+    def _load_seen_signal_ids(self):
+        """Load persisted seen message_ids so restarts skip already-traded signals."""
+        try:
+            with open(self._seen_signal_ids_path) as f:
+                ids = json.load(f)
+            self._seen_signal_ids = {int(i) for i in ids if isinstance(i, (int, float))}
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            self._seen_signal_ids = set()
+
+    def _save_seen_signal_ids(self):
+        """Persist the seen set (bounded) so dedup survives restarts."""
+        try:
+            if len(self._seen_signal_ids) > self._seen_signal_ids_max:
+                self._seen_signal_ids = set(list(self._seen_signal_ids)[-self._seen_signal_ids_max:])
+            with open(self._seen_signal_ids_path, "w") as f:
+                json.dump(sorted(self._seen_signal_ids), f)
+        except OSError as e:
+            logger.warning(f"Could not persist seen signal ids: {e}")
