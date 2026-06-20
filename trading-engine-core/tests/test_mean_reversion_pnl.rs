@@ -25,6 +25,7 @@ fn tick(price: f64) -> TickContext {
         regime_confidence: 0.0,
         timestamp: 1000,
     }
+    capital: None,
 }
 
 fn cleanup(pair: &str) {

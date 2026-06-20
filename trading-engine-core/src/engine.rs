@@ -195,6 +195,7 @@ impl Engine {
     }
 
     async fn tick_strategies(&mut self) -> Result<()> {
+        self.capital.reset_tick_grants(); // fresh per-tick allocation budget
         let mut all_orders = Vec::new();
         let mut all_cancels: Vec<(usize, String)> = Vec::new();
         for (i, strategy) in self.strategies.iter_mut().enumerate() {
@@ -227,6 +228,7 @@ impl Engine {
                 regime,
                 regime_confidence,
                 timestamp: chrono::Utc::now().timestamp_millis(),
+                capital: Some(self.capital.clone()),
             };
 
             match strategy.on_tick(&ctx).await {
@@ -292,13 +294,13 @@ impl Engine {
         let balances = self.connector.get_balances().await.unwrap_or_default();
         let equity = Self::portfolio_equity_mtm(&balances, &self.order_books);
         let usdt = balances.get("USDT").copied().unwrap_or(0.0);
-        // Phase A capital accounting: equity + USDT + per-strategy budgets.
+        // Capital accounting: equity + USDT + real per-strategy deployed capital.
         self.capital.sync_equity(equity, usdt);
-        let mut strategy_capital = std::collections::BTreeMap::new();
+        let mut deployed = std::collections::BTreeMap::new();
         for s in self.strategies.iter() {
-            strategy_capital.insert(s.name().to_string(), s.current_capital());
+            *deployed.entry(s.name().to_string()).or_insert(0.0) += s.deployed_capital();
         }
-        self.capital.set_strategy_capital(strategy_capital);
+        self.capital.set_deployed(deployed);
         let was_halted = self.risk.circuit_breaker.is_halted_raw();
         self.risk.record_equity(equity);
         // Daily reset at UTC midnight.
@@ -434,6 +436,7 @@ impl Engine {
                             regime: None, // No regime during warmup replay
                             regime_confidence: 0.0,
                             timestamp: bar.timestamp,
+                            capital: None,
                         };
                         let _ = strategy.on_tick(&ctx).await;
                     }

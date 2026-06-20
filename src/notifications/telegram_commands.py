@@ -1666,7 +1666,7 @@ class TelegramCommandHandler:
             reserve = float(d.get("reserve") or 0)
             free = float(d.get("free_capital") or 0)
             pct = float(d.get("reserve_limit_pct") or 0)
-            sc = d.get("strategy_capital") or {}
+            sc = d.get("deployed_capital") or {}
             lines = ["💰 <b>Capital</b>", "•••"]
             lines.append(f"Total equity: <b>${te:,.2f}</b>")
             lines.append(f"USDT: ${usdt:,.2f} | Locked in positions: ${locked:,.2f}")
@@ -1674,7 +1674,7 @@ class TelegramCommandHandler:
             lines.append(f"<b>Free capital: ${free:,.2f}</b>")
             if sc:
                 lines.append("•••")
-                lines.append("Strategy budgets:")
+                lines.append("Deployed capital:")
                 for name, amt in sc.items():
                     lines.append(f"  {name}: ${float(amt):,.2f}")
             update.message.reply_text("\n".join(lines), parse_mode="HTML")

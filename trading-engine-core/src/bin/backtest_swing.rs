@@ -95,6 +95,7 @@ async fn main() {
             regime: None,
             regime_confidence: 0.0,
             timestamp,
+            capital: None,
         };
 
         if let Ok(orders) = strategy.on_tick(&ctx).await {

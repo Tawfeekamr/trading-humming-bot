@@ -286,6 +286,7 @@ async fn run_cell(
             recent_bars: std::mem::take(&mut win_buf),
             balances: HashMap::new(), open_orders: vec![],
             regime: None, regime_confidence: 0.0, timestamp: ts,
+            capital: None,
         };
         let orders = match strat.on_tick(&ctx).await { Ok(o) => o, Err(_) => { win_buf = ctx.recent_bars; i += 1; continue; } };
         win_buf = ctx.recent_bars;

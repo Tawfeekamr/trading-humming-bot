@@ -47,6 +47,7 @@ fn make_tick(bars: Vec<Bar>) -> TickContext {
         regime_confidence: 0.0,
         timestamp: 0,
     }
+    capital: None,
 }
 
 #[tokio::test]

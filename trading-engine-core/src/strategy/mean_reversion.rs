@@ -327,4 +327,5 @@ impl Strategy for MeanReversionStrategy {
     }
 
     fn realized_pnl(&self) -> f64 { self.realized_pnl }
+    fn deployed_capital(&self) -> f64 { if self.in_position { self.position_qty * self.entry_price } else { 0.0 } }
 }

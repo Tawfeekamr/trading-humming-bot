@@ -63,6 +63,7 @@ fn make_ctx(bars: Vec<Bar>) -> TickContext {
         regime_confidence: 0.0,
         timestamp: 1640995200000,
     }
+    capital: None,
 }
 
 #[tokio::test]

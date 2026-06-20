@@ -376,6 +376,7 @@ impl Strategy for TrendStrategy {
     fn trading_pair(&self) -> &str { &self.pair }
 
     fn realized_pnl(&self) -> f64 { self.realized_pnl }
+    fn deployed_capital(&self) -> f64 { self.position.as_ref().map_or(0.0, |p| p.remaining_qty * p.entry_price) }
 
     async fn on_tick(&mut self, ctx: &TickContext) -> Result<Vec<OrderRequest>> {
         let mut orders = Vec::new();
