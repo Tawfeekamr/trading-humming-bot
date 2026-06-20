@@ -1,4 +1,5 @@
 use trading_engine_core::strategy::trend::{TrendStrategy, TrendPosition};
+use trading_engine_core::strategy::Strategy;
 use trading_engine_core::config::TrendConfig;
 use trading_engine_core::models::bar::Bar;
 
@@ -87,4 +88,13 @@ fn test_realized_pnl_accessor_default_zero() {
     let strategy = TrendStrategy::new("FRESHPAIR-USDT", &config, telegram);
     use trading_engine_core::strategy::Strategy;
     assert_eq!(strategy.realized_pnl(), 0.0, "fresh strategy has zero realized PnL");
+}
+
+
+#[test]
+fn test_deployed_capital_zero_when_flat() {
+    let config = default_trend_config();
+    let strategy = TrendStrategy::new(
+        "BTCUSDT", &config, trading_engine_core::notifications::TelegramBot::new("", ""));
+    assert!(strategy.deployed_capital() < 1e-9, "flat trend has no deployed capital");
 }

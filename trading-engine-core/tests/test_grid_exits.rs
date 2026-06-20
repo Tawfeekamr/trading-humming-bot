@@ -134,3 +134,24 @@ async fn test_sell_fill_records_positive_pnl() {
         net_pnl
     );
 }
+
+
+#[tokio::test]
+async fn test_deployed_capital_tracks_inventory_cost() {
+    let config = default_grid_config();
+    let mut strategy = GridStrategy::new_with_state_dir(
+        "BTCUSDT", &config, 0.01, 0.00001,
+        &isolated_state_dir("deployed"), TelegramBot::disabled(),
+    );
+    assert!(strategy.deployed_capital() < 1e-9, "flat grid has no deployed capital");
+    let fill = Fill {
+        fill_id: "d1".to_string(), order_id: "grid_BTCUSDT_buy_0".to_string(),
+        client_order_id: Some("grid_BTCUSDT_buy_0".to_string()),
+        symbol: "BTCUSDT".to_string(), side: OrderSide::Buy,
+        price: 49500.0, quantity: 0.01, fee: 0.495, timestamp: 0,
+    };
+    strategy.on_fill(&fill).await.unwrap();
+    let expected = 49500.0 * 0.01 + 0.495; // inventory_cost = price*qty + fee
+    assert!((strategy.deployed_capital() - expected).abs() < 1e-6,
+        "deployed_capital should equal inventory cost basis after a buy");
+}
