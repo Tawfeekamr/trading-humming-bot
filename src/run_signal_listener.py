@@ -70,6 +70,25 @@ def _get_price(symbol):
     return 0.0
 
 
+def _get_equity():
+    """Get total mark-to-market portfolio equity from the Rust engine.
+
+    Used for signal position sizing. The signal container ticks the engine with
+    no connector, so without this sizing falls back to the static
+    max_capital_usdt regardless of the real account equity. Returns 0 on failure
+    — SignalEngine._get_equity then falls back to max_capital_usdt.
+    """
+    try:
+        import urllib.request, json
+        url = os.environ.get("RUST_ENGINE_URL", "http://localhost:3030") + "/api/v1/capital"
+        resp = urllib.request.urlopen(url, timeout=5)
+        data = json.loads(resp.read())
+        return float(data.get("total_equity", 0))
+    except Exception as e:
+        logger.warning("Equity fetch failed: %s", e)
+        return 0.0
+
+
 def _telegram_send(message: str):
     """Push a signal alert to Telegram. Sync POST, mirrors _signal_order.
 
@@ -157,6 +176,7 @@ async def main():
             buy_fn=lambda symbol, amount, price, order_type="MARKET": _signal_order("BUY", symbol, amount, price),
             sell_fn=lambda symbol, amount, price, order_type="MARKET": _signal_order("SELL", symbol, amount, price),
             get_price_fn=lambda symbol: _get_price(symbol),
+            get_equity_fn=_get_equity,
         )
         engine.start_listener()
         logger.info("Signal Copy Engine started — listening to Telegram channels")

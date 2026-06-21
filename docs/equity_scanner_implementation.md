@@ -1,4 +1,4 @@
-# Equity Market Scanner — Implementation Plan
+so # Equity Market Scanner — Implementation Plan
 
 ## Overview
 
