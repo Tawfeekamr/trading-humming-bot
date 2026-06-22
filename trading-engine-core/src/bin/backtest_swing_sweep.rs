@@ -65,6 +65,7 @@ fn base_config(atr_stop_mult: f64) -> SwingConfig {
         min_rr: 2.0, risk_per_trade_pct: 1.0, adx_range_entry: 22.0, adx_trend_exit: 28.0,
         capital: 10_000.0, max_bars_in_trade: 48,
         enabled_pairs: vec![], step_size: None, tick_size: None,
+        maker_entry: false, entry_timeout_bars: 2,
     }
 }
 

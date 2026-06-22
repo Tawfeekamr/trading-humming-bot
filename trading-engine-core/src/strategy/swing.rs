@@ -23,6 +23,13 @@ pub struct SwingPosition {
     pub midline_scaled_out: bool,
 }
 
+/// A resting LIMIT_MAKER buy the strategy placed as its entry (maker-entry mode).
+/// Lives until it fills (→ on_fill opens the position) or expires (→ cancelled).
+struct PendingMakerEntry {
+    cid: String,
+    placed_ts: i64,
+}
+
 pub struct SwingStrategy {
     pair: String,
     config: SwingConfig,
@@ -45,6 +52,8 @@ pub struct SwingStrategy {
     resting_stop_cid: Option<String>,
     /// client-ids the strategy wants the engine to cancel next cycle.
     cancel_queue: Vec<String>,
+    /// Resting LIMIT_MAKER entry (maker-entry mode only). None in default Market mode.
+    resting_entry: Option<PendingMakerEntry>,
 }
 
 fn parse_tf_ms(tf: &str) -> i64 {
@@ -141,6 +150,7 @@ impl SwingStrategy {
             resting_tp1_cid: None,
             resting_stop_cid: None,
             cancel_queue: Vec::new(),
+            resting_entry: None,
         }
     }
 
@@ -223,6 +233,42 @@ impl SwingStrategy {
         if let Some(c) = self.resting_tp1_cid.take() { self.cancel_queue.push(c); }
         if let Some(c) = self.resting_stop_cid.take() { self.cancel_queue.push(c); }
     }
+
+    /// Build the entry order: a resting LIMIT_MAKER at `ref_price` when
+    /// `maker_entry` is set, else a Market order (today's behavior). The maker
+    /// cid is namespaced (`swing_entry_<ts>`) so on_fill can't confuse it with
+    /// the market entry cid (`entry`).
+    fn build_entry_order(&self, qty: f64, ref_price: f64, ts: i64) -> OrderRequest {
+        let cid = if self.config.maker_entry {
+            format!("swing_entry_{}", ts)
+        } else {
+            "entry".to_string()
+        };
+        OrderRequest {
+            symbol: self.pair.clone(),
+            side: OrderSide::Buy,
+            order_type: if self.config.maker_entry { OrderTypeReq::LimitMaker } else { OrderTypeReq::Market },
+            quantity: qty,
+            price: if self.config.maker_entry { Some(ref_price) } else { None },
+            time_in_force: Some(TimeInForceReq::Gtc),
+            client_order_id: Some(cid),
+            reduce_only: false,
+        }
+    }
+
+    /// Expire a resting maker entry that hasn't filled within
+    /// `entry_timeout_bars` LTF bars. Returns the cid to cancel and clears the
+    /// slot on expiry; leaves the entry intact and returns None otherwise.
+    fn expire_resting_entry(&mut self, now_ts: i64) -> Option<String> {
+        let re = self.resting_entry.take()?;
+        let timeout_ms = self.config.entry_timeout_bars * parse_tf_ms(&self.config.ltf_period);
+        if now_ts - re.placed_ts > timeout_ms {
+            Some(re.cid)
+        } else {
+            self.resting_entry = Some(re);
+            None
+        }
+    }
 }
 
 #[async_trait]
@@ -235,6 +281,16 @@ impl Strategy for SwingStrategy {
 
     async fn on_tick(&mut self, ctx: &TickContext) -> Result<Vec<OrderRequest>> {
         if !self.config.enabled || ctx.recent_bars.len() < 50 {
+            return Ok(vec![]);
+        }
+
+        // Maker-entry lifecycle: cancel a resting buy that didn't fill within the
+        // timeout window; then, if it's still resting, hold (no new entry, no exit
+        // logic — there's no position yet either way).
+        if let Some(cid) = self.expire_resting_entry(ctx.timestamp) {
+            self.cancel_queue.push(cid);
+        }
+        if self.resting_entry.is_some() {
             return Ok(vec![]);
         }
 
@@ -381,18 +437,20 @@ impl Strategy for SwingStrategy {
                             // and flips ETH OOS positive (see PR + swing_bot memory).
                             self.entry_tp1 = mid_price + 1.5 * stop_dist;
 
-                            orders.push(OrderRequest {
-                                symbol: self.pair.clone(),
-                                side: OrderSide::Buy,
-                                order_type: OrderTypeReq::Market,
-                                quantity: qty,
-                                price: None,
-                                time_in_force: Some(TimeInForceReq::Gtc),
-                                client_order_id: Some("entry".to_string()),
-                                reduce_only: false,
-                            });
-                            self.pending_buy = true;
-                            self.pending_buy_ts = ctx.timestamp;
+                            let entry_order = self.build_entry_order(qty, current_close, ctx.timestamp);
+                            if self.config.maker_entry {
+                                // Rest a LIMIT_MAKER buy and track it for cancel-on-
+                                // timeout. NOT pending_buy — that 60s guard is for Market
+                                // fills; a maker entry may legitimately sit multiple bars.
+                                self.resting_entry = Some(PendingMakerEntry {
+                                    cid: entry_order.client_order_id.clone().unwrap_or_default(),
+                                    placed_ts: ctx.timestamp,
+                                });
+                            } else {
+                                self.pending_buy = true;
+                                self.pending_buy_ts = ctx.timestamp;
+                            }
+                            orders.push(entry_order);
                         }
                     }
                 } else if ranging && near_lower_band {
@@ -436,7 +494,9 @@ impl Strategy for SwingStrategy {
         let cid = fill.client_order_id.clone().unwrap_or_default();
         let mut new_orders = Vec::new();
 
-        if fill.side == OrderSide::Buy && self.pending_buy {
+        if fill.side == OrderSide::Buy && (self.pending_buy || self.resting_entry.is_some()) {
+            // Entry filled — via a Market order (pending_buy) or a resting maker
+            // buy (resting_entry). Either way: open the position + place TP1/stop.
             self.position = Some(SwingPosition {
                 side: OrderSide::Buy,
                 entry_price: fill.price,
@@ -449,6 +509,7 @@ impl Strategy for SwingStrategy {
             });
             self.save_position();
             self.pending_buy = false;
+            self.resting_entry = None;
 
             // Resting TP1 (maker) at the midline — 50% rounded to the symbol's
             // LOT_SIZE step (100% if half rounds below it); price → tick filter.
@@ -593,6 +654,7 @@ mod tests {
             risk_per_trade_pct: 1.0, adx_range_entry: 22.0, adx_trend_exit: 28.0,
             capital: 10_000.0, max_bars_in_trade: 48,
             enabled_pairs: vec![], step_size: None, tick_size: None,
+            maker_entry: false, entry_timeout_bars: 2,
         }
     }
 
@@ -704,5 +766,67 @@ mod tests {
         assert!(!swing_entry_ready(true, false, 5, 2), "near-lower-band is required");
         // Core setup but only 1 confirmation → no entry.
         assert!(!swing_entry_ready(true, true, 1, 2), "min 2 confirmations required");
+    }
+
+    fn cfg_maker() -> SwingConfig {
+        let mut c = cfg();
+        c.maker_entry = true;
+        c.entry_timeout_bars = 2;
+        c
+    }
+
+    /// `maker_entry` gates the entry order type: default = Market; maker = a
+    /// post-only LIMIT_MAKER at the reference price with a namespaced cid.
+    #[test]
+    fn entry_order_type_is_gated_by_maker_entry_config() {
+        let mkt = SwingStrategy::new("BTCUSDT", &cfg(), TelegramBot::new("", ""));
+        let o = mkt.build_entry_order(1.0, 50_000.0, 1_000);
+        assert!(matches!(o.order_type, OrderTypeReq::Market), "default = market");
+        assert!(o.price.is_none());
+
+        let mkr = SwingStrategy::new("BTCUSDT", &cfg_maker(), TelegramBot::new("", ""));
+        let o = mkr.build_entry_order(1.0, 50_000.0, 1_000);
+        assert!(matches!(o.order_type, OrderTypeReq::LimitMaker), "maker_entry = post-only limit");
+        assert_eq!(o.price, Some(50_000.0), "rests at the reference price");
+        assert!(!o.reduce_only, "an entry is never reduce_only");
+        assert!(o.client_order_id.as_deref().unwrap_or("").starts_with("swing_entry"),
+            "maker cid is namespaced so on_fill can route it");
+    }
+
+    /// A resting maker entry is left intact within the timeout window and expired
+    /// (cid returned for cancel, slot cleared) just past it.
+    #[test]
+    fn resting_entry_expires_after_timeout_window() {
+        let mut s = SwingStrategy::new("BTCUSDT", &cfg_maker(), TelegramBot::new("", ""));
+        let ltf_ms = parse_tf_ms(&s.config.ltf_period); // cfg_maker ltf = 5m = 300_000
+        let window = s.config.entry_timeout_bars * ltf_ms;
+        s.resting_entry = Some(PendingMakerEntry {
+            cid: "swing_entry_1000".into(), placed_ts: 1_000,
+        });
+        // Within the window → intact.
+        assert!(s.expire_resting_entry(1_000 + window).is_none());
+        assert!(s.resting_entry.is_some(), "still resting within the window");
+        // Just past the window → expired + cleared.
+        assert_eq!(s.expire_resting_entry(1_000 + window + 1).as_deref(), Some("swing_entry_1000"));
+        assert!(s.resting_entry.is_none(), "cleared after expiry");
+    }
+
+    /// A maker-entry Buy fill (resting_entry set, pending_buy NOT set) still opens
+    /// the position, places TP1 + stop, and clears the resting entry.
+    #[tokio::test]
+    async fn maker_entry_fill_opens_position_and_clears_resting_entry() {
+        let mut s = SwingStrategy::new("BTCUSDT", &cfg_maker(), TelegramBot::new("", ""));
+        s.entry_stop = 48_500.0;
+        s.entry_tp1 = 51_500.0;
+        s.entry_qty = 1.0;
+        s.resting_entry = Some(PendingMakerEntry {
+            cid: "swing_entry_1000".into(), placed_ts: 1_000,
+        });
+        assert!(!s.pending_buy, "maker entries don't set pending_buy");
+
+        let orders = s.on_fill(&buy_fill(50_000.0, 1.0, 1_000)).await.unwrap();
+        assert_eq!(orders.len(), 2, "TP1 + hard stop placed");
+        assert!(s.position.is_some(), "position opened");
+        assert!(s.resting_entry.is_none(), "resting entry consumed on fill");
     }
 }

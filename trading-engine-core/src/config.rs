@@ -465,7 +465,20 @@ pub struct SwingConfig {
     pub step_size: Option<f64>,
     #[serde(default)]
     pub tick_size: Option<f64>,
+    /// Entry mode: false (default) = Market entry (today's behavior, sweep "Mode
+    /// A"); true = rest a LIMIT_MAKER buy at the decision price and cancel if
+    /// unfilled after `entry_timeout_bars` (sweep "Mode B"). The retuned sweep's
+    /// only positive OOS cell (+$204, ETH 2.5/B) was maker-entry; live Market
+    /// entry is only ~breakeven OOS. Paper-validatable now; live resting orders
+    /// need the user-data-stream (not yet wired).
+    #[serde(default)]
+    pub maker_entry: bool,
+    /// LTF bars a resting maker entry may sit unfilled before being cancelled.
+    #[serde(default = "default_entry_timeout_bars")]
+    pub entry_timeout_bars: i64,
 }
+
+fn default_entry_timeout_bars() -> i64 { 2 }
 
 fn default_runner_exit() -> RunnerExitMode { RunnerExitMode::BandOrChandelier }
 fn default_htf() -> String { "1h".to_string() }
