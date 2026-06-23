@@ -58,3 +58,30 @@ class TestBlockReason:
         assert "cooldown" in reason.lower()
         assert "s left" in reason
         assert g.can_trade() is False
+
+
+import pytest
+from src.signals.signal_parser import ParsedSignal, SignalAction, SignalConfidence
+from src.signals.signal_risk import SignalRiskGuard, LiquidationBufferError
+
+
+def _sig(entry=100.0, sl=80.0):
+    return ParsedSignal(action=SignalAction.OPEN_LONG, pair="X-USDT",
+        entry_low=entry, entry_high=entry, stop_loss=sl,
+        take_profits=[130.0], confidence=SignalConfidence.HIGH, quality_score=8)
+
+
+def test_leverage_sizing_returns_notional():
+    g = SignalRiskGuard({"capital_pct":100,"max_capital_usdt":1000,"per_trade_risk_pct":1.0,"max_position_pct":100})
+    assert g.get_budget_for_trade(_sig(100.0, 80.0), 1000.0, leverage=3) > 0
+
+
+def test_rejects_when_sl_beyond_liquidation():
+    g = SignalRiskGuard({"capital_pct":100,"max_capital_usdt":1000,"per_trade_risk_pct":1.0,"max_position_pct":100})
+    with pytest.raises(LiquidationBufferError):
+        g.get_budget_for_trade(_sig(100.0, 60.0), 1000.0, leverage=3)  # SL below liq ~67
+
+
+def test_no_leverage_keeps_legacy_behavior():
+    g = SignalRiskGuard({"capital_pct":10,"max_capital_usdt":1000,"per_trade_risk_pct":3.0,"max_position_pct":25})
+    assert g.get_budget_for_trade(_sig(100.0, 80.0), 1000.0) > 0  # no leverage arg

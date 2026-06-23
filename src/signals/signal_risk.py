@@ -7,9 +7,14 @@ import time
 from datetime import datetime, timezone
 from typing import Optional
 
+from .futures_math import sl_triggers_before_liquidation
 from .signal_parser import ParsedSignal, SignalConfidence
 
 logger = logging.getLogger(__name__)
+
+
+class LiquidationBufferError(RuntimeError):
+    """Stop-loss would be hit only after liquidation — refuse the trade."""
 
 
 class SignalRiskGuard:
@@ -53,8 +58,14 @@ class SignalRiskGuard:
             return f"cooldown active ({int(remaining)}s left)"
         return None
 
-    def get_budget_for_trade(self, signal: ParsedSignal, total_equity: float) -> float:
+    def get_budget_for_trade(self, signal: ParsedSignal, total_equity: float, leverage: Optional[float] = None) -> float:
         """Calculate position size based on confidence and risk per trade."""
+        if leverage is not None and signal.stop_loss and signal.entry_high:
+            side = "short" if signal.action and signal.action.value == "OPEN_SHORT" else "long"
+            if not sl_triggers_before_liquidation(side, signal.entry_high, signal.stop_loss, leverage):
+                raise LiquidationBufferError(
+                    f"SL {signal.stop_loss} beyond est. liquidation for {leverage}x {side}")
+
         total_budget = min(self._max_capital, total_equity * self._capital_pct / 100)
         self._signal_budget = total_budget
 
