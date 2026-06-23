@@ -223,3 +223,19 @@ swing:
   adx_range_entry: 22.0
   adx_trend_exit: 28.0
   capital: 15000                # swing's slice = capital.budgets.swing
+
+# ── Signal Copy (Futures mode) ──────────────────────────────────────
+# Activated by SIGNAL_MODE=futures in the signal container. Merged over the
+# spot signal_copy block at boot so the Rust config validator still parses the
+# whole file (serde ignores unknown top-level keys; this is Python-only config).
+signals_futures:
+  enabled: false
+  testnet: true
+  leverage: 3
+  margin_type: isolated
+  allow_shorts: true
+  risk_pct: 1.0
+  max_positions: 2
+  max_capital_usdt: 1000
+  pairs: []
+  enabled_pairs: []

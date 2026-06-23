@@ -169,15 +169,43 @@ async def main():
     else:
         from src.signals.signal_engine import SignalEngine
 
-        engine = SignalEngine(
-            config=signal_cfg,
-            btc_regime_fn=lambda: ("RANGING", 0.0, 0.0),
-            telegram_send_fn=_telegram_send,
-            buy_fn=lambda symbol, amount, price, order_type="MARKET": _signal_order("BUY", symbol, amount, price),
-            sell_fn=lambda symbol, amount, price, order_type="MARKET": _signal_order("SELL", symbol, amount, price),
-            get_price_fn=lambda symbol: _get_price(symbol),
-            get_equity_fn=_get_equity,
-        )
+        mode = os.environ.get("SIGNAL_MODE", "spot")
+        if mode == "futures":
+            # Futures mode: build a BinanceFuturesConnector-backed engine. The
+            # config merges the spot signal_copy block with signals_futures so
+            # futures-only keys (allow_shorts, margin_type, leverage) reach the
+            # engine while the spot keys (TP scaling, risk controls) are kept.
+            from src.signals.binance_futures_connector import BinanceFuturesConnector
+
+            fc = config.get("signals_futures", {})
+            connector = BinanceFuturesConnector(
+                os.environ["BINANCE_FUTURES_KEY"],
+                os.environ["BINANCE_FUTURES_SECRET"],
+                testnet=fc.get("testnet", True),
+                default_leverage=fc.get("leverage", 3),
+            )
+            engine = SignalEngine(
+                config={**signal_cfg, **fc},
+                btc_regime_fn=lambda: ("RANGING", 0.0, 0.0),
+                telegram_send_fn=_telegram_send,
+                buy_fn=lambda symbol, amount, price, order_type="MARKET": _signal_order("BUY", symbol, amount, price),
+                sell_fn=lambda symbol, amount, price, order_type="MARKET": _signal_order("SELL", symbol, amount, price),
+                get_price_fn=connector.get_price,
+                get_equity_fn=_get_equity,
+                futures_mode=True,
+                futures_connector=connector,
+                leverage=fc.get("leverage", 3),
+            )
+        else:
+            engine = SignalEngine(
+                config=signal_cfg,
+                btc_regime_fn=lambda: ("RANGING", 0.0, 0.0),
+                telegram_send_fn=_telegram_send,
+                buy_fn=lambda symbol, amount, price, order_type="MARKET": _signal_order("BUY", symbol, amount, price),
+                sell_fn=lambda symbol, amount, price, order_type="MARKET": _signal_order("SELL", symbol, amount, price),
+                get_price_fn=lambda symbol: _get_price(symbol),
+                get_equity_fn=_get_equity,
+            )
         engine.start_listener()
         logger.info("Signal Copy Engine started — listening to Telegram channels")
 
