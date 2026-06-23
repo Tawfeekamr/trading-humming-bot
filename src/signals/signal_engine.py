@@ -77,7 +77,10 @@ class SignalEngine:
                  buy_fn: Optional[Callable] = None,
                  sell_fn: Optional[Callable] = None,
                  get_price_fn: Optional[Callable] = None,
-                 get_equity_fn: Optional[Callable] = None):
+                 get_equity_fn: Optional[Callable] = None,
+                 futures_mode: bool = False,
+                 futures_connector=None,
+                 leverage: int = 3):
         self._config = config
         self._get_btc_regime = btc_regime_fn
         self._telegram_send = telegram_send_fn
@@ -89,6 +92,10 @@ class SignalEngine:
         # connector-balance branch is dead and sizing falls back to the static
         # max_capital_usdt regardless of the real portfolio equity.
         self._get_equity_fn = get_equity_fn
+        # Futures-mode parallel branch: spot path stays byte-for-byte unchanged.
+        self._futures_mode = futures_mode
+        self._futures_connector = futures_connector
+        self._leverage = leverage
 
         self._enabled = config.get("enabled", False)
         self._audit_mode = config.get("audit_mode", True)
@@ -437,6 +444,8 @@ class SignalEngine:
         exchange position. Entry is MARKET at the live fill price, so a non-fill
         can never create a phantom tracked position.
         """
+        if self._futures_mode:
+            return self._execute_futures_entry(signal, channel_name)
         entry = signal.entry_high or signal.entry_low or 0
         if entry <= 0:
             logger.warning(f"Signal has no valid entry price: {signal.pair}")
@@ -550,8 +559,54 @@ class SignalEngine:
             self._log_audit_trade(signal, channel_name, "buy_failed", fill_price, "no_order_id")
             self._notify_dedupe(f"no_order_id:{signal.pair}", f"🚫 Signal entry failed (no order ID): {signal.pair}\n" + _signal_detail(signal, channel_name))
 
+    def _execute_futures_entry(self, signal, channel_name):
+        """Open a futures long/short via the connector (leverage + ISOLATED margin).
+
+        Mirrors the spot rejection-notify discipline: every abort path (no
+        connector, no entry, liquidation-buffer reject, no budget, open error)
+        notifies Telegram so the operator sees why a valid signal never traded.
+        The risk guard reuses the spot path, but gets the leverage so it can
+        raise LiquidationBufferError when SL would only hit after liquidation.
+        """
+        if not self._futures_connector:
+            self._notify_dedupe("no_futures_conn", "🚫 Futures bot has no connector")
+            return
+        side = "short" if signal.action.value == "OPEN_SHORT" else "long"
+        sym = signal.pair or ""
+        entry = signal.entry_high or signal.entry_low
+        if not entry:
+            self._notify_dedupe(f"no_entry:{sym}", f"🚫 Futures reject (no entry): {sym}\n"
+                                + _signal_detail(signal, channel_name)); return
+        try:
+            usdt_notional = self._risk.get_budget_for_trade(
+                signal, self._get_equity(self._current_connector), leverage=self._leverage)
+        except Exception as e:  # LiquidationBufferError etc.
+            self._notify_dedupe(f"liq_block:{sym}",
+                f"🚫 Futures reject (liquidation buffer): {sym} — {e}\n"
+                + _signal_detail(signal, channel_name))
+            self._log_audit_trade(signal, channel_name, "rejected_liquidation", 0, str(e)); return
+        qty = (usdt_notional / entry) if entry else 0.0
+        if usdt_notional <= 0 or qty <= 0:
+            self._notify_dedupe(f"no_budget:{sym}", f"🚫 Futures skip (no budget): {sym}"); return
+        try:
+            self._futures_connector.set_leverage(sym, self._leverage)
+            self._futures_connector.set_margin_type(sym, "ISOLATED")
+            ack = self._futures_connector.open(sym, side, qty)
+        except Exception as e:
+            self._notify_dedupe(f"futures_open_err:{sym}",
+                f"🚫 Futures open FAILED: {sym} — {e}\n" + _signal_detail(signal, channel_name)); return
+        self._position_mgr.open_position(symbol=sym, entry_price=entry, amount=qty,
+            stop_loss=signal.stop_loss, take_profits=signal.take_profits,
+            signal_confidence=signal.confidence.value, raw_message=signal.raw_message,
+            channel_name=channel_name, side=side)
+        self._risk.record_trade_opened()
+        self._notify(f"[FUTURES {self._leverage}x] Opened {side.upper()} {sym} "
+                     f"~${usdt_notional:.0f} (orderId {ack.get('orderId','?') if isinstance(ack, dict) else '?'})")
+
     def _manage_positions(self, connector):
         """Check all signal positions for SL/TP hits."""
+        if self._futures_mode:
+            return self._manage_futures_positions(connector)
         for pos in self._position_mgr.get_open_positions():
             current_price = self._get_current_price(connector, pos.symbol)
             if current_price <= 0:
@@ -596,6 +651,68 @@ class SignalEngine:
                     self._execute_close(pos, pos.take_profits[2], "tp3")
                 pnl = self._position_mgr.close_position(pos.symbol, pos.take_profits[2], "tp3")
                 self._record_close(pos, pos.take_profits[2], "tp3", pnl)
+
+    def _manage_futures_positions(self, connector):
+        """Direction-aware TP scale + SL→breakeven for futures, closing via the
+        connector's reduce-only close. Long: price>=TP hits, price<=SL stops.
+        Short: price<=TP hits, price>=SL stops.
+
+        qty-capture: close_position/partial_close mutate remaining_amount, so
+        the qty to reduce-only close is read BEFORE the accounting call. Closing
+        with the post-close (~0) remaining_amount would send a zero-qty order.
+        """
+        for pos in self._position_mgr.get_open_positions():
+            price = self._get_current_price(connector, pos.symbol)
+            if price <= 0:
+                continue
+            side = getattr(pos, "side", "long")
+            tps = pos.take_profits
+            if not self._futures_connector:
+                continue
+
+            def close_partial(pct, reason):
+                qty_to_close = pos.remaining_amount * pct
+                _, _ = self._position_mgr.partial_close(pos.symbol, pct, price, reason)
+                if qty_to_close > 0:
+                    try:
+                        self._futures_connector.close(pos.symbol, side, qty_to_close)
+                    except Exception as e:
+                        logger.error(f"Futures reduce-only close failed {pos.symbol}: {e}")
+
+            if side == "long":
+                if not pos.tp1_hit and len(tps) >= 1 and price >= tps[0]:
+                    close_partial(pos.tp1_close_pct, "tp1")
+                    pos.tp1_hit = True; self._position_mgr.update_stop_loss(pos.symbol, pos.entry_price)
+                elif not pos.tp2_hit and len(tps) >= 2 and price >= tps[1]:
+                    close_partial(pos.tp2_close_pct, "tp2"); pos.tp2_hit = True
+                elif not pos.tp3_hit and len(tps) >= 3 and price >= tps[2]:
+                    close_partial(1.0, "tp3"); pos.tp3_hit = True
+                if price <= pos.stop_loss:
+                    qty_to_close = pos.remaining_amount
+                    pnl = self._position_mgr.close_position(pos.symbol, price, "stop_loss")
+                    if qty_to_close > 0:
+                        try:
+                            self._futures_connector.close(pos.symbol, side, qty_to_close)
+                        except Exception as e:
+                            logger.error(f"Futures stop close failed {pos.symbol}: {e}")
+                    self._record_close(pos, price, "stop_loss", pnl)
+            else:  # short — inverted comparisons
+                if not pos.tp1_hit and len(tps) >= 1 and price <= tps[0]:
+                    close_partial(pos.tp1_close_pct, "tp1")
+                    pos.tp1_hit = True; self._position_mgr.update_stop_loss(pos.symbol, pos.entry_price)
+                elif not pos.tp2_hit and len(tps) >= 2 and price <= tps[1]:
+                    close_partial(pos.tp2_close_pct, "tp2"); pos.tp2_hit = True
+                elif not pos.tp3_hit and len(tps) >= 3 and price <= tps[2]:
+                    close_partial(1.0, "tp3"); pos.tp3_hit = True
+                if price >= pos.stop_loss:
+                    qty_to_close = pos.remaining_amount
+                    pnl = self._position_mgr.close_position(pos.symbol, price, "stop_loss")
+                    if qty_to_close > 0:
+                        try:
+                            self._futures_connector.close(pos.symbol, side, qty_to_close)
+                        except Exception as e:
+                            logger.error(f"Futures stop close failed {pos.symbol}: {e}")
+                    self._record_close(pos, price, "stop_loss", pnl)
 
     def _handle_close(self, signal: ParsedSignal, channel_name: str):
         """Handle CLOSE signal from trader."""
