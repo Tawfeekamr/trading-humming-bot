@@ -40,7 +40,62 @@ def test_other_errors_surface():
     conn = BinanceFuturesConnector("key", "secret")
     def fake(req, timeout=None):
         raise urllib.error.HTTPError(req.full_url, 400, "Bad", {},
-            io.BytesIO(b'{"code":-1021,"msg":"timestamp"}'))
+            io.BytesIO(b'{"code":-10221,"msg":"timestamp"}'))
     with patch("urllib.request.urlopen", side_effect=fake):
         with pytest.raises(RuntimeError):
             conn.set_leverage("BTCUSDT", 3)
+
+
+def test_open_long_uses_buy():
+    conn = BinanceFuturesConnector("k", "s")
+    cap = {}
+    def fake(req, timeout=None):
+        cap["url"] = req.full_url
+        return _mock_resp({"orderId": "11"})
+    with patch("urllib.request.urlopen", side_effect=fake):
+        conn.open("BTCUSDT", "long", 0.01)
+    assert "side=BUY" in cap["url"] and "quantity=0.01" in cap["url"]
+
+
+def test_open_short_uses_sell():
+    conn = BinanceFuturesConnector("k", "s")
+    cap = {}
+    def fake(req, timeout=None):
+        cap["url"] = req.full_url
+        return _mock_resp({"orderId": "12"})
+    with patch("urllib.request.urlopen", side_effect=fake):
+        conn.open("ETHUSDT", "short", 1.0)
+    assert "side=SELL" in cap["url"]
+
+
+def test_close_is_reduce_only_opposite():
+    conn = BinanceFuturesConnector("k", "s")
+    cap = {}
+    def fake(req, timeout=None):
+        cap["url"] = req.full_url
+        return _mock_resp({"orderId": "13"})
+    with patch("urllib.request.urlopen", side_effect=fake):
+        conn.close("BTCUSDT", "long", 0.01)
+    assert "side=SELL" in cap["url"] and "reduceOnly=true" in cap["url"]
+
+
+def test_get_position_parses_and_flat_none():
+    conn = BinanceFuturesConnector("k", "s")
+    with patch("urllib.request.urlopen",
+               side_effect=lambda req, timeout=None: _mock_resp([{"symbol":"BTCUSDT",
+               "positionAmt":"0.5","entryPrice":"100","liquidationPrice":"67",
+               "unRealizedProfit":"5","positionSide":"BOTH"}])):
+        pos = conn.get_position("BTCUSDT")
+    assert pos["qty"] == 0.5 and pos["liquidation_price"] == 67.0 and pos["side"] == "long"
+    with patch("urllib.request.urlopen",
+               side_effect=lambda req, timeout=None: _mock_resp([{"symbol":"BTCUSDT",
+               "positionAmt":"0","entryPrice":"0.0","liquidationPrice":"0",
+               "unRealizedProfit":"0","positionSide":"BOTH"}])):
+        assert conn.get_position("BTCUSDT") is None
+
+
+def test_get_price_mark():
+    conn = BinanceFuturesConnector("k", "s")
+    with patch("urllib.request.urlopen",
+               side_effect=lambda req, timeout=None: _mock_resp({"markPrice": "101.5"})):
+        assert conn.get_price("BTCUSDT") == 101.5
