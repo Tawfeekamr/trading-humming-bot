@@ -52,6 +52,11 @@ struct CapitalState {
 #[derive(Clone)]
 pub struct CapitalManager {
     reserve_limit_pct: f64,
+    /// Per-strategy max cumulative deployed capital. A strategy whose deployed +
+    /// this-tick grant reaches its budget gets no more — preventing one strategy
+    /// (e.g. grid accumulating inventory) from monopolizing the shared pool and
+    /// starving the others (which sized to 0). Empty = uncapped (back-compat).
+    budgets: BTreeMap<String, f64>,
     state: Arc<RwLock<CapitalState>>,
 }
 
@@ -59,6 +64,7 @@ impl CapitalManager {
     pub fn new(reserve_limit_pct: f64) -> Self {
         Self {
             reserve_limit_pct,
+            budgets: BTreeMap::new(),
             state: Arc::new(RwLock::new(CapitalState {
                 total_equity: 0.0,
                 usdt_balance: 0.0,
@@ -91,10 +97,19 @@ impl CapitalManager {
         }
     }
 
+    /// Set per-strategy cumulative-deployment budgets (max deployed capital each
+    /// strategy may hold). Builder-style; called once at construction from config.
+    pub fn with_budgets(mut self, budgets: BTreeMap<String, f64>) -> Self {
+        self.budgets = budgets;
+        self
+    }
+
     /// Grant up to `desired` USDT to `name` for entry sizing this tick, capped by
-    /// free capital not already granted this tick. Returns the granted amount
-    /// (0 if nothing free). Mutates the grant map, so two strategies ticking in the
-    /// same cycle can't both spend the same free capital.
+    /// free capital not already granted this tick AND by the strategy's remaining
+    /// budget (cumulative deployed + this-tick grant). Returns the granted amount
+    /// (0 if nothing free or budget exhausted). Mutates the grant map, so two
+    /// strategies ticking in the same cycle can't both spend the same free capital,
+    /// and no single strategy can exceed its budget.
     pub fn request_capital(&self, name: &str, desired: f64) -> f64 {
         if desired <= 0.0 {
             return 0.0;
@@ -104,7 +119,17 @@ impl CapitalManager {
             let free = (s.usdt_balance - reserve).max(0.0);
             let already_granted: f64 = s.tick_grants.values().sum();
             let available = (free - already_granted).max(0.0);
-            let grant = desired.min(available);
+            // Per-strategy budget ceiling: cumulative deployed + already granted
+            // this tick can't exceed the configured budget.
+            let budget_remaining = match self.budgets.get(name) {
+                Some(b) => {
+                    let deployed = s.deployed.get(name).copied().unwrap_or(0.0);
+                    let granted_this_tick = s.tick_grants.get(name).copied().unwrap_or(0.0);
+                    (b - deployed - granted_this_tick).max(0.0)
+                }
+                None => f64::INFINITY, // no budget entry → uncapped (back-compat)
+            };
+            let grant = desired.min(available).min(budget_remaining);
             *s.tick_grants.entry(name.to_string()).or_insert(0.0) += grant;
             grant
         } else {
@@ -213,5 +238,32 @@ mod tests {
         let m = mgr();
         m.sync_equity(10_000.0, 1_000.0); // reserve 2k > USDT 1k → free 0
         assert!((m.request_capital("swing", 500.0) - 0.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn budget_caps_a_strategy_at_its_remaining_budget() {
+        // grid already deployed 950 of a 1000 budget → only 50 more allowed, even
+        // though 8000 is free. This is the fix for grid monopolizing the pool.
+        let mut budgets = BTreeMap::new();
+        budgets.insert("grid".to_string(), 1_000.0);
+        budgets.insert("mean_reversion".to_string(), 500.0);
+        let m = CapitalManager::new(20.0).with_budgets(budgets);
+        m.sync_equity(10_000.0, 10_000.0); // free = 8000
+        let mut deployed = BTreeMap::new();
+        deployed.insert("grid".to_string(), 950.0);
+        m.set_deployed(deployed);
+        assert!((m.request_capital("grid", 200.0) - 50.0).abs() < 1e-6,
+            "grid capped at remaining budget (1000 - 950 = 50), not the 200 desired");
+        // mean_reversion has its own 500 budget, 0 deployed → gets its full 100 ask.
+        assert!((m.request_capital("mean_reversion", 100.0) - 100.0).abs() < 1e-6,
+            "MR is not starved by grid's budget — each strategy has its own slice");
+    }
+
+    #[test]
+    fn strategy_with_no_budget_entry_is_uncapped() {
+        // Back-compat: a strategy absent from the budgets map is uncapped (old behavior).
+        let m = CapitalManager::new(20.0);
+        m.sync_equity(10_000.0, 4_000.0); // free = 2000
+        assert!((m.request_capital("swing", 2_000.0) - 2_000.0).abs() < 1e-6);
     }
 }

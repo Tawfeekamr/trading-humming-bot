@@ -200,13 +200,23 @@ impl Strategy for MeanReversionStrategy {
                 };
 
                 if let Verdict::Trade { size_mult } = classify(&sig, &self.config.classifier) {
-                    // Phase B2: cap base to available free capital.
+                    // Phase B2: cap base to available free capital (bounded cumulatively
+                    // by capital.budgets.mean_reversion). Was hardcoded 100.0, which left
+                    // MR sizing ~0 whenever grid had drained the shared pool.
                     let base = match &ctx.capital {
-                        Some(cm) => cm.request_capital("mean_reversion", 100.0),
-                        None => 100.0,
+                        Some(cm) => cm.request_capital("mean_reversion", self.config.capital),
+                        None => self.config.capital,
                     };
                     let qty = (base * size_mult) / mid;
-                    
+
+                    // If the capital grant rounded to nothing (budget exhausted or
+                    // pool dry), skip — don't open a 0-qty position that books $0
+                    // on every TP/SL. Stays out of position this tick; retries next.
+                    if qty <= 0.0 {
+                        info!("[{}] MR skip: 0 capital granted (base={:.2})", self.pair, base);
+                        return Ok(orders);
+                    }
+
                     self.in_position = true;
                     self.entry_price = mid;
                     self.position_qty = qty;
