@@ -18,6 +18,7 @@ fn default_grid_config() -> GridConfig {
         fill_cooldown_secs: 60,
         ml_trending_block_threshold: 0.75,
         ml_danger_block_threshold: 0.55,
+        max_inventory_pct: 60.0,
     }
 }
 

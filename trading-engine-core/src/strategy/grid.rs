@@ -195,6 +195,13 @@ impl GridStrategy {
     pub fn set_level_cooldown(&mut self, level: String, ts: i64) { self.level_cooldowns.insert(level, ts); }
     pub fn has_level_cooldown(&self, level: &str) -> bool { self.level_cooldowns.contains_key(level) }
 
+    /// True when accumulated inventory notional (qty × price) has reached the
+    /// `max_inventory_pct` cap of granted capital — at that point grid stops
+    /// placing new BUYS (sells still place, to unwind the bag).
+    pub fn buys_capped(&self, price: f64) -> bool {
+        self.inventory_qty * price >= self.granted_capital * (self.config.max_inventory_pct / 100.0)
+    }
+
     /// Test hook: inject cached balances + price so status() can show MTM.
     pub fn set_mtm_snapshot_for_test(&mut self, base: f64, quote: f64, mid: f64) {
         self.last_base_balance = base;
@@ -654,8 +661,13 @@ impl Strategy for GridStrategy {
         let mut orders = Vec::new();
         let cooldown_ms = self.config.fill_cooldown_secs * 1000;
 
-        // Place buy limit orders — skip levels on cooldown
+        // Place buy limit orders — skip levels on cooldown.
+        // Inventory cap: once accumulated inventory (qty × center) reaches
+        // max_inventory_pct of granted capital, place NO new buys (sells still
+        // place below, to unwind). Stops a downtrend from building an oversized bag.
+        let buys_capped = self.buys_capped(center);
         for (i, level) in layout.buy_levels.iter().enumerate() {
+            if buys_capped { break; }
             let level_key = format!("buy_{}", i);
             if let Some(&last_fill) = self.level_cooldowns.get(&level_key) {
                 if ctx.timestamp.saturating_sub(last_fill) < cooldown_ms {
@@ -884,6 +896,7 @@ mod tests {
             fill_cooldown_secs: 60,
             ml_trending_block_threshold: 0.75,
             ml_danger_block_threshold: 0.55,
+            max_inventory_pct: 60.0,
         }
     }
 
@@ -900,6 +913,19 @@ mod tests {
             "BTC-USDT", &test_config(), 0.01, 0.001,
             dir.to_str().unwrap(), TelegramBot::disabled(),
         )
+    }
+
+    #[test]
+    fn buys_capped_when_inventory_notional_reaches_pct_of_granted() {
+        let mut g = make_grid();
+        g.granted_capital = 10_000.0;
+        g.config.max_inventory_pct = 60.0; // cap = 6000 notional
+        g.inventory_qty = 1_000.0;
+        // 1000 @ $6.00 = $6000 → at cap → new buys blocked (sells still place).
+        assert!(g.buys_capped(6.0));
+        // Below cap → buys allowed.
+        g.inventory_qty = 500.0; // $3000 < $6000
+        assert!(!g.buys_capped(6.0));
     }
 
     /// Build a fill with the engine-tagged client_order_id and connector order_id.

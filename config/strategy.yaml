@@ -63,6 +63,7 @@ grid:
   fill_cooldown_secs: 60      # Per-level fill cooldown (prevents churn loop)
   ml_trending_block_threshold: 0.75  # Block grid when ML Trending confidence >= this (was 0.55)
   ml_danger_block_threshold: 0.55    # Block grid when ML Danger confidence >= this
+  max_inventory_pct: 60              # Stop new BUYS when inventory notional >= this % of granted capital
 
 # ── Indicator Settings ────────────────────────────────────────────
 indicators:

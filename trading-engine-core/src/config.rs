@@ -159,6 +159,11 @@ pub struct GridConfig {
     /// Block grid when ML regime=Danger AND confidence >= this threshold.
     #[serde(default = "default_055")]
     pub ml_danger_block_threshold: f64,
+    /// Max inventory notional (qty × price) as a % of granted capital at which
+    /// grid stops placing BUYS — sells still place to unwind. Bounds downtrend
+    /// accumulation so grid can't build an oversized bag even within its budget.
+    #[serde(default = "default_60_pct")]
+    pub max_inventory_pct: f64,
 }
 
 fn default_1_5() -> f64 { 1.5 }
@@ -167,6 +172,7 @@ fn default_55() -> f64 { 55.0 }
 fn default_005() -> f64 { 0.005 }
 fn default_04() -> f64 { 0.04 }
 fn default_60() -> i64 { 60 }
+fn default_60_pct() -> f64 { 60.0 }
 fn default_075() -> f64 { 0.75 }
 fn default_055() -> f64 { 0.55 }
 
