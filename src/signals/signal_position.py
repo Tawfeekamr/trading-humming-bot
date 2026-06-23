@@ -13,6 +13,8 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Optional
 
+from .futures_math import pnl as _side_pnl
+
 logger = logging.getLogger(__name__)
 
 
@@ -37,6 +39,7 @@ class SignalPosition:
     tp1_close_pct: float = 0.33
     tp2_close_pct: float = 0.50
     order_id: str = ""
+    side: str = "long"
 
     @property
     def remaining_amount(self) -> float:
@@ -80,7 +83,7 @@ class SignalPositionManager:
     def open_position(self, symbol: str, entry_price: float, amount: float,
                       stop_loss: float, take_profits: list[float],
                       signal_confidence: str, raw_message: str,
-                      channel_name: str) -> Optional[SignalPosition]:
+                      channel_name: str, side: str = "long") -> Optional[SignalPosition]:
         with self._lock:
             open_count = sum(1 for p in self._positions.values() if not p.is_closed)
             if open_count >= self._max_positions:
@@ -102,6 +105,7 @@ class SignalPositionManager:
                 entry_timestamp=time.time(),
                 tp1_close_pct=self._tp1_close_pct,
                 tp2_close_pct=self._tp2_close_pct,
+                side=side,
             )
             self._positions[symbol] = pos
             self._save_state()
@@ -115,7 +119,7 @@ class SignalPositionManager:
                 return (0.0, 0.0)
 
             close_amount = pos.remaining_amount * close_pct
-            pnl = (price - pos.entry_price) * close_amount
+            pnl = _side_pnl(pos.side, pos.entry_price, price, close_amount)
             pos.amount_closed += close_amount
             pos.realized_pnl += pnl
 
@@ -132,7 +136,7 @@ class SignalPositionManager:
                 return None
 
             remaining = pos.remaining_amount
-            pnl = (price - pos.entry_price) * remaining
+            pnl = _side_pnl(pos.side, pos.entry_price, price, remaining)
             pos.amount_closed = pos.amount
             pos.realized_pnl += pnl
             pos.is_closed = True
