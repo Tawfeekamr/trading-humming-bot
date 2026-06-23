@@ -92,3 +92,39 @@ class TestSignalValidator:
         v.set_available_pairs({"ETHUSDT", "BTCUSDT"})  # DOGE not in set
         valid, _ = v.validate(_valid())
         assert valid  # warns but doesn't reject (exchange may list new pairs)
+
+
+import sys, pathlib
+sys.path.insert(0, str(pathlib.Path(__file__).parent))
+from src.signals.signal_parser import ParsedSignal, SignalAction, SignalConfidence
+from src.signals.signal_validator import SignalValidator
+
+def _short():
+    return ParsedSignal(action=SignalAction.OPEN_SHORT, pair="ETH-USDT",
+        entry_low=3000.0, entry_high=3000.0, stop_loss=3150.0,
+        take_profits=[2900.0, 2800.0], confidence=SignalConfidence.HIGH, quality_score=8)
+
+def _cfg(allow_shorts=False):
+    return {"min_rr_ratio": 1.0, "max_sl_distance_pct": 5.0,
+            "max_entry_zone_pct": 3.0, "min_quality_score": 5,
+            "allow_shorts": allow_shorts}
+
+def test_spot_rejects_short_by_default():
+    valid, reason = SignalValidator(_cfg()).validate(_short())
+    assert valid is False and "short" in reason.lower()
+
+def test_futures_accepts_valid_short_when_allowed():
+    valid, reason = SignalValidator(_cfg(allow_shorts=True)).validate(_short())
+    assert valid is True, reason   # entry 3000, SL 3150, TP 2800 → R:R = 200/150 = 1.33 ≥ 1.0
+
+def test_short_rejected_when_sl_below_entry():
+    sig = _short(); sig.stop_loss = 2900.0  # SL below entry — invalid for a short
+    valid, reason = SignalValidator(_cfg(allow_shorts=True)).validate(sig)
+    assert valid is False and "SL" in reason
+
+def test_long_path_unchanged():
+    sig = ParsedSignal(action=SignalAction.OPEN_LONG, pair="X-USDT", entry_low=100.0,
+        entry_high=100.0, stop_loss=80.0, take_profits=[130.0],
+        confidence=SignalConfidence.HIGH, quality_score=8)
+    valid, _ = SignalValidator(_cfg()).validate(sig)
+    assert valid is True

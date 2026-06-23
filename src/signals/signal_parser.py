@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 class SignalAction(Enum):
     OPEN_LONG = "OPEN_LONG"
+    OPEN_SHORT = "OPEN_SHORT"
     CLOSE = "CLOSE"
     UPDATE_SL = "UPDATE_SL"
     UPDATE_TP = "UPDATE_TP"
@@ -74,7 +75,7 @@ SYSTEM_PROMPT = """You are a trading signal parser and quality scorer. Extract s
 
 RULES:
 1. Only extract ACTIONABLE trading signals. General market commentary, motivation posts, questions, or charts without clear entry/exit are NOT signals.
-2. We trade SPOT only. Ignore any leverage mentions (e.g. "2-5x", "10x") — still extract the signal. Only reject if the direction is explicitly SHORT/SELL as an opening position.
+2. We trade SPOT longs AND futures shorts. If the signal is an explicit SHORT/SELL opening position, extract it with action "OPEN_SHORT" (for a short, SL is ABOVE entry and TPs BELOW). Ignore leverage mentions ("2-5x","10x").
 3. Normalize all pairs to format: "BTC-USDT", "ETH-USDT", etc. Add -USDT suffix if missing.
 4. If the trader gives a price range for entry (e.g., "95-96k"), extract both entry_low and entry_high.
 5. If only one entry price is given, set entry_low = entry_high.
@@ -127,7 +128,7 @@ The goal: capture still-valid trades whose entry zone the price has moved slight
 
 OUTPUT FORMAT (JSON only, no markdown, no code blocks):
 {
-    "action": "OPEN_LONG" | "CLOSE" | "UPDATE_SL" | "UPDATE_TP" | "NOT_A_SIGNAL",
+    "action": "OPEN_LONG" | "OPEN_SHORT" | "CLOSE" | "UPDATE_SL" | "UPDATE_TP" | "NOT_A_SIGNAL",
     "pair": "BTC-USDT" | null,
     "entry_low": 95000.0 | null,
     "entry_high": 96000.0 | null,

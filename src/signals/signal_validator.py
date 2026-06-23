@@ -18,6 +18,7 @@ class SignalValidator:
         self._max_sl_distance_pct = config.get("max_sl_distance_pct", 5.0)
         self._max_entry_zone_pct = config.get("max_entry_zone_pct", 3.0)
         self._min_quality_score = config.get("min_quality_score", 5)
+        self._allow_shorts = config.get("allow_shorts", False)
         self._available_pairs = available_pairs or set()
         self._blacklisted_pairs = set(config.get("blacklisted_pairs", []))
 
@@ -29,7 +30,7 @@ class SignalValidator:
         if signal.action == SignalAction.NOT_A_SIGNAL:
             return False, "Not a trade signal"
 
-        if signal.action != SignalAction.OPEN_LONG:
+        if signal.action not in (SignalAction.OPEN_LONG, SignalAction.OPEN_SHORT):
             return True, ""  # CLOSE/UPDATE signals don't need full validation
 
         # Pair must exist on Gate.io (skip check if pair list hasn't loaded yet)
@@ -60,16 +61,42 @@ class SignalValidator:
         if entry is None or entry <= 0:
             return False, "Invalid entry price"
 
-        # Stop-loss distance check — auto-tighten if slightly over max
-        if signal.stop_loss >= entry:
-            return False, f"SL {signal.stop_loss} >= entry {entry}"
-        sl_distance = (entry - signal.stop_loss) / entry * 100
+        # Direction-aware stop-loss + take-profit validity + reward.
+        is_short = signal.action == SignalAction.OPEN_SHORT
+        if is_short and not self._allow_shorts:
+            return False, "Short signals not enabled (spot)"
+
+        if is_short:
+            if signal.stop_loss <= entry:
+                return False, f"SL {signal.stop_loss} <= entry {entry} (short SL must be above entry)"
+            sl_distance = (signal.stop_loss - entry) / entry * 100
+            # Farthest TP for a short = lowest price (largest reward). Select by
+            # value rather than index so we don't depend on TP sort order.
+            farthest_tp = min(signal.take_profits)
+            tp_label = f"TP{signal.take_profits.index(farthest_tp) + 1}"
+            reward = entry - farthest_tp
+            if reward <= 0:
+                return False, f"{tp_label} {farthest_tp} >= entry {entry} (short TP must be below entry)"
+        else:
+            if signal.stop_loss >= entry:
+                return False, f"SL {signal.stop_loss} >= entry {entry}"
+            sl_distance = (entry - signal.stop_loss) / entry * 100
+            # Farthest TP for a long = highest price (largest reward).
+            farthest_tp = max(signal.take_profits[:3])  # TP1-3 preferred
+            tp_label = f"TP{signal.take_profits.index(farthest_tp) + 1}"
+            reward = farthest_tp - entry
+            if reward <= 0:
+                return False, f"{tp_label} {farthest_tp} <= entry {entry}"
+
+        # Stop-loss distance check — auto-tighten if slightly over max.
+        # Tuned signals keep their original SL — DeepSeek already vetted the
+        # tuned entry's validity and $-risk-per-trade is held constant by
+        # position sizing (larger entry→SL distance → smaller size).
         if sl_distance > self._max_sl_distance_pct and not getattr(signal, "entry_tuned", False):
-            # Auto-tighten SL to max allowed distance instead of rejecting.
-            # Tuned signals keep their original SL — DeepSeek already vetted the
-            # tuned entry's validity and $-risk-per-trade is held constant by
-            # position sizing (larger entry→SL distance → smaller size).
-            new_sl = round(entry * (1 - self._max_sl_distance_pct / 100), 6)
+            if is_short:
+                new_sl = round(entry * (1 + self._max_sl_distance_pct / 100), 6)
+            else:
+                new_sl = round(entry * (1 - self._max_sl_distance_pct / 100), 6)
             logger.warning(
                 f"SL auto-tightened for {signal.pair}: {signal.stop_loss} "
                 f"({sl_distance:.1f}% from entry) → {new_sl} ({self._max_sl_distance_pct}%)"
@@ -77,17 +104,12 @@ class SignalValidator:
             signal.stop_loss = new_sl
         elif sl_distance > self._max_sl_distance_pct:
             logger.info(
-                f"SL kept wide for tuned signal {signal.pair}: {signal.stop_loss} "
-                f"({sl_distance:.1f}% from tuned entry) — original SL preserved"
+                f"SL kept wide for tuned {('short' if is_short else 'long')} {signal.pair}: "
+                f"{signal.stop_loss} ({sl_distance:.1f}% from tuned entry) — original SL preserved"
             )
 
-        # Risk:reward ratio check (using TP3 if available, else TP2, else TP1)
-        risk = entry - signal.stop_loss
-        tp_index = min(2, len(signal.take_profits) - 1)  # TP3 preferred
-        tp_label = f"TP{tp_index + 1}"
-        reward = signal.take_profits[tp_index] - entry
-        if reward <= 0:
-            return False, f"{tp_label} {signal.take_profits[tp_index]} <= entry {entry}"
+        # Risk:reward ratio check against the (possibly tightened) final SL.
+        risk = (signal.stop_loss - entry) if is_short else (entry - signal.stop_loss)
         rr = reward / risk
         if rr < self._min_rr_ratio:
             return False, f"R:R {rr:.2f} (vs {tp_label}) < min {self._min_rr_ratio}"
