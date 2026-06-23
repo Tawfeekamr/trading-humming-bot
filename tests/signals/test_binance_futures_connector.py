@@ -1,5 +1,6 @@
 # tests/signals/test_binance_futures_connector.py
 import sys, pathlib, json, urllib.request, urllib.error, io
+import pytest
 from unittest.mock import patch, MagicMock
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent.parent))
 from src.signals.binance_futures_connector import BinanceFuturesConnector
@@ -36,7 +37,6 @@ def test_set_margin_type_swallows_no_change_error():
 
 
 def test_other_errors_surface():
-    import pytest
     conn = BinanceFuturesConnector("key", "secret")
     def fake(req, timeout=None):
         raise urllib.error.HTTPError(req.full_url, 400, "Bad", {},
@@ -99,3 +99,29 @@ def test_get_price_mark():
     with patch("urllib.request.urlopen",
                side_effect=lambda req, timeout=None: _mock_resp({"markPrice": "101.5"})):
         assert conn.get_price("BTCUSDT") == 101.5
+
+
+def test_transport_urlerror_wrapped_as_runtime():
+    # DNS failure / connection refused / read timeout surfaces as URLError from
+    # urlopen. The contract is "connector errors raise RuntimeError with the
+    # fapi body" so the engine can notify uniformly.
+    conn = BinanceFuturesConnector("k", "s")
+    def fake(req, timeout=None):
+        raise urllib.error.URLError("getaddrinfo failed")
+    with patch("urllib.request.urlopen", side_effect=fake):
+        with pytest.raises(RuntimeError) as exc_info:
+            conn.set_leverage("BTCUSDT", 3)
+    assert "transport error" in str(exc_info.value)
+    assert "fapi" in str(exc_info.value)
+
+
+def test_httperror_still_includes_code_and_body():
+    # Broadening the URLError handler must not regress HTTPError code+body.
+    conn = BinanceFuturesConnector("k", "s")
+    def fake(req, timeout=None):
+        raise urllib.error.HTTPError(req.full_url, 500, "Server Err", {},
+            io.BytesIO(b'{"code":-1000,"msg":"server"}'))
+    with patch("urllib.request.urlopen", side_effect=fake):
+        with pytest.raises(RuntimeError) as exc_info:
+            conn.set_leverage("BTCUSDT", 3)
+    assert "HTTP 500" in str(exc_info.value) and "server" in str(exc_info.value)

@@ -113,3 +113,83 @@ def test_spot_mode_unchanged(monkeypatch, tmp_path):
         confidence=SignalConfidence.HIGH, quality_score=8)
     eng._execute_entry(sig, "chan", None)
     assert len(buys) == 1
+
+
+def _futures_manage_engine(monkeypatch, tmp_path, price, side="long",
+                           tps_long=(3100.0, 3200.0, 3300.0), tps_short=(2900.0, 2800.0, 2700.0),
+                           sl_long=2950.0, sl_short=3050.0,
+                           tp1_hit=False, tp2_hit=False, tp3_hit=False):
+    """Build a futures engine with one open position and instrumented close hooks.
+
+    Records what _record_close was called with via the recorded list so the test
+    can assert TPs are journaled.
+    """
+    eng, conn, sent = _futures_engine(monkeypatch, tmp_path)
+    from src.signals.signal_position import SignalPosition
+    recorded = []
+    if side == "long":
+        tps, sl = tps_long, sl_long
+    else:
+        tps, sl = tps_short, sl_short
+    pos = SignalPosition("ETHUSDT", 3000.0, 2.0, sl, tps,
+                         "high", "x", "chan", entry_timestamp=0, side=side)
+    pos.tp1_hit = tp1_hit; pos.tp2_hit = tp2_hit; pos.tp3_hit = tp3_hit
+    # Keep a stable qty snapshot for assertions regardless of accounting order.
+    eng._position_mgr.get_open_positions = lambda: [pos]
+    close_position_calls = []
+    def fake_close_position(symbol, close_price, reason):
+        close_position_calls.append((symbol, close_price, reason))
+        pos.is_closed = True
+        return 42.0
+    eng._position_mgr.close_position = fake_close_position
+    partial_close_calls = []
+    def fake_partial_close(symbol, pct, close_price, reason):
+        partial_close_calls.append((symbol, pct, close_price, reason))
+        return (pos.remaining_amount * pct, 1.5)
+    eng._position_mgr.partial_close = fake_partial_close
+    eng._position_mgr.update_stop_loss = lambda sym, s: None
+    eng._record_close = lambda p, pr, reason, pnl: recorded.append((reason, pnl))
+    eng._get_current_price = lambda c, s: price
+    eng._manage_positions(eng._futures_connector)
+    return eng, conn, sent, pos, recorded, close_position_calls, partial_close_calls
+
+
+def test_futures_tp3_full_closes_position_and_journals(monkeypatch, tmp_path):
+    # Price reaches TP3 on a long -> full close (not partial), connector.close
+    # called with the pre-close qty, and a journal row recorded.
+    eng, conn, sent, pos, recorded, close_calls, _ = _futures_manage_engine(
+        monkeypatch, tmp_path, price=3300.0, side="long", tp1_hit=True, tp2_hit=True)
+    assert pos.is_closed is True
+    assert any(c[2] == "tp3" for c in close_calls), \
+        f"close_position must be called with tp3; got {close_calls}"
+    assert any(c[0] == "close" and c[2] == "long" and c[3] == 2.0
+               for c in conn.calls), f"connector.close(long, 2.0) expected; got {conn.calls}"
+    assert ("tp3", 42.0) in recorded, f"tp3 must be journaled; got {recorded}"
+
+
+def test_futures_tp3_short_full_closes_position(monkeypatch, tmp_path):
+    # Symmetric: short reaching TP3 also full-closes + journals.
+    eng, conn, sent, pos, recorded, close_calls, _ = _futures_manage_engine(
+        monkeypatch, tmp_path, price=2700.0, side="short", tp1_hit=True, tp2_hit=True)
+    assert pos.is_closed is True
+    assert any(c[2] == "tp3" for c in close_calls), f"got {close_calls}"
+    assert any(c[0] == "close" and c[2] == "short" for c in conn.calls)
+    assert ("tp3", 42.0) in recorded, f"got {recorded}"
+
+
+def test_futures_tp1_partial_close_is_journaled(monkeypatch, tmp_path):
+    # TP1 partial close must call _record_close (journal), like the spot path.
+    eng, conn, sent, pos, recorded, _, partial_calls = _futures_manage_engine(
+        monkeypatch, tmp_path, price=3100.0, side="long")
+    assert pos.is_closed is False  # only partial
+    assert any(c[3] == "tp1" for c in partial_calls), f"got {partial_calls}"
+    assert any(r[0] == "tp1" for r in recorded), \
+        f"tp1 partial close must be journaled; got {recorded}"
+
+
+def test_futures_tp2_partial_close_is_journaled(monkeypatch, tmp_path):
+    # TP2 likewise journaled.
+    eng, conn, sent, pos, recorded, _, partial_calls = _futures_manage_engine(
+        monkeypatch, tmp_path, price=3200.0, side="long", tp1_hit=True)
+    assert any(c[3] == "tp2" for c in partial_calls), f"got {partial_calls}"
+    assert any(r[0] == "tp2" for r in recorded), f"got {recorded}"

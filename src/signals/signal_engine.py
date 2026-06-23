@@ -685,12 +685,25 @@ class SignalEngine:
 
             def close_partial(pct, reason):
                 qty_to_close = pos.remaining_amount * pct
-                _, _ = self._position_mgr.partial_close(pos.symbol, pct, price, reason)
+                _, pnl_slice = self._position_mgr.partial_close(pos.symbol, pct, price, reason)
                 if qty_to_close > 0:
                     try:
                         self._futures_connector.close(pos.symbol, side, qty_to_close)
                     except Exception as e:
                         logger.error(f"Futures reduce-only close failed {pos.symbol}: {e}")
+                self._record_close(pos, price, reason, pnl_slice)
+
+            def close_full(reason):
+                # Full exit (TP3 / SL): capture qty BEFORE close_position mutates
+                # remaining_amount to ~0, else the reduce-only order is zero-qty.
+                qty_to_close = pos.remaining_amount
+                pnl = self._position_mgr.close_position(pos.symbol, price, reason)
+                if qty_to_close > 0:
+                    try:
+                        self._futures_connector.close(pos.symbol, side, qty_to_close)
+                    except Exception as e:
+                        logger.error(f"Futures full close failed {pos.symbol}: {e}")
+                self._record_close(pos, price, reason, pnl)
 
             if side == "long":
                 if not pos.tp1_hit and len(tps) >= 1 and price >= tps[0]:
@@ -699,16 +712,9 @@ class SignalEngine:
                 elif not pos.tp2_hit and len(tps) >= 2 and price >= tps[1]:
                     close_partial(pos.tp2_close_pct, "tp2"); pos.tp2_hit = True
                 elif not pos.tp3_hit and len(tps) >= 3 and price >= tps[2]:
-                    close_partial(1.0, "tp3"); pos.tp3_hit = True
+                    close_full("tp3"); pos.tp3_hit = True
                 if price <= pos.stop_loss:
-                    qty_to_close = pos.remaining_amount
-                    pnl = self._position_mgr.close_position(pos.symbol, price, "stop_loss")
-                    if qty_to_close > 0:
-                        try:
-                            self._futures_connector.close(pos.symbol, side, qty_to_close)
-                        except Exception as e:
-                            logger.error(f"Futures stop close failed {pos.symbol}: {e}")
-                    self._record_close(pos, price, "stop_loss", pnl)
+                    close_full("stop_loss")
             else:  # short — inverted comparisons
                 if not pos.tp1_hit and len(tps) >= 1 and price <= tps[0]:
                     close_partial(pos.tp1_close_pct, "tp1")
@@ -716,16 +722,9 @@ class SignalEngine:
                 elif not pos.tp2_hit and len(tps) >= 2 and price <= tps[1]:
                     close_partial(pos.tp2_close_pct, "tp2"); pos.tp2_hit = True
                 elif not pos.tp3_hit and len(tps) >= 3 and price <= tps[2]:
-                    close_partial(1.0, "tp3"); pos.tp3_hit = True
+                    close_full("tp3"); pos.tp3_hit = True
                 if price >= pos.stop_loss:
-                    qty_to_close = pos.remaining_amount
-                    pnl = self._position_mgr.close_position(pos.symbol, price, "stop_loss")
-                    if qty_to_close > 0:
-                        try:
-                            self._futures_connector.close(pos.symbol, side, qty_to_close)
-                        except Exception as e:
-                            logger.error(f"Futures stop close failed {pos.symbol}: {e}")
-                    self._record_close(pos, price, "stop_loss", pnl)
+                    close_full("stop_loss")
 
     def _handle_close(self, signal: ParsedSignal, channel_name: str):
         """Handle CLOSE signal from trader."""

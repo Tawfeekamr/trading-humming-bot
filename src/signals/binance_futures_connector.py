@@ -42,6 +42,8 @@ class BinanceFuturesConnector:
         except urllib.error.HTTPError as e:
             body = e.read().decode(errors="replace")
             raise RuntimeError(f"fapi {method} {path} HTTP {e.code}: {body}")
+        except urllib.error.URLError as e:
+            raise RuntimeError(f"fapi {method} {path} transport error: {e}")
 
     def _post(self, path, params): return self._request("POST", path, params)
     def _get(self, path, params):  return self._request("GET", path, params)
