@@ -216,6 +216,74 @@ jobs:
             exit 1
           fi
 
+      - name: Write futures keys into listener env (.env.docker)
+        # The one-listener refactor runs both spot + futures engines in the
+        # single signal-listener container. The futures engine reads its
+        # BINANCE_FUTURES_KEY/SECRET from env, which the listener loads via
+        # python-dotenv from .env.docker. Append both keys idempotently (grep
+        # guard) BEFORE the container is recreated, and fail loudly if a repo
+        # secret is unset so we never ship a half-configured futures engine.
+        env:
+          FUTURES_KEY: ${{ secrets.BINANCE_FUTURES_KEY }}
+          FUTURES_SECRET: ${{ secrets.BINANCE_FUTURES_SECRET }}
+        run: |
+          if [ -z "$FUTURES_KEY" ] || [ -z "$FUTURES_SECRET" ]; then
+            echo "::error::BINANCE_FUTURES_KEY/SECRET repo secrets not set"
+            exit 1
+          fi
+
+          # The secret values must flow from the runner to the EC2 host, so the
+          # commands JSON is double-quoted: $FUTURES_KEY/$FUTURES_SECRET expand
+          # HERE (on the runner) into the literals sent to SSM. The literal key
+          # is embedded via single quotes inside the remote command so the
+          # remote shell writes the value verbatim and never re-expands it.
+          COMMAND_ID=$(aws ssm send-command \
+            --document-name "AWS-RunShellScript" \
+            --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
+            --region "${{ env.AWS_REGION }}" \
+            --parameters commands="[\"grep -q '^BINANCE_FUTURES_KEY=' /home/ec2-user/trading-humming-bot/.env.docker || echo 'BINANCE_FUTURES_KEY=$FUTURES_KEY' >> /home/ec2-user/trading-humming-bot/.env.docker\",\"grep -q '^BINANCE_FUTURES_SECRET=' /home/ec2-user/trading-humming-bot/.env.docker || echo 'BINANCE_FUTURES_SECRET=$FUTURES_SECRET' >> /home/ec2-user/trading-humming-bot/.env.docker\",\"grep -c BINANCE /home/ec2-user/trading-humming-bot/.env.docker\"]" \
+            --timeout-seconds 60 \
+            --comment "Append futures keys to .env.docker idempotently" \
+            --query "Command.CommandId" \
+            --output text)
+
+          echo "SSM Command ID: $COMMAND_ID"
+
+          for i in $(seq 1 12); do
+            STATUS=$(aws ssm get-command-invocation \
+              --command-id "$COMMAND_ID" \
+              --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
+              --query "Status" \
+              --output text 2>/dev/null || echo "Pending")
+            echo "Attempt $i: $STATUS"
+            if [ "$STATUS" = "Success" ]; then
+              echo "=== Futures-keys step output ==="
+              aws ssm get-command-invocation \
+                --command-id "$COMMAND_ID" \
+                --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
+                --query "StandardOutputContent" \
+                --output text
+              exit 0
+            elif [ "$STATUS" = "Failed" ]; then
+              echo "=== Futures-keys step FAILED — Output ==="
+              aws ssm get-command-invocation \
+                --command-id "$COMMAND_ID" \
+                --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
+                --query "StandardOutputContent" \
+                --output text
+              echo "=== Futures-keys step FAILED — Stderr ==="
+              aws ssm get-command-invocation \
+                --command-id "$COMMAND_ID" \
+                --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
+                --query "StandardErrorContent" \
+                --output text
+              exit 1
+            fi
+            sleep 5
+          done
+          echo "Futures-keys SSM step timed out"
+          exit 1
+
       - name: Deploy via SSM
         run: |
           COMMAND_ID=$(aws ssm send-command \

@@ -1541,16 +1541,16 @@ class TelegramCommandHandler:
         update.message.reply_text("\n".join(lines), parse_mode="HTML")
 
     # ── Futures Commands ──────────────────────────────────────────────
-    # The futures container runs ONLY the futures engine, so its
-    # data/signal_positions.json (and unified trades.db under data_futures/)
-    # IS the futures state — same reader as signal, FUTURES title.
+    # Both engines now run in the single signal-listener container. The futures
+    # engine writes its state to a namespaced file (data/signal_positions_futures.json)
+    # so it doesn't collide with the spot engine's data/signal_positions.json.
 
     def _cmd_futures_status(self, update, context):
         try:
             logger.info("Telegram /futures_status received")
             pos = {}
             try:
-                with open("data/signal_positions.json") as f:
+                with open("data/signal_positions_futures.json") as f:
                     pos = json.load(f)
             except Exception:
                 pass
@@ -1600,7 +1600,7 @@ class TelegramCommandHandler:
             logger.info("Telegram /futures_pnl received")
             pos = {}
             try:
-                with open("data/signal_positions.json") as f:
+                with open("data/signal_positions_futures.json") as f:
                     pos = json.load(f)
             except Exception:
                 pass

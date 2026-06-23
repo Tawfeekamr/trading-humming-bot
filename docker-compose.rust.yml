@@ -54,26 +54,3 @@ services:
       options:
         max-size: "50m"
         max-file: "3"
-
-  # ── Python Signal Listener for Futures (Binance testnet futures) ──
-  trading-signal-futures:
-    image: ghcr.io/tawfeekamr/trading-signal-listener:latest
-    container_name: trading-signal-futures
-    restart: unless-stopped
-    depends_on:
-      rust-bot:
-        condition: service_healthy
-    env_file: .env.futures
-    environment:
-      - EXECUTION_MODE=rust
-      - SIGNAL_MODE=futures
-      - RUST_ENGINE_URL=http://rust-bot:3030
-    volumes:
-      - ./data_futures:/app/data
-      - ./logs:/app/logs
-      - ./config:/app/config:ro
-    logging:
-      driver: json-file
-      options:
-        max-size: "50m"
-        max-file: "3"
