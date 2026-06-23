@@ -189,6 +189,13 @@ swing:
   volume_avg_period: 20
   atr_period: 14
   atr_stop_mult: 1.5                # middle of the validated ETH plateau (1.0–2.5)
+  maker_entry: false               # false = Market entry (today's behavior). true =
+                                  # rest a LIMIT_MAKER buy at the decision price; if it
+                                  # doesn't fill within entry_timeout_bars, cancel it.
+                                  # The retuned sweep's positive OOS cell was maker-entry;
+                                  # paper-validatable now (live resting orders need the
+                                  # user-data-stream, not yet wired).
+  entry_timeout_bars: 2            # LTF bars a maker entry may rest before cancel.
   min_rr: 2.0
   risk_per_trade_pct: 1.0
   adx_range_entry: 22.0

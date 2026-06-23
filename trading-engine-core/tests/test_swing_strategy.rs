@@ -29,6 +29,8 @@ fn default_config() -> SwingConfig {
         enabled_pairs: vec![],
         step_size: None,
         tick_size: None,
+        maker_entry: false,
+        entry_timeout_bars: 2,
     }
 }
 
