@@ -234,8 +234,8 @@ signals_futures:
   leverage: 3
   margin_type: isolated
   allow_shorts: true
-  risk_pct: 1.0
+  per_trade_risk_pct: 1.0   # % of budget risked per trade (guard reads per_trade_risk_pct, NOT risk_pct)
   max_positions: 2
-  max_capital_usdt: 1000
+  max_capital_usdt: 10000    # 10K testnet budget (matches spot signal engine)
   pairs: []
   enabled_pairs: []
