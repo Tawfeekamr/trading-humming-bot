@@ -229,7 +229,7 @@ swing:
 # spot signal_copy block at boot so the Rust config validator still parses the
 # whole file (serde ignores unknown top-level keys; this is Python-only config).
 signals_futures:
-  enabled: false
+  enabled: true
   testnet: true
   leverage: 3
   margin_type: isolated
