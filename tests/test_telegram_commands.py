@@ -337,6 +337,18 @@ def _seed_trades_db(db_path, rows):
     conn.close()
 
 
+# ── Futures commands ───────────────────────────────────────────────────────
+
+class TestFuturesCommands:
+    def test_futures_status_replies(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        u = _mock_update()
+        _handler(tmp_path)._cmd_futures_status(u, None)
+        assert u.message.reply_text.called
+
+
+# ── Recent Trades display ──────────────────────────────────────────────────
+
 class TestRecentTrades:
     def test_orders_by_timestamp_not_insertion_id(self, tmp_path, monkeypatch):
         """Backfill re-inserts old trades with fresh high IDs every restart, so
