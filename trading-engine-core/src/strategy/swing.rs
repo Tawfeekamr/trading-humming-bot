@@ -351,7 +351,7 @@ impl Strategy for SwingStrategy {
                 if is_reversal { score += 1; }
                 if volume_spike { score += 1; }
 
-                const SWING_MIN_SCORE: usize = 2;
+                const SWING_MIN_SCORE: usize = 3;
                 if swing_entry_ready(ranging, near_lower_band, score, SWING_MIN_SCORE) {
                     let alloc = self.current_capital();
                     let risk_amt = alloc * (self.config.risk_per_trade_pct / 100.0);
@@ -374,7 +374,12 @@ impl Strategy for SwingStrategy {
 
                             self.entry_stop = mid_price - stop_dist;
                             self.entry_qty = qty;
-                            self.entry_tp1 = donchian.mid_band();
+                            // Take-profit at 1.5R, not the Donchian mid-band (~2R).
+                            // Backtest (MFE diagnostic) showed avg favorable excursion
+                            // is only ~1R, so the mid-band TP almost never filled and
+                            // winners reversed into losers. Cuts full-period loss ~80%
+                            // and flips ETH OOS positive (see PR + swing_bot memory).
+                            self.entry_tp1 = mid_price + 1.5 * stop_dist;
 
                             orders.push(OrderRequest {
                                 symbol: self.pair.clone(),
