@@ -19,7 +19,7 @@ from typing import Optional, Callable
 from .channel_listener import ChannelListener
 from .signal_parser import SignalParser, ParsedSignal, SignalAction, SignalConfidence, _extract_candidate_pair
 from .signal_validator import SignalValidator
-from .signal_risk import SignalRiskGuard
+from .signal_risk import SignalRiskGuard, LiquidationBufferError
 from .signal_position import SignalPositionManager, SignalPosition
 from .signal_journal import SignalJournal, SignalTrade
 
@@ -577,10 +577,23 @@ class SignalEngine:
         if not entry:
             self._notify_dedupe(f"no_entry:{sym}", f"🚫 Futures reject (no entry): {sym}\n"
                                 + _signal_detail(signal, channel_name)); return
+        # Pre-flight guards — abort before any leverage/margin/order is placed.
+        # Mirrors the spot path: a rejected signal must never leave an untracked
+        # leveraged exchange position.
+        if self._position_mgr.has_open_position(sym):
+            logger.warning(f"Futures signal skipped — position already open for {sym}")
+            self._notify_dedupe(f"duplicate:{sym}", f"🚫 Futures skip (already open): {sym}")
+            self._log_audit_trade(signal, channel_name, "skipped_duplicate", entry, "duplicate_symbol")
+            return
+        if len(self._position_mgr.get_open_positions()) >= self._position_mgr.max_positions:
+            logger.warning(f"Futures signal skipped — max positions ({self._position_mgr.max_positions}) reached")
+            self._notify_dedupe("max_positions", "🚫 Futures skip (max positions reached)")
+            self._log_audit_trade(signal, channel_name, "skipped_max_positions", entry, "max_positions")
+            return
         try:
             usdt_notional = self._risk.get_budget_for_trade(
                 signal, self._get_equity(self._current_connector), leverage=self._leverage)
-        except Exception as e:  # LiquidationBufferError etc.
+        except LiquidationBufferError as e:
             self._notify_dedupe(f"liq_block:{sym}",
                 f"🚫 Futures reject (liquidation buffer): {sym} — {e}\n"
                 + _signal_detail(signal, channel_name))

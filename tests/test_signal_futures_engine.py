@@ -75,6 +75,23 @@ def test_futures_manage_closes_short_on_tp_via_reduce_only(monkeypatch, tmp_path
     assert any(c[0] == "close" and c[2] == "short" for c in conn.calls)
 
 
+def test_futures_skips_duplicate_open_position(monkeypatch, tmp_path):
+    eng, conn, sent = _futures_engine(monkeypatch, tmp_path)
+    eng._position_mgr.has_open_position = lambda p: True
+    eng._execute_entry(_short(), "chan", eng._futures_connector)
+    assert not any(c[0] == "open" for c in conn.calls)
+    assert any("already open" in m for m in sent)
+
+
+def test_futures_skips_when_max_positions_reached(monkeypatch, tmp_path):
+    eng, conn, sent = _futures_engine(monkeypatch, tmp_path)
+    eng._position_mgr._max_positions = 1
+    eng._position_mgr.get_open_positions = lambda: ["one"]
+    eng._execute_entry(_short(), "chan", eng._futures_connector)
+    assert not any(c[0] == "open" for c in conn.calls)
+    assert any("max positions" in m for m in sent)
+
+
 def test_spot_mode_unchanged(monkeypatch, tmp_path):
     monkeypatch.setattr(SignalEngine, "_refresh_available_pairs", lambda self: None)
     buys = []
