@@ -33,15 +33,31 @@ pub struct CapitalConfig {
     /// Minimum portfolio reserve kept in USDT, as a % of total equity.
     #[serde(default = "default_reserve_pct")]
     pub reserve_limit_pct: f64,
+    /// Total paper-account USDT (seeds the paper-trading balance). Decoupled from
+    /// any one strategy's budget so scaling the account doesn't also hand one
+    /// strategy the whole pool. Default 10000 for back-compat.
+    #[serde(default = "default_account_usdt")]
+    pub account_usdt: f64,
+    /// Max cumulative deployed capital per strategy name. Enforced by
+    /// CapitalManager::request_capital so no single strategy (e.g. grid
+    /// accumulating inventory) can monopolize the shared pool and starve the
+    /// others. Strategies absent from the map are uncapped.
+    #[serde(default)]
+    pub budgets: std::collections::BTreeMap<String, f64>,
 }
 
 impl Default for CapitalConfig {
     fn default() -> Self {
-        Self { reserve_limit_pct: 20.0 }
+        Self {
+            reserve_limit_pct: 20.0,
+            account_usdt: 10_000.0,
+            budgets: std::collections::BTreeMap::new(),
+        }
     }
 }
 
 fn default_reserve_pct() -> f64 { 20.0 }
+fn default_account_usdt() -> f64 { 10_000.0 }
 
 #[derive(Debug, Deserialize, Default)]
 #[serde(from = "ExchangeRaw")]
@@ -143,6 +159,11 @@ pub struct GridConfig {
     /// Block grid when ML regime=Danger AND confidence >= this threshold.
     #[serde(default = "default_055")]
     pub ml_danger_block_threshold: f64,
+    /// Max inventory notional (qty × price) as a % of granted capital at which
+    /// grid stops placing BUYS — sells still place to unwind. Bounds downtrend
+    /// accumulation so grid can't build an oversized bag even within its budget.
+    #[serde(default = "default_60_pct")]
+    pub max_inventory_pct: f64,
 }
 
 fn default_1_5() -> f64 { 1.5 }
@@ -151,6 +172,7 @@ fn default_55() -> f64 { 55.0 }
 fn default_005() -> f64 { 0.005 }
 fn default_04() -> f64 { 0.04 }
 fn default_60() -> i64 { 60 }
+fn default_60_pct() -> f64 { 60.0 }
 fn default_075() -> f64 { 0.75 }
 fn default_055() -> f64 { 0.55 }
 
@@ -329,6 +351,11 @@ impl AppConfig {
 pub struct MeanReversionConfig {
     #[serde(default)]
     pub enabled: bool,
+    /// Per-entry notional base (USDT) MR requests from the shared capital pool.
+    /// Replaces the old hardcoded 100.0 that left MR sizing ~0 whenever the pool
+    /// was low. Bounded cumulatively by `capital.budgets.mean_reversion`.
+    #[serde(default = "default_mr_capital")]
+    pub capital: f64,
     /// Flush trigger: enter when price drops more than this fraction in the 30s window.
     #[serde(default = "default_drop_thr")]
     pub drop_thr: f64,
@@ -350,6 +377,7 @@ impl Default for MeanReversionConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            capital: default_mr_capital(),
             drop_thr: default_drop_thr(),
             tp_pct: default_tp_pct(),
             stop_pct: default_stop_pct(),
@@ -400,6 +428,7 @@ fn default_enter_threshold() -> f64 { 0.0 }
 fn default_full_size_margin() -> f64 { 1.5 }
 fn default_drop_thr() -> f64 { 0.02 }
 fn default_tp_pct() -> f64 { 0.02 }
+fn default_mr_capital() -> f64 { 100.0 }
 fn default_stop_pct() -> f64 { 0.03 }
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq)]

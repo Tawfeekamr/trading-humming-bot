@@ -48,7 +48,7 @@ async fn async_main() -> Result<()> {
             .unwrap_or(5000);
         info!("Paper fill cooldown: {}ms", fill_cooldown_ms);
         let mut balances = std::collections::HashMap::new();
-        balances.insert("USDT".to_string(), config.grid.capital_usdt);
+        balances.insert("USDT".to_string(), config.capital.account_usdt);
         Arc::new(
             trading_engine_core::connector::paper::PaperTradeConnector::with_market_data(
                 balances,
@@ -74,7 +74,7 @@ async fn async_main() -> Result<()> {
         trading_engine_core::risk::PositionGuard::new(
             config.risk.max_exposure_pct,
             config.grid.min_reserve,
-            config.grid.capital_usdt,
+            config.capital.account_usdt,
         ),
         trading_engine_core::risk::CircuitBreaker::new(
             config.risk.max_drawdown_pct,
@@ -87,7 +87,8 @@ async fn async_main() -> Result<()> {
     let bar_cache = trading_engine_core::bar_cache::BarCache::new();
     let status_cache = trading_engine_core::strategy::status_cache::StrategyStatusCache::new();
     let regime_cache = trading_engine_core::strategy::regime_cache::RegimeCache::new("data/regime_cache.json", 180_000); // 3min TTL = 3×60s poll
-    let capital = trading_engine_core::capital::CapitalManager::new(config.capital.reserve_limit_pct);
+    let capital = trading_engine_core::capital::CapitalManager::new(config.capital.reserve_limit_pct)
+        .with_budgets(config.capital.budgets.clone());
     let mut engine = trading_engine_core::engine::Engine::new(config, connector.clone(), risk, telegram.clone_for_signal(), bar_cache.clone(), status_cache.clone(), regime_cache.clone(), capital.clone());
 
     // Add strategies for each enabled pair

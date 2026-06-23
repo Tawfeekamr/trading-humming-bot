@@ -33,10 +33,26 @@ exchange:
   testnet: true
 timeframe: "1h"
 
+# ── Account Capital & Per-Strategy Budgets ────────────────────────
+# account_usdt seeds the paper balance (decoupled from any one strategy).
+# budgets cap each strategy's CUMULATIVE deployed capital via CapitalManager, so
+# no single strategy can monopolize the shared USDT pool (grid was deploying 48%
+# of equity and starving MR to 0-qty). Strategies not listed are uncapped. The
+# sum of budgets may exceed deployable (account − reserve); the free-pool check
+# still bounds total deployment, budgets bound each individual strategy.
+capital:
+  account_usdt: 100000            # paper account size (was seeded from grid.capital_usdt)
+  reserve_limit_pct: 20.0         # keep 20% of equity in USDT
+  budgets:
+    grid: 40000                   # was monopolizing; capped at 40% of account
+    trend: 25000
+    swing: 15000
+    mean_reversion: 20000         # was starved to 0 — now has a real slice
+
 # ── Grid Parameters ───────────────────────────────────────────────
 grid:
   levels: 5                   # Claude: 5 is fine — activation logic matters more than count
-  capital_usdt: 10000         # Claude: keep equal 10K until out-of-sample evidence
+  capital_usdt: 40000         # grid's slice = capital.budgets.grid (layout budget + request desire)
   min_usdt_reserve: 100       # Always keep this in reserve
   order_refresh_time: 60      # Seconds between order refresh
   # Regime gate thresholds (tuned for current market conditions)
@@ -47,6 +63,7 @@ grid:
   fill_cooldown_secs: 60      # Per-level fill cooldown (prevents churn loop)
   ml_trending_block_threshold: 0.75  # Block grid when ML Trending confidence >= this (was 0.55)
   ml_danger_block_threshold: 0.55    # Block grid when ML Danger confidence >= this
+  max_inventory_pct: 60              # Stop new BUYS when inventory notional >= this % of granted capital
 
 # ── Indicator Settings ────────────────────────────────────────────
 indicators:
@@ -93,7 +110,7 @@ dashboard:
 # ── Trend Engine ──────────────────────────────────────────────
 trend:
   enabled: true
-  capital: 10000                # Claude: keep equal 10K until out-of-sample evidence
+  capital: 25000                # trend's slice = capital.budgets.trend (risk-sizing reference)
   ema_fast: 30  # Was 30 — 30/40 too close, almost no crossovers; 12/40 gives proper signals
   ema_slow: 40
   ema_trend: 200
@@ -162,6 +179,7 @@ signal_copy:
 # ── Mean Reversion (retuned + enabled 2026-06-14) ──────────────────
 mean_reversion:
   enabled: true                     # Backtest-validated at 2% threshold (85% win, +1.8% / 6mo)
+  capital: 1000                     # per-entry notional base (was hardcoded 100); cumulative ≤ budgets.mean_reversion (20000)
 
 # ── Reversal Swing (paper-deploy 2026-06-15, ETH only) ─────────────
 # Backtest GO on 5m/1h. Prod global feed is 1h, so this runs as a 1h-LTF / 4h-HTF
@@ -200,4 +218,4 @@ swing:
   risk_per_trade_pct: 1.0
   adx_range_entry: 22.0
   adx_trend_exit: 28.0
-  capital: 5000
+  capital: 15000                # swing's slice = capital.budgets.swing
