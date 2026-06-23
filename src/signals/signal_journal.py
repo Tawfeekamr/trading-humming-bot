@@ -9,6 +9,7 @@ import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from dataclasses import dataclass
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +39,9 @@ class SignalTrade:
 
 
 class SignalJournal:
-    def __init__(self, db_path: Path = DB_PATH):
+    def __init__(self, db_path: Optional[Path] = None, state_suffix: str = ""):
+        if db_path is None:
+            db_path = Path(f"data/signal_journal{state_suffix}.db")
         self.db_path = db_path
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()

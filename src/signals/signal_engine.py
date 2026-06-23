@@ -80,7 +80,8 @@ class SignalEngine:
                  get_equity_fn: Optional[Callable] = None,
                  futures_mode: bool = False,
                  futures_connector=None,
-                 leverage: int = 3):
+                 leverage: int = 3,
+                 state_suffix: str = ""):
         self._config = config
         self._get_btc_regime = btc_regime_fn
         self._telegram_send = telegram_send_fn
@@ -108,7 +109,7 @@ class SignalEngine:
         # Persisted message_id dedup: a restart must not re-execute old channel
         # signals (the listener's queue file replays consumed messages on restart).
         self._seen_signal_ids: set[int] = set()
-        self._seen_signal_ids_path = "data/seen_signal_ids.json"
+        self._seen_signal_ids_path = f"data/seen_signal_ids{state_suffix}.json"
         self._seen_signal_ids_max = 2000
         self._load_seen_signal_ids()
         # Phase 2: decision-state capture for offline RL (state at each decision).
@@ -133,8 +134,8 @@ class SignalEngine:
         )
         self._validator = SignalValidator(config)
         self._risk = SignalRiskGuard(config)
-        self._position_mgr = SignalPositionManager(config)
-        self._journal = SignalJournal()
+        self._position_mgr = SignalPositionManager(config, state_suffix=state_suffix)
+        self._journal = SignalJournal(state_suffix=state_suffix)
 
         # Fetch available Gate.io pairs on init
         self._available_pairs: set[str] = set()

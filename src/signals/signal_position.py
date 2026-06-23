@@ -51,12 +51,13 @@ class SignalPosition:
 
 
 class SignalPositionManager:
-    def __init__(self, config: dict):
+    def __init__(self, config: dict, state_suffix: str = ""):
         self._max_positions = config.get("max_positions", 3)
         self._tp1_close_pct = config.get("tp1_close_pct", 33) / 100
         self._tp2_close_pct = config.get("tp2_close_pct", 50) / 100
         self._data_dir = Path("data")
         self._data_dir.mkdir(parents=True, exist_ok=True)
+        self._suffix = state_suffix
         self._positions: dict[str, SignalPosition] = {}
         self._lock = threading.Lock()
         self._load_state()
@@ -160,7 +161,7 @@ class SignalPositionManager:
         """Advisory file lock shared with the Rust engine (fcntl.flock) so
         concurrent writes don't clobber each other's state. Blocks until acquired
         (Python can wait briefly; the Rust side uses a non-blocking try-lock)."""
-        lock_path = self._data_dir / "signal_positions.lock"
+        lock_path = self._data_dir / f"signal_positions{self._suffix}.lock"
         f = open(lock_path, "w")
         try:
             fcntl.flock(f, fcntl.LOCK_EX)
@@ -170,8 +171,8 @@ class SignalPositionManager:
             f.close()
 
     def _save_state(self):
-        path = self._data_dir / "signal_positions.json"
-        tmp_path = self._data_dir / "signal_positions.json.tmp"
+        path = self._data_dir / f"signal_positions{self._suffix}.json"
+        tmp_path = self._data_dir / f"signal_positions{self._suffix}.json.tmp"
         with self._state_lock():
             # Read current disk state and preserve entries we don't track (e.g.
             # positions the Rust engine is managing) so our write can't erase them.
@@ -213,7 +214,7 @@ class SignalPositionManager:
         return False
 
     def _load_state(self):
-        path = self._data_dir / "signal_positions.json"
+        path = self._data_dir / f"signal_positions{self._suffix}.json"
         if not path.exists():
             return
         try:
