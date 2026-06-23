@@ -64,14 +64,22 @@ class SignalValidator:
         if signal.stop_loss >= entry:
             return False, f"SL {signal.stop_loss} >= entry {entry}"
         sl_distance = (entry - signal.stop_loss) / entry * 100
-        if sl_distance > self._max_sl_distance_pct:
-            # Auto-tighten SL to max allowed distance instead of rejecting
+        if sl_distance > self._max_sl_distance_pct and not getattr(signal, "entry_tuned", False):
+            # Auto-tighten SL to max allowed distance instead of rejecting.
+            # Tuned signals keep their original SL — DeepSeek already vetted the
+            # tuned entry's validity and $-risk-per-trade is held constant by
+            # position sizing (larger entry→SL distance → smaller size).
             new_sl = round(entry * (1 - self._max_sl_distance_pct / 100), 6)
             logger.warning(
                 f"SL auto-tightened for {signal.pair}: {signal.stop_loss} "
                 f"({sl_distance:.1f}% from entry) → {new_sl} ({self._max_sl_distance_pct}%)"
             )
             signal.stop_loss = new_sl
+        elif sl_distance > self._max_sl_distance_pct:
+            logger.info(
+                f"SL kept wide for tuned signal {signal.pair}: {signal.stop_loss} "
+                f"({sl_distance:.1f}% from tuned entry) — original SL preserved"
+            )
 
         # Risk:reward ratio check (using TP3 if available, else TP2, else TP1)
         risk = entry - signal.stop_loss

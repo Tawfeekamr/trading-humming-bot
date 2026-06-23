@@ -314,3 +314,58 @@ class TestErrorHandling:
                 assert u.message.reply_text.called, f"{cmd_name} did not reply"
             except Exception as e:
                 pytest.fail(f"{cmd_name} raised {e} — commands must never crash")
+
+
+# ── Recent Trades display ──────────────────────────────────────────────────
+
+def _seed_trades_db(db_path, rows):
+    """rows: list of (id, timestamp, engine, pair, pnl, exit_reason, quantity, is_backfilled)."""
+    import sqlite3
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS trades (id INTEGER PRIMARY KEY, timestamp TEXT, "
+        "engine TEXT, pair TEXT, pnl REAL, exit_reason TEXT, quantity REAL, "
+        "is_backfilled INTEGER DEFAULT 0)"
+    )
+    conn.executemany(
+        "INSERT INTO trades (id, timestamp, engine, pair, pnl, exit_reason, quantity, is_backfilled) "
+        "VALUES (?,?,?,?,?,?,?,?)",
+        rows,
+    )
+    conn.commit()
+    conn.close()
+
+
+class TestRecentTrades:
+    def test_orders_by_timestamp_not_insertion_id(self, tmp_path, monkeypatch):
+        """Backfill re-inserts old trades with fresh high IDs every restart, so
+        ORDER BY id DESC shows stale backfilled trades as 'most recent'. The
+        display must order by trade timestamp."""
+        monkeypatch.chdir(tmp_path)
+        _seed_trades_db(tmp_path / "data" / "trades.db", [
+            # OLD trade, but HIGH id (exactly what backfill re-insert produces)
+            (100, "2026-06-14T10:00:00+00:00", "trend", "BNB-USDT", 30.02, "tp1", 0.5, 1),
+            # RECENT trade, LOWER id (live insert)
+            (50, "2026-06-23T13:26:00+00:00", "mr", "ETH-USDT", 19.82, "TakeProfit", 0.6, 0),
+        ])
+        u = _mock_update()
+        _handler(tmp_path)._cmd_trades(u, None)
+        reply = _replied(u)
+        # Most-recent-by-timestamp (ETH, 06-23) must list before the older BNB (06-14).
+        assert reply.index("ETH") < reply.index("BNB"), reply
+        # Date must be shown so old vs new is visible (not just HH:MM).
+        assert "06-23" in reply and "06-14" in reply, reply
+
+    def test_filters_zero_qty_zero_pnl_artifacts(self, tmp_path, monkeypatch):
+        """qty=0, pnl=0 rows are paper-engine artifacts, not real trades — hide them."""
+        monkeypatch.chdir(tmp_path)
+        _seed_trades_db(tmp_path / "data" / "trades.db", [
+            (1, "2026-06-23T13:26:00+00:00", "mr", "ETH-USDT", 19.82, "TakeProfit", 0.6, 0),
+            (2, "2026-06-23T12:00:00+00:00", "mr", "ETH-USDT", 0.0, "StopLoss", 0.0, 0),
+        ])
+        u = _mock_update()
+        _handler(tmp_path)._cmd_trades(u, None)
+        reply = _replied(u)
+        assert "19.82" in reply  # real trade shown
+        assert reply.count("StopLoss") == 0, f"artifact should be hidden: {reply}"

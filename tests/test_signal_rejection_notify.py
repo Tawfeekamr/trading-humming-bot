@@ -114,7 +114,7 @@ class TestRejectionNotifications:
 
     def test_risk_guard_block_notifies_with_reason_and_detail(self, engine, monkeypatch):
         eng, sent = engine
-        eng._parser.parse = lambda text: _valid_signal()
+        eng._parser.parse = lambda text, live_price=None, live_pair=None: _valid_signal()
         eng._validator.validate = lambda sig: (True, "ok")
         # The engine reads block_reason() (can_trade delegates to it); stub it so
         # the risk-guard branch fires with a concrete reason.
@@ -195,6 +195,60 @@ class TestEntryZoneGate:
         eng._execute_entry(_valid_signal(), "testchan", None)
         assert len(buys) == 1, "price inside the zone should enter"
 
+    def test_zone_skip_alerts_include_score(self, engine):
+        """Task 3: entry-zone skip alerts must carry the quality score (like all
+        other rejections), not just the zone/price."""
+        eng, sent, _ = self._engine_with_price_and_buy_tracker(engine, 0.20)
+        eng._execute_entry(_valid_signal(), "testchan", None)  # 0.20 above 0.10-0.12
+        msg = next(m for m in sent if "above entry zone" in m)
+        assert "Score: 8/10" in msg, msg
+
+
+class TestEntryTuning:
+    """DeepSeek entry-tuning salvage (entry-zone scope only).
+
+    stale     → skip + notify (with score), never enters.
+    tuned     → bypass the entry-zone gate (DeepSeek already set entry = live price).
+    fallback  → no live price → today's zone-skip behavior still applies.
+    """
+
+    def test_stale_signal_skips_and_notifies_with_score(self, engine):
+        eng, sent = engine
+        sig = _valid_signal()
+        sig.stale = True
+        eng._parser.parse = lambda text, live_price=None, live_pair=None: sig
+        eng._process_message({"text": "AERO/USDT ...", "channel_name": "testchan"}, None)
+        assert any("stale" in m.lower() for m in sent), sent
+        assert any("Score: 8/10" in m for m in sent), sent
+
+    def test_tuned_signal_bypasses_zone_gate_and_enters(self, engine):
+        # entry tuned to 0.20; live price 0.21 is ABOVE the entry — without the
+        # entry_tuned bypass this would skip as "above zone". Tuned → enters.
+        eng, sent = engine
+        sig = _valid_signal()
+        sig.entry_low = 0.20
+        sig.entry_high = 0.20
+        sig.entry_tuned = True
+        eng._get_current_price = lambda conn, pair: 0.21
+        buys = []
+        eng._buy_fn = lambda **kw: (buys.append(kw), "oid-ok")[1]
+        eng._execute_entry(sig, "testchan", None)
+        assert len(buys) == 1, "tuned signal must bypass the zone gate and enter"
+
+    def test_non_tuned_above_zone_still_skips(self, engine):
+        # Same setup but NOT tuned → zone gate fires (regression guard).
+        eng, sent = engine
+        sig = _valid_signal()
+        sig.entry_low = 0.20
+        sig.entry_high = 0.20
+        sig.entry_tuned = False
+        eng._get_current_price = lambda conn, pair: 0.21
+        buys = []
+        eng._buy_fn = lambda **kw: (buys.append(kw), "oid-ok")[1]
+        eng._execute_entry(sig, "testchan", None)
+        assert buys == [], "non-tuned signal above its zone must still skip"
+        assert any("above entry zone" in m for m in sent), sent
+
 
 class TestMessageIdDedup:
     """A container restart must not re-execute old channel signals.
@@ -210,7 +264,7 @@ class TestMessageIdDedup:
         eng, sent = engine
         parse_calls = []
 
-        def fake_parse(text):
+        def fake_parse(text, live_price=None, live_pair=None):
             parse_calls.append(text)
             return _valid_signal()
 
@@ -224,7 +278,7 @@ class TestMessageIdDedup:
     def test_edits_are_not_deduped(self, engine):
         eng, sent = engine
         parse_calls = []
-        eng._parser.parse = lambda text: (parse_calls.append(text), _valid_signal())[1]
+        eng._parser.parse = lambda text, live_price=None, live_pair=None: (parse_calls.append(text), _valid_signal())[1]
         eng._validator.validate = lambda sig: (True, "ok")
         msg = {"text": "[EDIT] sig", "channel_name": "c", "message_id": 4242}
         eng._process_message(msg, None)
@@ -233,7 +287,7 @@ class TestMessageIdDedup:
 
     def test_seen_set_persisted_to_disk(self, engine):
         eng, sent = engine
-        eng._parser.parse = lambda text: _valid_signal()
+        eng._parser.parse = lambda text, live_price=None, live_pair=None: _valid_signal()
         eng._validator.validate = lambda sig: (True, "ok")
         msg = {"text": "sig", "channel_name": "c", "message_id": 7777}
         eng._process_message(msg, None)

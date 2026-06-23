@@ -1791,8 +1791,14 @@ class TelegramCommandHandler:
             import sqlite3
             logger.info("Telegram /trades received")
             conn = sqlite3.connect("data/trades.db")
+            # ORDER BY timestamp (trade time), NOT id — backfill re-inserts old
+            # trades with fresh high IDs every restart, so id-ordering surfaces
+            # stale backfilled trades as "most recent". Filter qty=0/pnl=0 rows,
+            # which are paper-engine artifacts, not real trades.
             rows = conn.execute(
-                "SELECT timestamp, engine, pair, pnl, exit_reason FROM trades ORDER BY id DESC LIMIT 15"
+                "SELECT timestamp, engine, pair, pnl, exit_reason FROM trades "
+                "WHERE NOT (pnl = 0 AND COALESCE(quantity, 0) = 0) "
+                "ORDER BY timestamp DESC LIMIT 15"
             ).fetchall()
             conn.close()
             if not rows:
@@ -1800,11 +1806,12 @@ class TelegramCommandHandler:
                 return
             lines = ["📜 <b>Recent Trades</b> (all engines)", "•••"]
             for ts, engine, pair, pnl, reason in rows:
-                t = ts[11:16] if len(ts) > 16 else ts
+                # Date + time (MM-DD HH:MM) so old vs recent is visible.
+                when = f"{ts[5:10]} {ts[11:16]}" if len(ts) >= 16 else ts
                 sign = "+" if pnl >= 0 else ""
                 emoji = "🟢" if pnl >= 0 else "🔴"
                 p = pair.replace("-USDT", "").replace("-USD", "")
-                lines.append(f"{t}  {engine:<6} {p:<8} {reason:<12} {emoji} {sign}${pnl:.2f}")
+                lines.append(f"{when}  {engine:<6} {p:<8} {reason:<12} {emoji} {sign}${pnl:.2f}")
             lines.append("•••")
             lines.append(f"<i>{len(rows)} most recent</i>")
             update.message.reply_text("\n".join(lines), parse_mode="HTML")

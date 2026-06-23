@@ -9,6 +9,7 @@ import http.client
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
@@ -44,6 +45,29 @@ class ParsedSignal:
     quality_score: int = 5
     quality_reason: str = ""
     is_market_entry: bool = False
+    # DeepSeek entry-tuning salvage (entry-zone case only). When a live_price is
+    # supplied and price has moved outside the entry zone, DeepSeek decides in the
+    # same parse call: entry_tuned=True → entry shifted to the live price, original
+    # SL/TPs kept; stale=True → the move already happened, skip.
+    entry_tuned: bool = False
+    stale: bool = False
+
+
+# Pre-scan a message for its ticker so we can fetch a live price BEFORE the
+# (single) DeepSeek call. Best-effort: DeepSeek reconciles the final pair; this
+# only provides a price hint. Returns "BASE-USDT" or None.
+_PAIR_RE = re.compile(r"\$?\b([A-Z][A-Z0-9]{1,9})\b\s*[/\-]?\s*(?:USDT|USD|USDC)\b")
+_BARE_TICKER_RE = re.compile(r"\$([A-Z][A-Z0-9]{1,9})\b")
+
+
+def _extract_candidate_pair(text: str) -> Optional[str]:
+    m = _PAIR_RE.search(text)
+    if m:
+        return f"{m.group(1)}-USDT"
+    m = _BARE_TICKER_RE.search(text)
+    if m:
+        return f"{m.group(1)}-USDT"
+    return None
 
 
 SYSTEM_PROMPT = """You are a trading signal parser and quality scorer. Extract structured trade information from Telegram messages and score signal quality.
@@ -93,6 +117,14 @@ Scoring guide:
 - 5-7: Decent signal but some weaknesses (wide SL, few TPs, no reasoning)
 - 1-4: Poor signal (no SL, unrealistic TPs, vague entry, no structure)
 
+LIVE PRICE TUNING (only applies when a live_price for the pair is provided in the message):
+If a live_price is provided AND it is for the SAME pair as the signal, compare it to the entry zone:
+- live_price INSIDE [entry_low, entry_high]: normal signal. entry_tuned=false, stale=false.
+- live_price OUTSIDE the zone but the setup is STILL VALID at live_price (price moved only modestly past the zone, and the risk:reward to the take_profits using the ORIGINAL stop_loss remains acceptable): TUNE the entry — set entry_low = entry_high = live_price, KEEP stop_loss and take_profits UNCHANGED, set entry_tuned=true, stale=false. Note in reasoning ("entry tuned to live price X; original SL/TPs kept").
+- The move has ALREADY HAPPENED (live_price at or above the first take_profit, or risk:reward at live_price with the original stop_loss is poor): set entry_tuned=false, stale=true. Note in reasoning ("stale — price already at TP1").
+- live_price for a DIFFERENT pair than the signal, or no live_price given: ignore it. entry_tuned=false, stale=false.
+The goal: capture still-valid trades whose entry zone the price has moved slightly past, while marking stale signals where the move already completed. When tuning, NEVER change the stop_loss or take_profits — only the entry.
+
 OUTPUT FORMAT (JSON only, no markdown, no code blocks):
 {
     "action": "OPEN_LONG" | "CLOSE" | "UPDATE_SL" | "UPDATE_TP" | "NOT_A_SIGNAL",
@@ -105,6 +137,8 @@ OUTPUT FORMAT (JSON only, no markdown, no code blocks):
     "quality_score": 8,
     "quality_reason": "Strong R:R of 2.5:1, tight SL, 3 TPs with technical confluence",
     "is_market_entry": false,
+    "entry_tuned": false,
+    "stale": false,
     "reasoning": "Brief explanation of your parsing"
 }"""
 
@@ -121,8 +155,16 @@ class SignalParser:
                       "TP1 HIT", "TP2 HIT", "TP3 HIT", "BREAKEVEN EXIT",
                       "STOP LOSS HIT", "CANCELLED")
 
-    def parse(self, message: str) -> ParsedSignal:
-        """Parse a trader's message into a structured signal."""
+    def parse(self, message: str, live_price: Optional[float] = None,
+              live_pair: Optional[str] = None) -> ParsedSignal:
+        """Parse a trader's message into a structured signal.
+
+        When live_price + live_pair are supplied (pre-fetched for the message's
+        ticker), DeepSeek judges IN THIS SAME CALL whether a signal whose price
+        has moved outside the entry zone is still tunable (entry shifted to the
+        live price, original SL/TPs kept) or stale. See LIVE PRICE TUNING in
+        SYSTEM_PROMPT. Entry-zone scope only.
+        """
         if not self._api_key:
             logger.warning("DEEPSEEK_API_KEY not set, cannot parse signals")
             return ParsedSignal(action=SignalAction.NOT_A_SIGNAL, raw_message=message)
@@ -134,6 +176,8 @@ class SignalParser:
                                 parse_reasoning="Pre-filtered: contains result update markers")
 
         prompt = f"Parse this trading signal message:\n\n{message}"
+        if live_price is not None and live_pair:
+            prompt += f"\n\n[Context] live_price for {live_pair}: {live_price}"
 
         try:
             response_json = self._call_glm(prompt)
@@ -221,4 +265,6 @@ class SignalParser:
             quality_score=max(1, min(10, int(data.get("quality_score", 5)))),
             quality_reason=data.get("quality_reason", ""),
             is_market_entry=data.get("is_market_entry", False),
+            entry_tuned=bool(data.get("entry_tuned", False)),
+            stale=bool(data.get("stale", False)),
         )

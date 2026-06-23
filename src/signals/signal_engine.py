@@ -17,7 +17,7 @@ from enum import Enum
 from typing import Optional, Callable
 
 from .channel_listener import ChannelListener
-from .signal_parser import SignalParser, ParsedSignal, SignalAction, SignalConfidence
+from .signal_parser import SignalParser, ParsedSignal, SignalAction, SignalConfidence, _extract_candidate_pair
 from .signal_validator import SignalValidator
 from .signal_risk import SignalRiskGuard
 from .signal_position import SignalPositionManager, SignalPosition
@@ -294,15 +294,43 @@ class SignalEngine:
             self._seen_signal_ids.add(msg_id)
             self._save_seen_signal_ids()
 
-        # Parse with GLM
-        signal = self._parser.parse(text)
+        # Pre-scan the message for a ticker and fetch its live price so DeepSeek
+        # can judge tunability in the SAME parse call (entry-zone salvage).
+        # _get_current_price falls back to the Gate.io REST API, so this works
+        # even when the listener ticks with connector=None. If the pair is
+        # unknown / price unavailable, we parse without a price (today's behavior).
+        live_price = None
+        live_pair = None
+        candidate = _extract_candidate_pair(text)
+        if candidate:
+            try:
+                p = self._get_current_price(connector, candidate)
+                if p and p > 0:
+                    live_price, live_pair = p, candidate
+            except Exception as e:
+                logger.debug(f"live-price pre-fetch for {candidate} failed: {e}")
+
+        # Parse with GLM (single call — tuning decided here when live_price given)
+        signal = self._parser.parse(text, live_price=live_price, live_pair=live_pair)
         if signal.action == SignalAction.NOT_A_SIGNAL:
             logger.debug(f"[{channel_name}] Not a signal: {signal.parse_reasoning[:60]}")
         else:
+            tuned = " (entry tuned)" if signal.entry_tuned else ""
             logger.info(f"[{channel_name}] {signal.action.value} {signal.pair or '?'} "
-                        f"| entry={signal.entry_low}-{signal.entry_high} "
+                        f"| entry={signal.entry_low}-{signal.entry_high}{tuned} "
                         f"| SL={signal.stop_loss} | TPs={signal.take_profits} "
                         f"| score={signal.quality_score}/10")
+
+        # DeepSeek judged the signal stale (price already past the entry / move done).
+        if signal.stale:
+            logger.info(f"[{channel_name}] Signal stale (price past entry): {signal.pair}")
+            self._notify_dedupe(
+                f"stale:{signal.pair}",
+                f"🟡 Signal skipped (stale — price past entry): {signal.pair}\n"
+                + _signal_detail(signal, channel_name),
+            )
+            self._log_audit_trade(signal, channel_name, "skipped_stale", 0, "stale_price_past_entry")
+            return
 
         # Log raw message for audit
         self._journal.log_raw_message(
@@ -431,27 +459,33 @@ class SignalEngine:
         # [entry_low, entry_high] zone. Buying above the zone (a stale signal can
         # already be above tp1) means Rust's TP logic instantly "hits" tp1 at a
         # loss and closes the position on arrival.
+        #
+        # Tuned signals bypass this gate: DeepSeek already shifted the entry to
+        # the live price (so entry IS current price) and vetted validity in parse.
         entry_low = signal.entry_low or signal.entry_high or entry
         entry_high = signal.entry_high or signal.entry_low or entry
         current_price = self._get_current_price(connector, signal.pair)
         if current_price <= 0:
             current_price = entry_high  # price feed unavailable — assume zone top
-        if current_price > entry_high:
-            logger.info(f"Signal skipped — above entry zone: {signal.pair} "
-                        f"zone={entry_low}-{entry_high} now={current_price}")
-            self._notify_dedupe(f"above_zone:{signal.pair}",
-                                f"🚫 Signal skipped (above entry zone): {signal.pair} "
-                                f"— zone ${entry_low}-{entry_high}, now ${current_price}")
-            self._log_audit_trade(signal, channel_name, "skipped_above_zone", current_price, "above_entry_zone")
-            return
-        if current_price < entry_low:
-            logger.info(f"Signal skipped — below entry zone: {signal.pair} "
-                        f"zone={entry_low}-{entry_high} now={current_price}")
-            self._notify_dedupe(f"below_zone:{signal.pair}",
-                                f"🚫 Signal skipped (below entry zone): {signal.pair} "
-                                f"— zone ${entry_low}-{entry_high}, now ${current_price}")
-            self._log_audit_trade(signal, channel_name, "skipped_below_zone", current_price, "below_entry_zone")
-            return
+        if not signal.entry_tuned:
+            if current_price > entry_high:
+                logger.info(f"Signal skipped — above entry zone: {signal.pair} "
+                            f"zone={entry_low}-{entry_high} now={current_price}")
+                self._notify_dedupe(f"above_zone:{signal.pair}",
+                                    f"🚫 Signal skipped (above entry zone): {signal.pair} "
+                                    f"— zone ${entry_low}-${entry_high}, now ${current_price}\n"
+                                    + _signal_detail(signal, channel_name))
+                self._log_audit_trade(signal, channel_name, "skipped_above_zone", current_price, "above_entry_zone")
+                return
+            if current_price < entry_low:
+                logger.info(f"Signal skipped — below entry zone: {signal.pair} "
+                            f"zone={entry_low}-{entry_high} now={current_price}")
+                self._notify_dedupe(f"below_zone:{signal.pair}",
+                                    f"🚫 Signal skipped (below entry zone): {signal.pair} "
+                                    f"— zone ${entry_low}-${entry_high}, now ${current_price}\n"
+                                    + _signal_detail(signal, channel_name))
+                self._log_audit_trade(signal, channel_name, "skipped_below_zone", current_price, "below_entry_zone")
+                return
 
         fill_price = current_price
         equity = self._get_equity(connector)
