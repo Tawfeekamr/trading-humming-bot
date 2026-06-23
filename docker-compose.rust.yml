@@ -69,7 +69,7 @@ services:
       - SIGNAL_MODE=futures
       - RUST_ENGINE_URL=http://rust-bot:3030
     volumes:
-      - ./data:/app/data
+      - ./data_futures:/app/data
       - ./logs:/app/logs
       - ./config:/app/config:ro
     logging:
