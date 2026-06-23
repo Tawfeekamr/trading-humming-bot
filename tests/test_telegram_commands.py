@@ -337,6 +337,63 @@ def _seed_trades_db(db_path, rows):
     conn.close()
 
 
+# ── Futures commands ───────────────────────────────────────────────────────
+
+class TestFuturesCommands:
+    def test_futures_status_reads_namespaced_file(self, tmp_path, monkeypatch):
+        """The futures engine writes state to signal_positions_futures.json
+        (namespaced) — not the spot file signal_positions.json. After the
+        one-listener refactor both engines share data/, so the reader must
+        use the namespaced path or it would show spot positions instead."""
+        monkeypatch.chdir(tmp_path)
+        d = tmp_path / "data"
+        d.mkdir(exist_ok=True)
+        # futures (namespaced) file: has a position
+        (d / "signal_positions_futures.json").write_text(json.dumps({
+            "BTC-USDT": {"symbol": "BTC-USDT", "entry_price": 60000, "is_closed": False,
+                         "take_profits": [61000], "signal_confidence": "high",
+                         "channel_name": "FUT", "entry_timestamp": time.time(),
+                         "realized_pnl": 0, "tp1_hit": False, "stop_loss": 58000},
+        }))
+        # spot file: a different pair that must NOT appear in the futures reply
+        (d / "signal_positions.json").write_text(json.dumps({
+            "XRP-USDT": {"symbol": "XRP-USDT", "entry_price": 0.5, "is_closed": False,
+                         "take_profits": [0.6], "signal_confidence": "low",
+                         "channel_name": "SPOT", "entry_timestamp": time.time(),
+                         "realized_pnl": 0, "tp1_hit": False, "stop_loss": 0.4},
+        }))
+        monkeypatch.setattr("urllib.request.urlopen", _mock_urlopen({"bids": [[61000, 1]], "asks": [[61000, 1]]}))
+        u = _mock_update()
+        _handler(tmp_path)._cmd_futures_status(u, None)
+        text = _replied(u)
+        assert "FUTURES" in text
+        assert "BTC" in text          # futures file content
+        assert "XRP" not in text      # spot file must NOT leak
+
+    def test_futures_pnl_reads_namespaced_file(self, tmp_path, monkeypatch):
+        """/futures_pnl must also read the futures-namespaced file."""
+        monkeypatch.chdir(tmp_path)
+        d = tmp_path / "data"
+        d.mkdir(exist_ok=True)
+        (d / "signal_positions_futures.json").write_text(json.dumps({
+            "ETH-USDT": {"symbol": "ETH-USDT", "is_closed": True, "realized_pnl": 250.0,
+                         "exit_reason": "tp1", "entry_timestamp": time.time(),
+                         "exit_timestamp": time.time(), "signal_confidence": "high"},
+        }))
+        (d / "signal_positions.json").write_text(json.dumps({
+            "SOL-USDT": {"symbol": "SOL-USDT", "is_closed": True, "realized_pnl": -50.0,
+                         "exit_reason": "sl", "entry_timestamp": time.time(),
+                         "exit_timestamp": time.time(), "signal_confidence": "low"},
+        }))
+        u = _mock_update()
+        _handler(tmp_path)._cmd_futures_pnl(u, None)
+        text = _replied(u)
+        assert "ETH" in text
+        assert "SOL" not in text
+
+
+# ── Recent Trades display ──────────────────────────────────────────────────
+
 class TestRecentTrades:
     def test_orders_by_timestamp_not_insertion_id(self, tmp_path, monkeypatch):
         """Backfill re-inserts old trades with fresh high IDs every restart, so

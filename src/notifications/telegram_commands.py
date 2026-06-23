@@ -231,6 +231,8 @@ class TelegramCommandHandler:
             "swing_pnl": self._cmd_swing_status,
             "signal_status": self._cmd_signal_status,
             "signal_pnl": self._cmd_signal_status,
+            "futures_status": self._cmd_futures_status,
+            "futures_pnl": self._cmd_futures_pnl,
             "mean_status": self._cmd_mean_status,
             "mean_pnl": self._cmd_mean_status,
             "capital": self._cmd_capital,
@@ -1537,6 +1539,96 @@ class TelegramCommandHandler:
                 lines.append(f"  {name}: {stats['trades']} trades, ${stats['pnl']:.2f} ({stats['win_rate']:.0f}% win)")
 
         update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
+    # ── Futures Commands ──────────────────────────────────────────────
+    # Both engines now run in the single signal-listener container. The futures
+    # engine writes its state to a namespaced file (data/signal_positions_futures.json)
+    # so it doesn't collide with the spot engine's data/signal_positions.json.
+
+    def _cmd_futures_status(self, update, context):
+        try:
+            logger.info("Telegram /futures_status received")
+            pos = {}
+            try:
+                with open("data/signal_positions_futures.json") as f:
+                    pos = json.load(f)
+            except Exception:
+                pass
+            open_pos = {k: v for k, v in pos.items() if not v.get("is_closed")}
+            realized_total = sum((p.get("realized_pnl") or 0) for p in pos.values())
+            n_closed = sum(1 for p in pos.values() if p.get("is_closed"))
+
+            lines = ["📈 <b>FUTURES ENGINE</b>", "•••"]
+            lines.append(f"Open: {len(open_pos)} | Closed: {n_closed} | Realized P&L: ${realized_total:+.2f}")
+            if not open_pos:
+                lines.append("No open positions.")
+            else:
+                lines.append("•••")
+                for sym, p in list(open_pos.items())[:8]:
+                    entry = p.get("entry_price") or 0
+                    tps = p.get("take_profits") or []
+                    conf = p.get("signal_confidence", "?")
+                    ch = (p.get("channel_name") or "")[:18]
+                    realized = p.get("realized_pnl") or 0
+                    entry_ts = p.get("entry_timestamp") or 0
+                    hold = _fmt_duration(time.time() - entry_ts) if entry_ts else "?"
+                    now_price = _signal_price(sym)
+                    marks = []
+                    for i, tp in enumerate(tps):
+                        hit = p.get(f"tp{i+1}_hit") if i < 3 else None
+                        if hit:
+                            marks.append(f"✅{_fmt_price(tp)}")
+                        elif now_price and tp and now_price >= tp:
+                            marks.append(f"🎯{_fmt_price(tp)}")
+                        else:
+                            marks.append(f"⬜{_fmt_price(tp)}")
+                    tp_str = " ".join(marks) if marks else "N/A"
+                    now_str = ""
+                    if now_price and entry:
+                        now_str = f" | Now {_fmt_price(now_price)} ({(now_price-entry)/entry*100:+.1f}%)"
+                    lines.append(f"<b>{sym}</b> [{conf}] {ch}")
+                    lines.append(f"  Entry {_fmt_price(entry)}{now_str} | SL {_fmt_price(p.get('stop_loss'))}")
+                    lines.append(f"  TPs {tp_str}")
+                    lines.append(f"  Held {hold} | realized ${realized:+.2f}")
+            lines.append("•••")
+            update.message.reply_text("\n".join(lines), parse_mode="HTML")
+        except Exception as e:
+            update.message.reply_text(f"⚠️ Error: {e}")
+
+    def _cmd_futures_pnl(self, update, context):
+        try:
+            logger.info("Telegram /futures_pnl received")
+            pos = {}
+            try:
+                with open("data/signal_positions_futures.json") as f:
+                    pos = json.load(f)
+            except Exception:
+                pass
+            closed = [p for p in pos.values() if p.get("is_closed")]
+            realized_total = sum((p.get("realized_pnl") or 0) for p in closed)
+            wins = [p for p in closed if (p.get("realized_pnl") or 0) > 0]
+            win_rate = (len(wins) / len(closed) * 100) if closed else 0.0
+
+            lines = ["📊 <b>FUTURES P&L</b>", "•••"]
+            lines.append(f"Closed trades: {len(closed)}")
+            lines.append(f"Realized P&L: ${realized_total:+.2f}")
+            lines.append(f"Win rate: {win_rate:.0f}% ({len(wins)}/{len(closed)})")
+            if closed:
+                lines.append("•••")
+                lines.append("📋 <b>Recent (last 8):</b>")
+                recent = sorted(
+                    closed,
+                    key=lambda p: p.get("exit_timestamp") or p.get("entry_timestamp") or 0,
+                    reverse=True,
+                )[:8]
+                for p in recent:
+                    sym = p.get("symbol") or "?"
+                    pnl = p.get("realized_pnl") or 0
+                    reason = (p.get("exit_reason") or "")[:18]
+                    lines.append(f"  {sym}: ${pnl:+.2f} ({reason})")
+            update.message.reply_text("\n".join(lines), parse_mode="HTML")
+        except Exception as e:
+            update.message.reply_text(f"⚠️ Error: {e}")
 
     def _cmd_signal_pause(self, update, context):
         engine = getattr(self.strategy, '_signal_engine', None)

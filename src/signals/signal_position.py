@@ -13,6 +13,8 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Optional
 
+from .futures_math import pnl as _side_pnl
+
 logger = logging.getLogger(__name__)
 
 
@@ -37,6 +39,7 @@ class SignalPosition:
     tp1_close_pct: float = 0.33
     tp2_close_pct: float = 0.50
     order_id: str = ""
+    side: str = "long"
 
     @property
     def remaining_amount(self) -> float:
@@ -48,12 +51,13 @@ class SignalPosition:
 
 
 class SignalPositionManager:
-    def __init__(self, config: dict):
+    def __init__(self, config: dict, state_suffix: str = ""):
         self._max_positions = config.get("max_positions", 3)
         self._tp1_close_pct = config.get("tp1_close_pct", 33) / 100
         self._tp2_close_pct = config.get("tp2_close_pct", 50) / 100
         self._data_dir = Path("data")
         self._data_dir.mkdir(parents=True, exist_ok=True)
+        self._suffix = state_suffix
         self._positions: dict[str, SignalPosition] = {}
         self._lock = threading.Lock()
         self._load_state()
@@ -80,7 +84,7 @@ class SignalPositionManager:
     def open_position(self, symbol: str, entry_price: float, amount: float,
                       stop_loss: float, take_profits: list[float],
                       signal_confidence: str, raw_message: str,
-                      channel_name: str) -> Optional[SignalPosition]:
+                      channel_name: str, side: str = "long") -> Optional[SignalPosition]:
         with self._lock:
             open_count = sum(1 for p in self._positions.values() if not p.is_closed)
             if open_count >= self._max_positions:
@@ -102,6 +106,7 @@ class SignalPositionManager:
                 entry_timestamp=time.time(),
                 tp1_close_pct=self._tp1_close_pct,
                 tp2_close_pct=self._tp2_close_pct,
+                side=side,
             )
             self._positions[symbol] = pos
             self._save_state()
@@ -115,7 +120,7 @@ class SignalPositionManager:
                 return (0.0, 0.0)
 
             close_amount = pos.remaining_amount * close_pct
-            pnl = (price - pos.entry_price) * close_amount
+            pnl = _side_pnl(pos.side, pos.entry_price, price, close_amount)
             pos.amount_closed += close_amount
             pos.realized_pnl += pnl
 
@@ -132,7 +137,7 @@ class SignalPositionManager:
                 return None
 
             remaining = pos.remaining_amount
-            pnl = (price - pos.entry_price) * remaining
+            pnl = _side_pnl(pos.side, pos.entry_price, price, remaining)
             pos.amount_closed = pos.amount
             pos.realized_pnl += pnl
             pos.is_closed = True
@@ -156,7 +161,7 @@ class SignalPositionManager:
         """Advisory file lock shared with the Rust engine (fcntl.flock) so
         concurrent writes don't clobber each other's state. Blocks until acquired
         (Python can wait briefly; the Rust side uses a non-blocking try-lock)."""
-        lock_path = self._data_dir / "signal_positions.lock"
+        lock_path = self._data_dir / f"signal_positions{self._suffix}.lock"
         f = open(lock_path, "w")
         try:
             fcntl.flock(f, fcntl.LOCK_EX)
@@ -166,8 +171,8 @@ class SignalPositionManager:
             f.close()
 
     def _save_state(self):
-        path = self._data_dir / "signal_positions.json"
-        tmp_path = self._data_dir / "signal_positions.json.tmp"
+        path = self._data_dir / f"signal_positions{self._suffix}.json"
+        tmp_path = self._data_dir / f"signal_positions{self._suffix}.json.tmp"
         with self._state_lock():
             # Read current disk state and preserve entries we don't track (e.g.
             # positions the Rust engine is managing) so our write can't erase them.
@@ -209,7 +214,7 @@ class SignalPositionManager:
         return False
 
     def _load_state(self):
-        path = self._data_dir / "signal_positions.json"
+        path = self._data_dir / f"signal_positions{self._suffix}.json"
         if not path.exists():
             return
         try:

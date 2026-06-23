@@ -124,6 +124,41 @@ def _poll_commands(handler):
         time.sleep(1)
 
 
+def dispatch_cycle(spot_engine, futures_engine, connector):
+    """Run ONE dispatch cycle of the shared signal loop.
+
+    Drains the spot engine's Telethon listener queue and dispatches EVERY message
+    to BOTH engines' `process_one`, then calls `manage(connector)` on both. Only
+    the spot engine owns the listener; the futures engine is headless.
+
+    If `futures_engine` is None (futures disabled or no keys), this degrades to
+    the historical spot-only behavior: drain + spot.process_one + spot.manage.
+
+    A futures-engine error must never kill the spot engine, so the futures
+    dispatch is wrapped in try/except + log.
+    """
+    # Drain the spot engine's listener queue. The futures engine has no listener.
+    if spot_engine._listener is not None:
+        while True:
+            msg = spot_engine._listener.get_message()
+            if msg is None:
+                break
+            spot_engine.process_one(msg, connector)
+            if futures_engine is not None:
+                try:
+                    futures_engine.process_one(msg, connector)
+                except Exception as e:
+                    logger.error("Futures process_one error (spot continues): %s", e)
+
+    # Then manage positions on both engines.
+    spot_engine.manage(connector)
+    if futures_engine is not None:
+        try:
+            futures_engine.manage(connector)
+        except Exception as e:
+            logger.error("Futures manage error (spot continues): %s", e)
+
+
 async def main():
     logging.basicConfig(
         level=getattr(logging, os.environ.get("LOG_LEVEL", "INFO").upper(), logging.INFO),
@@ -169,7 +204,8 @@ async def main():
     else:
         from src.signals.signal_engine import SignalEngine
 
-        engine = SignalEngine(
+        # Spot engine OWNS the single Telethon listener. It is always built.
+        spot_engine = SignalEngine(
             config=signal_cfg,
             btc_regime_fn=lambda: ("RANGING", 0.0, 0.0),
             telegram_send_fn=_telegram_send,
@@ -177,15 +213,68 @@ async def main():
             sell_fn=lambda symbol, amount, price, order_type="MARKET": _signal_order("SELL", symbol, amount, price),
             get_price_fn=lambda symbol: _get_price(symbol),
             get_equity_fn=_get_equity,
+            # own_listener defaults to True, state_suffix defaults to "".
         )
-        engine.start_listener()
+
+        # Futures engine is HEADLESS: own_listener=False, namespaced state. Only
+        # built if both enabled in config AND the futures API keys are present.
+        # Absent keys / disabled => spot-only behavior (today's regression).
+        futures_engine = None
+        fc = config.get("signals_futures", {})
+        fkey = os.environ.get("BINANCE_FUTURES_KEY")
+        fsec = os.environ.get("BINANCE_FUTURES_SECRET")
+        # Two equivalent enable signals: legacy SIGNAL_MODE=futures env, or the
+        # explicit signals_futures.enabled config flag. Both require keys.
+        futures_enabled = (
+            os.environ.get("SIGNAL_MODE") == "futures" or fc.get("enabled", False)
+        )
+        if futures_enabled and fkey and fsec:
+            from src.signals.binance_futures_connector import BinanceFuturesConnector
+
+            futures_connector = BinanceFuturesConnector(
+                fkey,
+                fsec,
+                testnet=fc.get("testnet", True),
+                default_leverage=fc.get("leverage", 3),
+            )
+            futures_engine = SignalEngine(
+                config={**signal_cfg, **fc, "allow_shorts": True},
+                btc_regime_fn=lambda: ("RANGING", 0.0, 0.0),
+                telegram_send_fn=_telegram_send,
+                buy_fn=lambda symbol, amount, price, order_type="MARKET": _signal_order("BUY", symbol, amount, price),
+                sell_fn=lambda symbol, amount, price, order_type="MARKET": _signal_order("SELL", symbol, amount, price),
+                get_price_fn=futures_connector.get_price,
+                get_equity_fn=_get_equity,
+                own_listener=False,
+                state_suffix="_futures",
+                futures_mode=True,
+                futures_connector=futures_connector,
+                leverage=fc.get("leverage", 3),
+            )
+            logger.info("Futures Signal Engine built (headless, state_suffix=_futures)")
+        else:
+            logger.info(
+                "Futures Signal Engine disabled (futures_enabled=%s, keys present=%s) — spot-only",
+                futures_enabled, bool(fkey and fsec),
+            )
+
+        # Only the spot engine owns/starts/stops the listener. The futures
+        # engine never touches the listener — that's what removes the deploy
+        # blocker (a second listener can't authenticate against Telethon).
+        spot_engine.start_listener()
         logger.info("Signal Copy Engine started — listening to Telegram channels")
 
+        # Spot orders route through the Rust engine API. The futures engine
+        # holds its own connector internally (futures_connector), so the
+        # `connector` passed to dispatch_cycle is the spot Rust-API connector:
+        # None here means spot buys/sells use _signal_order (Rust HTTP), as
+        # today; manage(connector) is connector-aware.
+        spot_connector = None
         while True:
             try:
-                engine.tick()
+                dispatch_cycle(spot_engine, futures_engine, spot_connector)
             except Exception as e:
-                logger.error("Signal tick error: %s", e)
+                logger.error("Signal dispatch error: %s", e)
             await asyncio.sleep(1)
 
     # If signal disabled, just keep the command thread alive
