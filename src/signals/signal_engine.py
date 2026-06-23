@@ -76,13 +76,19 @@ class SignalEngine:
                  telegram_send_fn: Optional[Callable] = None,
                  buy_fn: Optional[Callable] = None,
                  sell_fn: Optional[Callable] = None,
-                 get_price_fn: Optional[Callable] = None):
+                 get_price_fn: Optional[Callable] = None,
+                 get_equity_fn: Optional[Callable] = None):
         self._config = config
         self._get_btc_regime = btc_regime_fn
         self._telegram_send = telegram_send_fn
         self._buy_fn = buy_fn
         self._sell_fn = sell_fn
         self._get_price_fn = get_price_fn
+        # Equity source for position sizing (Rust /api/v1/capital in production).
+        # run_signal_listener ticks with connector=None, so without this the
+        # connector-balance branch is dead and sizing falls back to the static
+        # max_capital_usdt regardless of the real portfolio equity.
+        self._get_equity_fn = get_equity_fn
 
         self._enabled = config.get("enabled", False)
         self._audit_mode = config.get("audit_mode", True)
@@ -687,7 +693,21 @@ class SignalEngine:
             return 0.0
 
     def _get_equity(self, connector) -> float:
-        """Get total account equity from connector, with config fallback."""
+        """Get total account equity for position sizing.
+
+        Preference order: injected equity source (Rust /api/v1/capital mark-to-
+        market total_equity in production) → connector balance → config fallback.
+        """
+        # Primary: injected source. run_signal_listener ticks with connector=None,
+        # so this is the path that fires live; without it sizing decouples from
+        # the real portfolio equity and falls back to the static max_capital_usdt.
+        if self._get_equity_fn is not None:
+            try:
+                equity = float(self._get_equity_fn())
+                if equity > 0:
+                    return equity
+            except Exception as e:
+                logger.warning(f"get_equity_fn failed: {e}")
         try:
             if connector is not None:
                 bal = connector.get_balance("USDT")
@@ -697,7 +717,7 @@ class SignalEngine:
             pass
         # Fallback: use max_capital_usdt as total equity for position sizing
         fallback = self._config.get("max_capital_usdt", 1000)
-        logger.info(f"Signal equity fallback: using ${fallback} (connector balance unavailable)")
+        logger.info(f"Signal equity fallback: using ${fallback} (equity source unavailable)")
         return float(fallback)
 
     def _fetch_klines(self, pair: str, limit: int = 250) -> list:

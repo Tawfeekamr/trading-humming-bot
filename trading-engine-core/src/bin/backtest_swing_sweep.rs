@@ -126,6 +126,12 @@ fn apply_cancels(rtp1: &mut Option<RestProtect>, rstop: &mut Option<RestProtect>
 async fn run_cell(
     bars: &[Bar], cfg: &SwingConfig, mode: EntryMode, cost: CostModel, oos_start: usize,
 ) -> (CellResult, CellResult) {
+    // Each cell is an independent backtest that must start at realized_pnl=0.
+    // on_start() reads realized_pnl("swing","SWINGBT") from the shared journal;
+    // without clearing it, prior cells' booked trades persist and current_capital()
+    // collapses → zero-size positions → that cell nets $0 (the "sweep doesn't
+    // change anything" symptom for every pair after the first).
+    let _ = std::fs::remove_file("/tmp/swing_backtest_sweep.db");
     let mut strat = SwingStrategy::new("SWINGBT", cfg, TelegramBot::new("", ""));
     let _ = strat.on_start().await;
     let mut res = CellResult::default();
@@ -327,7 +333,13 @@ async fn run_cell(
 
 #[tokio::main]
 async fn main() {
-    std::env::set_var("SWING_JOURNAL_PATH", "/tmp/swing_backtest_sweep.db");
+    // Isolate the journal so on_start()'s realized_pnl("swing","SWINGBT") reads 0,
+    // not the accumulated PnL of the shared default data/trades.db. Without this,
+    // current_capital() = config.capital + realized_pnl starts at a stale value
+    // and position sizing collapses to zero → every cell nets $0.00.
+    // NOTE: trade_journal reads TRADES_JOURNAL_PATH (strategy/trade_journal.rs),
+    // not SWING_JOURNAL_PATH — the old name was silently ignored.
+    std::env::set_var("TRADES_JOURNAL_PATH", "/tmp/swing_backtest_sweep.db");
     let _ = std::fs::remove_file("/tmp/swing_backtest_sweep.db");
 
     let pairs = ["BNBUSDT", "ETHUSDT", "DOGEUSDT", "XRPUSDT"];
