@@ -1,5 +1,5 @@
 use anyhow::Result;
-use chrono::Utc;
+use chrono::{DateTime, Duration, Utc};
 use rusqlite::Connection;
 use rusqlite_migration::{M, Migrations};
 use std::path::PathBuf;
@@ -16,6 +16,10 @@ use tracing::{error, info};
 /// engine constructs its own handle; they all hit data/trades.db.
 pub struct UnifiedTradeJournal {
     conn: Mutex<Connection>,
+    /// Directory holding the unified db — also where the per-engine journals
+    /// live. Backfill reads them as siblings so a test (or alt deploy) that
+    /// points TRADES_JOURNAL_PATH at a temp dir gets self-consistent sources.
+    data_dir: PathBuf,
 }
 
 fn migrations() -> Migrations<'static> {
@@ -46,15 +50,25 @@ impl UnifiedTradeJournal {
     pub fn new() -> Result<Self> {
         let path = std::env::var("TRADES_JOURNAL_PATH")
             .unwrap_or_else(|_| "data/trades.db".to_string());
-        let p = PathBuf::from(&path);
-        if let Some(parent) = p.parent() {
-            if !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent)?;
-            }
+        Self::new_at(PathBuf::from(path))
+    }
+
+    /// Construct pointing at an explicit db path. The per-engine journals are
+    /// resolved as siblings (same directory), so this is all a test needs to
+    /// isolate the unified journal + its backfill sources in a temp dir without
+    /// touching process-global env vars.
+    pub fn new_at(path: PathBuf) -> Result<Self> {
+        let data_dir = path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from("."));
+        if !data_dir.as_os_str().is_empty() {
+            std::fs::create_dir_all(&data_dir)?;
         }
-        let conn = Connection::open(&p)?;
+        let conn = Connection::open(&path)?;
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;")?;
-        let journal = Self { conn: Mutex::new(conn) };
+        let journal = Self { conn: Mutex::new(conn), data_dir };
         journal.init_db()?;
         Ok(journal)
     }
@@ -109,17 +123,50 @@ impl UnifiedTradeJournal {
         }
     }
 
+    /// True if a live (is_backfilled=0) row exists for `engine`+`pair` within
+    /// ±60s of `ts` — i.e. the close was already written by `log_unified()` and
+    /// the journal row we're about to backfill is a duplicate.
+    ///
+    /// Why a window and not an exact match: the live log stamps `Utc::now()` at
+    /// write time while the per-engine journal stores the close's own timestamp,
+    /// so the two are a few ms apart (and net-vs-raw PnL differs too, defeating
+    /// the `UNIQUE(engine,timestamp,pair,pnl)` index). In `signal/engine.rs:
+    /// record_close` the journal write and the `log_unified` call are
+    /// back-to-back with no await between them, so 60s is a ~10,000x margin.
+    /// Returns false on an unparseable timestamp (safe default: backfill it).
+    fn live_log_exists(conn: &Connection, engine: &str, pair: &str, ts: &str) -> bool {
+        let Some(t) = DateTime::parse_from_rfc3339(ts)
+            .ok()
+            .map(|d| d.with_timezone(&Utc))
+        else {
+            return false;
+        };
+        let lo = (t - Duration::seconds(60)).to_rfc3339();
+        let hi = (t + Duration::seconds(60)).to_rfc3339();
+        conn.query_row(
+            "SELECT 1 FROM trades
+             WHERE engine = ?1 AND pair = ?2 AND is_backfilled = 0
+               AND timestamp BETWEEN ?3 AND ?4
+             LIMIT 1",
+            rusqlite::params![engine, pair, lo, hi],
+            |_| Ok(true),
+        )
+        .unwrap_or(false)
+    }
+
     /// Rebuild backfilled rows from the per-engine journals each startup. Direct
     /// writes from engines (is_backfilled=0) are preserved. Copies the real
     /// exit_reason so /trades shows [tp3], [stop_loss], etc. instead of [backfilled].
     pub fn backfill_from_engine_journals(&self) -> Result<usize> {
-        // (engine, db, table, pnl_col, pair_col, reason_col, optional WHERE)
+        // (engine, db_file, table, pnl_col, pair_col, reason_col, optional WHERE).
+        // db_file is a bare filename resolved under self.data_dir (sibling of the
+        // unified db) — see new_at().
         let sources: &[(&str, &str, &str, &str, &str, &str, &str)] = &[
-            ("grid",   "data/grid_journal.db",            "grid_trades",   "realized_pnl", "pair",   "exit_reason", ""),
-            ("trend",  "data/trend_journal.db",           "trend_trades",  "pnl",          "pair",   "exit_reason", ""),
-            ("swing",  "data/swing_journal.db",           "swing_trades",  "pnl",          "pair",   "exit_reason", ""),
-            ("mr",     "data/mean_reversion_journal.db",  "mr_trades",     "pnl",          "pair",   "exit_reason", ""),
-            ("signal", "data/signal_journal.db",          "signal_trades", "realized_pnl", "symbol", "exit_reason", "WHERE action LIKE 'CLOSE_%'"),
+            ("grid",   "grid_journal.db",            "grid_trades",   "realized_pnl", "pair",   "exit_reason", ""),
+            ("trend",  "trend_journal.db",           "trend_trades",  "pnl",          "pair",   "exit_reason", ""),
+            ("swing",  "swing_journal.db",           "swing_trades",  "pnl",          "pair",   "exit_reason", ""),
+            ("mr",     "mean_reversion_journal.db",  "mr_trades",     "pnl",          "pair",   "exit_reason", ""),
+            ("signal", "signal_journal.db",          "signal_trades", "realized_pnl", "symbol", "exit_reason", "WHERE action LIKE 'CLOSE_%'"),
         ];
         let mut total = 0usize;
         let conn = self.conn.lock().unwrap();
@@ -133,9 +180,10 @@ impl UnifiedTradeJournal {
             "DELETE FROM trades WHERE engine = 'mr' AND timestamp LIKE '2026-06-15T22:39%'",
             [],
         );
-        for (engine, db, tbl, col, pair_col, reason_col, where_clause) in sources {
-            if !std::path::Path::new(db).exists() { continue; }
-            match Connection::open(db) {
+        for (engine, db_file, tbl, col, pair_col, reason_col, where_clause) in sources {
+            let db = self.data_dir.join(db_file);
+            if !db.exists() { continue; }
+            match Connection::open(&db) {
                 Ok(src) => {
                     // SELECT timestamp, pair, pnl, exit_reason — with graceful fallback
                     // if the reason column doesn't exist (uses 'fill' as default).
@@ -149,6 +197,10 @@ impl UnifiedTradeJournal {
                     if let Ok(rows) = rows {
                         for row in rows.flatten() {
                             let (ts, pair, pnl, reason) = row;
+                            // Skip closes already written live — see live_log_exists.
+                            if Self::live_log_exists(&conn, engine, &pair, &ts) {
+                                continue;
+                            }
                             let _ = conn.execute(
                                 "INSERT OR IGNORE INTO trades (timestamp, engine, pair, pnl, exit_reason, is_backfilled) VALUES (?1, ?2, ?3, ?4, ?5, 1)",
                                 rusqlite::params![ts, engine, pair, pnl, reason],
@@ -212,5 +264,107 @@ pub fn realized_pnl(engine: &str, pair: &str) -> f64 {
             ).unwrap_or(0.0)
         }
         Err(_) => 0.0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a signal_journal.db (sibling of the unified db) with the given closes.
+    /// Mirrors the columns backfill reads: timestamp, symbol, action, realized_pnl,
+    /// exit_reason.
+    fn make_signal_journal(dir: &std::path::Path, rows: &[(String, String, f64)]) {
+        let db = dir.join("signal_journal.db");
+        let c = Connection::open(&db).unwrap();
+        c.execute_batch(
+            "CREATE TABLE IF NOT EXISTS signal_trades (
+                id INTEGER PRIMARY KEY, timestamp TEXT, symbol TEXT, action TEXT,
+                realized_pnl REAL, exit_reason TEXT)",
+        )
+        .unwrap();
+        for (ts, sym, pnl) in rows {
+            c.execute(
+                "INSERT INTO signal_trades (timestamp, symbol, action, realized_pnl, exit_reason)
+                 VALUES (?1, ?2, 'CLOSE_stop_loss', ?3, 'stop_loss')",
+                rusqlite::params![ts, sym, pnl],
+            )
+            .unwrap();
+        }
+    }
+
+    fn count(j: &UnifiedTradeJournal, engine: &str, pair: &str) -> i64 {
+        let conn = j.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT COUNT(*) FROM trades WHERE engine=?1 AND pair=?2",
+            rusqlite::params![engine, pair],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap()
+    }
+
+    /// The bug: record_close() live-logs a signal close (is_backfilled=0, net PnL)
+    /// AND writes signal_journal.db, which backfill then re-imports (raw PnL) → the
+    /// same close appears twice. Backfill must skip a close already live-logged.
+    #[test]
+    fn backfill_skips_signal_close_already_live_logged() {
+        let tmp = tempfile::tempdir().unwrap();
+        let j = UnifiedTradeJournal::new_at(tmp.path().join("trades.db")).unwrap();
+
+        // 1. Live-log the close exactly as signal/engine.rs:record_close does.
+        j.log_trade(
+            "signal", "ADA-USDT", Some("BUY"),
+            Some(0.65), Some(0.62), Some(5830.9), -84.716,
+            Some("stop_loss"), None,
+        );
+        // 2. Same close is also in the per-engine journal (raw PnL, ~ms apart).
+        make_signal_journal(tmp.path(), &[(Utc::now().to_rfc3339(), "ADA-USDT".into(), -82.8)]);
+
+        j.backfill_from_engine_journals().unwrap();
+
+        // Must be ONE row — the authoritative live log — not two.
+        assert_eq!(count(&j, "signal", "ADA-USDT"), 1);
+    }
+
+    /// Backfill still recovers a close that was never live-logged (e.g. a crash
+    /// between the journal write and log_unified). The dedup must not be so eager
+    /// that it drops legitimate recovery rows.
+    #[test]
+    fn backfill_recovers_signal_close_when_not_live_logged() {
+        let tmp = tempfile::tempdir().unwrap();
+        let j = UnifiedTradeJournal::new_at(tmp.path().join("trades.db")).unwrap();
+
+        // No live row — only the journal has this close.
+        make_signal_journal(tmp.path(), &[(Utc::now().to_rfc3339(), "ADA-USDT".into(), -82.8)]);
+
+        j.backfill_from_engine_journals().unwrap();
+
+        assert_eq!(count(&j, "signal", "ADA-USDT"), 1);
+    }
+
+    /// The dedup window is bounded: a live log from 5 minutes ago is a DIFFERENT
+    /// (earlier) trade, so a new journal close must still be backfilled.
+    #[test]
+    fn backfill_inserts_when_live_log_is_outside_window() {
+        let tmp = tempfile::tempdir().unwrap();
+        let j = UnifiedTradeJournal::new_at(tmp.path().join("trades.db")).unwrap();
+
+        // An OLD live log (5 min ago) — distinct from the new close.
+        let old_ts = (Utc::now() - Duration::minutes(5)).to_rfc3339();
+        {
+            let conn = j.conn.lock().unwrap();
+            conn.execute(
+                "INSERT INTO trades (timestamp, engine, pair, pnl, exit_reason, is_backfilled)
+                 VALUES (?1, 'signal', 'ADA-USDT', -10.0, 'stop_loss', 0)",
+                rusqlite::params![old_ts],
+            )
+            .unwrap();
+        }
+        make_signal_journal(tmp.path(), &[(Utc::now().to_rfc3339(), "ADA-USDT".into(), -82.8)]);
+
+        j.backfill_from_engine_journals().unwrap();
+
+        // Two distinct trades: the old live log + the recovered new close.
+        assert_eq!(count(&j, "signal", "ADA-USDT"), 2);
     }
 }
