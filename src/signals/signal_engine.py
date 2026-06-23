@@ -81,7 +81,8 @@ class SignalEngine:
                  futures_mode: bool = False,
                  futures_connector=None,
                  leverage: int = 3,
-                 state_suffix: str = ""):
+                 state_suffix: str = "",
+                 own_listener: bool = True):
         self._config = config
         self._get_btc_regime = btc_regime_fn
         self._telegram_send = telegram_send_fn
@@ -97,6 +98,9 @@ class SignalEngine:
         self._futures_mode = futures_mode
         self._futures_connector = futures_connector
         self._leverage = leverage
+        # Headless mode: when False, no ChannelListener is created and the engine
+        # is driven by an external coordinator via process_one/manage.
+        self._own_listener = own_listener
 
         self._enabled = config.get("enabled", False)
         self._audit_mode = config.get("audit_mode", True)
@@ -122,12 +126,15 @@ class SignalEngine:
         # Sub-components
         channel_ids = [int(c.strip()) for c in
                        os.environ.get("SIGNAL_CHANNEL_IDS", "").split(",") if c.strip()]
-        self._listener = ChannelListener(
-            api_id=int(os.environ.get("TELEGRAM_API_ID", "0")),
-            api_hash=os.environ.get("TELEGRAM_API_HASH", ""),
-            channel_ids=channel_ids,
-            session_name=config.get("session_name", "signal_listener"),
-        )
+        if self._own_listener:
+            self._listener = ChannelListener(
+                api_id=int(os.environ.get("TELEGRAM_API_ID", "0")),
+                api_hash=os.environ.get("TELEGRAM_API_HASH", ""),
+                channel_ids=channel_ids,
+                session_name=config.get("session_name", "signal_listener"),
+            )
+        else:
+            self._listener = None
         self._parser = SignalParser(
             api_key=os.environ.get("DEEPSEEK_API_KEY", ""),
             model=config.get("ai_model", "deepseek-chat"),
@@ -156,11 +163,23 @@ class SignalEngine:
 
     def start_listener(self):
         """Start Telethon listener in background thread."""
+        if not self._own_listener:
+            return
         if self._enabled:
             self._listener.start()
 
     def stop_listener(self):
+        if not self._own_listener:
+            return
         self._listener.stop()
+
+    def process_one(self, msg, connector):
+        """Drive a headless engine: route one message through the full pipeline."""
+        return self._process_message(msg, connector)
+
+    def manage(self, connector):
+        """Drive a headless engine: run position management once."""
+        return self._manage_positions(connector)
 
     def tick(self, connector=None):
         """Called from on_tick(). Processes queued messages and manages positions."""
@@ -172,12 +191,13 @@ class SignalEngine:
         if time.time() - self._last_pair_refresh > 3600:
             self._refresh_available_pairs()
 
-        # Process queued messages
-        while True:
-            msg = self._listener.get_message()
-            if msg is None:
-                break
-            self._process_message(msg, connector)
+        # Process queued messages (headless engines have no listener to drain)
+        if self._listener is not None:
+            while True:
+                msg = self._listener.get_message()
+                if msg is None:
+                    break
+                self._process_message(msg, connector)
 
         # Manage open positions
         if connector:
