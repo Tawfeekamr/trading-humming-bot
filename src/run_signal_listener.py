@@ -258,6 +258,13 @@ async def main():
                 futures_enabled, bool(fkey and fsec),
             )
 
+        # Wire the live engines into the Telegram command handler so the
+        # control commands (/signal_pause, /signal_resume, /signal_pnl,
+        # /signal_inject, /signal_close) can drive the spot engine. Without
+        # this they reply 'Signal engine not configured.'
+        handler.attach_signal_engines(spot_engine, futures_engine)
+        logger.info("Signal engines attached to Telegram command handler")
+
         # Only the spot engine owns/starts/stops the listener. The futures
         # engine never touches the listener — that's what removes the deploy
         # blocker (a second listener can't authenticate against Telethon).
