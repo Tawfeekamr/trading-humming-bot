@@ -104,6 +104,40 @@ class TelegramCommandHandler:
 
         logger.info(f"Telegram commands initializing with chat_id={self._chat_id}")
 
+    def attach_signal_engines(self, spot_engine=None, futures_engine=None):
+        """Hand the live signal engines to the handler so the control commands
+        (/signal_pause, /signal_resume, /signal_pnl, /signal_inject,
+        /signal_close) can drive them.
+
+        The headless signal-listener builds the handler BEFORE the engines
+        exist (the engines need config + keys), so the wiring happens here,
+        after construction. Without this call those commands reply
+        'Signal engine not configured.' The legacy Hummingbot script set
+        strategy._signal_engine directly; the headless migration dropped it.
+        """
+        if spot_engine is not None:
+            self.strategy._signal_engine = spot_engine
+        if futures_engine is not None:
+            self.strategy._futures_engine = futures_engine
+
+    def _startup_message(self) -> str:
+        """Bot-online ping listing every available command. Kept in sync with
+        /help — both must advertise the full command set, including futures."""
+        return (
+            "📡 <b>Telegram Command Handler Online</b>\n"
+            "•••\n"
+            "<b>System:</b> /status /price /logs /errors /readiness\n"
+            "<b>Overview:</b> /bots /pnl_all /trades /help\n"
+            "<b>Capital:</b> /capital\n"
+            "<b>Grid:</b> /grid_status\n"
+            "<b>Trend:</b> /trend_status /trend_pnl /trend_history\n"
+            "<b>Swing:</b> /swing_status\n"
+            "<b>Signal:</b> /signal_status /signal_pnl /signal_history "
+            "/signal_channels /signal_pause /signal_resume /signal_close /signal_inject\n"
+            "<b>Futures:</b> /futures_status /futures_pnl\n"
+            "<b>MR:</b> /mean_status /mean_pnl\n"
+        )
+
     # ── HTTP helpers (plain http.client, no asyncio) ────────────────
 
     def _tg_get(self, path, params=None, timeout=10):
@@ -151,21 +185,9 @@ class TelegramCommandHandler:
                 resp = self._tg_get("deleteWebhook", params={"drop_pending_updates": "true"}, timeout=10)
                 _log(f"[INFO] Telegram webhook cleared: {resp}")
 
-                ping_text = (
-                    "📡 <b>Telegram Command Handler Online</b>\n"
-                    "•••\n"
-                    "<b>System:</b> /status /price /logs /errors /readiness\n"
-                    "<b>Overview:</b> /bots /pnl_all /trades\n"
-                    "<b>Capital:</b> /capital\n"
-                    "<b>Grid:</b> /grid_status\n"
-                    "<b>Trend:</b> /trend_status /trend_pnl /trend_history\n"
-                    "<b>Swing:</b> /swing_status\n"
-                    "<b>Signal:</b> /signal_status /signal_channels /signal_history /signal_pause /signal_resume\n"
-                    "<b>MR:</b> /mean_status /mean_pnl\n"
-                )
                 self._tg_post("sendMessage", data={
                     "chat_id": self._chat_id,
-                    "text": ping_text,
+                    "text": self._startup_message(),
                     "parse_mode": "HTML",
                 })
                 _log("[INFO] Telegram startup ping sent")
@@ -230,7 +252,7 @@ class TelegramCommandHandler:
             "swing_status": self._cmd_swing_status,
             "swing_pnl": self._cmd_swing_status,
             "signal_status": self._cmd_signal_status,
-            "signal_pnl": self._cmd_signal_status,
+            "signal_pnl": self._cmd_signal_pnl,
             "futures_status": self._cmd_futures_status,
             "futures_pnl": self._cmd_futures_pnl,
             "mean_status": self._cmd_mean_status,
@@ -242,6 +264,7 @@ class TelegramCommandHandler:
             "signal_pause": self._cmd_signal_pause,
             "signal_resume": self._cmd_signal_resume,
             "signal_inject": self._cmd_signal_inject,
+            "signal_close": self._cmd_signal_close,
             # Trend history
             "trend_history": self._cmd_trend_history,
             "trend_pnl": self._cmd_trend_status,
@@ -1452,6 +1475,10 @@ class TelegramCommandHandler:
             "/signal_resume — Resume signal execution\n"
             "/signal_close &lt;PAIR&gt; — Close a signal position\n"
             "/signal_inject &lt;text&gt; — Manually inject a signal for execution\n"
+            "•••\n"
+            "<b>Futures:</b>\n"
+            "/futures_status — Futures engine status & positions\n"
+            "/futures_pnl — Futures P&L report\n"
             "•••\n"
             "<b>Mean-Reversion:</b>\n"
             "/mean_status — Mean-reversion engine status\n"

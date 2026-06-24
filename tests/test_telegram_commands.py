@@ -426,3 +426,119 @@ class TestRecentTrades:
         reply = _replied(u)
         assert "19.82" in reply  # real trade shown
         assert reply.count("StopLoss") == 0, f"artifact should be hidden: {reply}"
+
+
+# ── Signal control-command wiring (Bug: "Signal engine not configured") ─────
+#
+# Root cause: in the headless signal-listener (run_signal_listener.py) the
+# TelegramCommandHandler's strategy object never receives the live SignalEngine,
+# so /signal_pause /signal_resume /signal_pnl /signal_inject /signal_close all
+# bail with "Signal engine not configured." The legacy Hummingbot script wired
+# it; the headless migration dropped the wiring. These tests pin the contract:
+# once the engine is attached, the control commands must actually drive it, the
+# registry must route /signal_pnl to the P&L handler (not status), /signal_close
+# must be registered, and the menus must advertise the futures commands.
+
+class TestSignalControlWiring:
+    def _engine_with_journal(self):
+        journal = MagicMock()
+        journal.summary.return_value = {"total_trades": 3, "total_pnl": 12.5, "win_rate": 66.0}
+        journal.summary_by_channel.return_value = {}
+        engine = MagicMock()
+        engine._journal = journal
+        return engine
+
+    def test_attach_signal_engines_method_exists_and_stores_engine(self, tmp_path):
+        """attach_signal_engines is the seam the listener uses to hand the live
+        engine to the handler. Without it every control command is dead."""
+        h = _handler(tmp_path)
+        engine = self._engine_with_journal()
+        h.attach_signal_engines(engine)
+        assert getattr(h.strategy, "_signal_engine", None) is engine
+
+    def test_pause_calls_engine_when_attached(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        h = _handler(tmp_path)
+        engine = self._engine_with_journal()
+        h.attach_signal_engines(engine)
+        u = _mock_update()
+        h._cmd_signal_pause(u, None)
+        engine.pause.assert_called_once()
+        assert "paused" in _replied(u).lower()
+
+    def test_resume_calls_engine_when_attached(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        h = _handler(tmp_path)
+        engine = self._engine_with_journal()
+        h.attach_signal_engines(engine)
+        u = _mock_update()
+        h._cmd_signal_resume(u, None)
+        engine.resume.assert_called_once()
+        assert "resum" in _replied(u).lower()
+
+    def test_signal_pnl_reads_journal_when_attached(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        h = _handler(tmp_path)
+        engine = self._engine_with_journal()
+        h.attach_signal_engines(engine)
+        u = _mock_update()
+        h._cmd_signal_pnl(u, None)
+        text = _replied(u)
+        assert "SIGNAL P&L" in text
+        engine._journal.summary.assert_called()
+
+    def test_signal_pnl_does_not_say_not_configured_when_attached(self, tmp_path, monkeypatch):
+        """Regression guard: the old failure mode was 'Signal engine not configured.'"""
+        monkeypatch.chdir(tmp_path)
+        h = _handler(tmp_path)
+        h.attach_signal_engines(self._engine_with_journal())
+        u = _mock_update()
+        h._cmd_signal_pnl(u, None)
+        assert "not configured" not in _replied(u).lower()
+
+
+class TestRegistryCorrectness:
+    def test_signal_pnl_routes_to_pnl_handler(self, tmp_path):
+        """/signal_pnl must run the P&L handler, NOT the status handler."""
+        h = _handler(tmp_path)
+        assert h._commands["signal_pnl"] == h._cmd_signal_pnl
+
+    def test_signal_close_is_registered(self, tmp_path):
+        """/signal_close was missing from the registry entirely (silently ignored)."""
+        h = _handler(tmp_path)
+        assert h._commands["signal_close"] == h._cmd_signal_close
+
+    def test_futures_commands_registered(self, tmp_path):
+        h = _handler(tmp_path)
+        assert h._commands["futures_status"] == h._cmd_futures_status
+        assert h._commands["futures_pnl"] == h._cmd_futures_pnl
+
+
+class TestMenusListFutures:
+    def test_help_lists_futures_commands(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        h = _handler(tmp_path)
+        u = _mock_update()
+        h._cmd_help(u, None)
+        text = _replied(u)
+        assert "/futures_status" in text
+        assert "/futures_pnl" in text
+
+    def test_help_lists_all_signal_commands(self, tmp_path, monkeypatch):
+        """All five signal control commands must be discoverable in /help."""
+        monkeypatch.chdir(tmp_path)
+        h = _handler(tmp_path)
+        u = _mock_update()
+        h._cmd_help(u, None)
+        text = _replied(u)
+        for cmd in ("/signal_status", "/signal_pnl", "/signal_history",
+                    "/signal_pause", "/signal_resume", "/signal_close",
+                    "/signal_inject", "/signal_channels"):
+            assert cmd in text, f"{cmd} missing from /help"
+
+    def test_startup_message_lists_futures(self, tmp_path):
+        """The bot-online ping must advertise the futures commands too."""
+        h = _handler(tmp_path)
+        msg = h._startup_message()
+        assert "/futures_status" in msg
+        assert "/futures_pnl" in msg

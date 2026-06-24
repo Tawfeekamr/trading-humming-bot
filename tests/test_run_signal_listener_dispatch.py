@@ -103,3 +103,22 @@ def test_dispatch_cycle_spot_only_when_futures_is_none():
 
     assert spot.processed == [(canned_msg, object())] or len(spot.processed) == 1
     assert spot.managed == 1
+
+
+def test_main_wires_signal_engine_into_telegram_handler():
+    """Guard: main() must attach the spot engine to the Telegram handler.
+
+    Without this call, every signal control command (/signal_pause,
+    /signal_resume, /signal_pnl, /signal_inject, /signal_close) replies
+    'Signal engine not configured.' main() is async + network-bound so it
+    can't be driven directly here; instead we assert the wiring call is
+    present in main's source. This is an integration-glue guard, deliberately
+    string-based — if the call is removed this test fails loudly.
+    """
+    import inspect
+
+    source = inspect.getsource(rsl.main)
+    assert "attach_signal_engines" in source, (
+        "run_signal_listener.main() must call handler.attach_signal_engines(...) "
+        "or all signal control commands stay dead ('Signal engine not configured.')"
+    )
