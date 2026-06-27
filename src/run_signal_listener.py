@@ -12,6 +12,8 @@ import time
 import yaml
 from dotenv import load_dotenv
 
+from src.signals.signal_engine import SignalEngine
+
 load_dotenv()
 
 logger = logging.getLogger(__name__)
@@ -159,6 +161,37 @@ def dispatch_cycle(spot_engine, futures_engine, connector):
             logger.error("Futures manage error (spot continues): %s", e)
 
 
+def _build_futures_engine(signal_cfg: dict, fc: dict):
+    """Build the headless PAPER futures engine, or None if disabled.
+
+    Extracted from main() so the wiring (PaperFuturesConnector, no Binance keys)
+    is unit-testable without starting the Telethon listener. Paper-only: Gate.io
+    perp pricing, synthetic orders, no real money.
+    """
+    futures_enabled = (
+        os.environ.get("SIGNAL_MODE") == "futures" or fc.get("enabled", False)
+    )
+    if not futures_enabled:
+        return None
+    from src.signals.paper_futures_connector import PaperFuturesConnector
+
+    futures_connector = PaperFuturesConnector(default_leverage=fc.get("leverage", 3))
+    return SignalEngine(
+        config={**signal_cfg, **fc, "allow_shorts": True},
+        btc_regime_fn=lambda: ("RANGING", 0.0, 0.0),
+        telegram_send_fn=_telegram_send,
+        buy_fn=lambda symbol, amount, price, order_type="MARKET": _signal_order("BUY", symbol, amount, price),
+        sell_fn=lambda symbol, amount, price, order_type="MARKET": _signal_order("SELL", symbol, amount, price),
+        get_price_fn=futures_connector.get_price,
+        get_equity_fn=_get_equity,
+        own_listener=False,
+        state_suffix="_futures",
+        futures_mode=True,
+        futures_connector=futures_connector,
+        leverage=fc.get("leverage", 3),
+    )
+
+
 async def main():
     logging.basicConfig(
         level=getattr(logging, os.environ.get("LOG_LEVEL", "INFO").upper(), logging.INFO),
@@ -216,47 +249,17 @@ async def main():
             # own_listener defaults to True, state_suffix defaults to "".
         )
 
-        # Futures engine is HEADLESS: own_listener=False, namespaced state. Only
-        # built if both enabled in config AND the futures API keys are present.
-        # Absent keys / disabled => spot-only behavior (today's regression).
-        futures_engine = None
+        # Futures engine is HEADLESS and PAPER: own_listener=False, namespaced
+        # state, Gate.io perp pricing, synthetic orders, no real money. Built
+        # from the config flag alone — no Binance keys required (the testnet
+        # path returned -1121 and is retired).
         fc = config.get("signals_futures", {})
-        fkey = os.environ.get("BINANCE_FUTURES_KEY")
-        fsec = os.environ.get("BINANCE_FUTURES_SECRET")
-        # Two equivalent enable signals: legacy SIGNAL_MODE=futures env, or the
-        # explicit signals_futures.enabled config flag. Both require keys.
-        futures_enabled = (
-            os.environ.get("SIGNAL_MODE") == "futures" or fc.get("enabled", False)
-        )
-        if futures_enabled and fkey and fsec:
-            from src.signals.binance_futures_connector import BinanceFuturesConnector
-
-            futures_connector = BinanceFuturesConnector(
-                fkey,
-                fsec,
-                testnet=fc.get("testnet", True),
-                default_leverage=fc.get("leverage", 3),
-            )
-            futures_engine = SignalEngine(
-                config={**signal_cfg, **fc, "allow_shorts": True},
-                btc_regime_fn=lambda: ("RANGING", 0.0, 0.0),
-                telegram_send_fn=_telegram_send,
-                buy_fn=lambda symbol, amount, price, order_type="MARKET": _signal_order("BUY", symbol, amount, price),
-                sell_fn=lambda symbol, amount, price, order_type="MARKET": _signal_order("SELL", symbol, amount, price),
-                get_price_fn=futures_connector.get_price,
-                get_equity_fn=_get_equity,
-                own_listener=False,
-                state_suffix="_futures",
-                futures_mode=True,
-                futures_connector=futures_connector,
-                leverage=fc.get("leverage", 3),
-            )
-            logger.info("Futures Signal Engine built (headless, state_suffix=_futures)")
+        futures_engine = _build_futures_engine(signal_cfg, fc)
+        if futures_engine is not None:
+            logger.info("Futures Signal Engine built (paper, Gate.io perp, state_suffix=_futures)")
         else:
-            logger.info(
-                "Futures Signal Engine disabled (futures_enabled=%s, keys present=%s) — spot-only",
-                futures_enabled, bool(fkey and fsec),
-            )
+            logger.info("Futures Signal Engine disabled (futures_enabled=%s) — spot-only",
+                        os.environ.get("SIGNAL_MODE") == "futures" or fc.get("enabled", False))
 
         # Wire the live engines into the Telegram command handler so the
         # control commands (/signal_pause, /signal_resume, /signal_pnl,

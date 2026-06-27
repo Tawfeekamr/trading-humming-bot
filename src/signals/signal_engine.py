@@ -776,6 +776,11 @@ class SignalEngine:
                     return float(price_obj)
         except Exception:
             pass
+        # Futures mode: the price fn is the Gate.io PERP feed. A perp failure must
+        # NOT silently fall through to the Gate SPOT ticker (it would mis-price a
+        # leveraged sim). Return 0 so the caller's <=0 skip path fires cleanly.
+        if self._futures_mode:
+            return 0
         # Fallback: fetch from Gate.io REST API for any unregistered pair
         try:
             gate_pair = symbol.replace("-", "_")

@@ -230,12 +230,13 @@ swing:
 # whole file (serde ignores unknown top-level keys; this is Python-only config).
 signals_futures:
   enabled: true
-  testnet: true
+  exchange: gate_io_paper_futures   # paper sim priced off Gate.io USDT-perp (binance testnet retired — fapi -1121)
+  testnet: false                     # paper has no testnet; field kept for compat reads
   leverage: 3
   margin_type: isolated
   allow_shorts: true
   per_trade_risk_pct: 1.0   # % of budget risked per trade (guard reads per_trade_risk_pct, NOT risk_pct)
   max_positions: 2
-  max_capital_usdt: 10000    # 10K testnet budget (matches spot signal engine)
+  max_capital_usdt: 10000    # 10K paper budget (matches spot signal engine)
   pairs: []
   enabled_pairs: []
