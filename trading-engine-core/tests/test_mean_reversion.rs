@@ -1,5 +1,5 @@
 use trading_engine_core::config::{ClassifierCfg, MeanReversionConfig};
-use trading_engine_core::connector::types::{Fill, OrderBook};
+use trading_engine_core::connector::types::{Fill, OrderBook, OrderTypeReq};
 use trading_engine_core::models::order::OrderSide;
 use trading_engine_core::notifications::TelegramBot;
 use trading_engine_core::strategy::mean_reversion::MeanReversionStrategy;
@@ -93,12 +93,24 @@ async fn position_holds_then_exits_at_take_profit_via_on_tick() {
     }
     // Flush: price drops 6% in the window -> entry triggers.
     let entry = s.on_tick(&make_tick(94.0, 10.0)).await.unwrap();
-    assert_eq!(entry.len(), 1, "flush should trigger one entry buy");
-    assert_eq!(entry[0].side, OrderSide::Buy);
+    // Entry = buy + a protective StopMarket backstop at -6% (mid*0.94). The
+    // backstop is a STOP (triggers only on a -6% drop via paper.rs), NOT a
+    // sell-limit, so it does not re-introduce the instant-close bug that the
+    // on_fill-entry test guards against.
+    assert_eq!(entry.len(), 2, "flush should trigger entry buy + protective stop backstop");
+    let buy = entry.iter().find(|o| o.side == OrderSide::Buy).expect("entry buy");
+    let stop = entry.iter().find(|o| o.side == OrderSide::Sell).expect("protective stop");
+    assert!(stop.reduce_only, "protective stop must be reduce_only");
+    match &stop.order_type {
+        OrderTypeReq::StopMarket { stop_price } => {
+            assert!((stop_price - 94.0 * 0.94).abs() < 1e-6, "stop at -6% (mid*0.94)");
+        }
+        other => panic!("expected StopMarket backstop, got {:?}", other),
+    }
 
     // Entry fills — must NOT spawn a protective backstop.
     let after_fill = s
-        .on_fill(&make_fill("mr_entry_tp", OrderSide::Buy, 94.0, entry[0].quantity))
+        .on_fill(&make_fill("mr_entry_tp", OrderSide::Buy, 94.0, buy.quantity))
         .await
         .unwrap();
     assert!(after_fill.is_empty(), "no backstop after entry fill");
@@ -126,7 +138,7 @@ async fn position_exits_at_layer2_stop_loss() {
         s.on_tick(&make_tick(100.0, 10.0)).await.unwrap();
     }
     let entry = s.on_tick(&make_tick(94.0, 10.0)).await.unwrap();
-    assert_eq!(entry.len(), 1);
+    assert_eq!(entry.len(), 2, "entry buy + protective stop backstop");
     s.on_fill(&make_fill("mr_entry_sl", OrderSide::Buy, 94.0, entry[0].quantity))
         .await
         .unwrap();

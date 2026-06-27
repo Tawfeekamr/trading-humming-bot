@@ -191,12 +191,24 @@ impl Strategy for MeanReversionStrategy {
             
             // Extreme drop trigger (-5% in 30s)
             if drop_pct > self.config.drop_thr {
+                let lowest_price = self.tick_history.iter().map(|t| t.price).fold(f64::INFINITY, f64::min);
+                let lowest_bid_depth = self.tick_history.iter().map(|t| t.bid_depth).fold(f64::INFINITY, f64::min);
+                
+                let retrace_frac = if oldest.price > lowest_price {
+                    (mid - lowest_price) / (oldest.price - lowest_price)
+                } else {
+                    0.0
+                };
+                
+                let sell_flow_decay = (drop_pct / 30.0) * 100.0;
+                let liq_cascade_score = sell_flow_decay;
+                
                 let sig = ReversionSignal {
-                    retrace_frac: 0.8,
-                    bid_refill_ratio: bid_depth / (oldest.bid_depth + 0.001),
-                    sell_flow_decay: 0.8,
-                    liq_cascade_score: 0.8,
-                    cross_market_corr: 0.2, // low correlation is good
+                    retrace_frac,
+                    bid_refill_ratio: bid_depth / (lowest_bid_depth + 0.001),
+                    sell_flow_decay,
+                    liq_cascade_score,
+                    cross_market_corr: if ctx.regime == Some(MarketRegime::Danger) { 0.8 } else { 0.2 },
                 };
 
                 if let Verdict::Trade { size_mult } = classify(&sig, &self.config.classifier) {
@@ -231,12 +243,24 @@ impl Strategy for MeanReversionStrategy {
                     orders.push(OrderRequest {
                         symbol: self.pair.replace("-", ""),
                         side: OrderSide::Buy,
-                        order_type: OrderTypeReq::Market,
-                        price: None,
+                        order_type: OrderTypeReq::Limit,
+                        price: Some(mid),
                         quantity: qty,
                         time_in_force: None,
                         client_order_id: Some(format!("mr_entry_{}", now)),
                         reduce_only: false,
+                    });
+                    
+                    // Layer 1 Protective Stop (Exchange Backstop at -6%)
+                    orders.push(OrderRequest {
+                        symbol: self.pair.replace("-", ""),
+                        side: OrderSide::Sell,
+                        order_type: OrderTypeReq::StopMarket { stop_price: mid * 0.94 },
+                        price: None,
+                        quantity: qty,
+                        time_in_force: None,
+                        client_order_id: Some(format!("mr_stop_backstop_{}", now)),
+                        reduce_only: true,
                     });
                 }
             }
