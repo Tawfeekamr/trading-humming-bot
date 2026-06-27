@@ -19,6 +19,7 @@ open / close / get_position.
 import itertools
 import json
 import logging
+import urllib.parse
 import urllib.request
 
 logger = logging.getLogger(__name__)
@@ -40,8 +41,15 @@ class PaperFuturesConnector:
         return symbol.replace("-", "_")
 
     def get_price(self, symbol: str) -> float:
-        """Gate.io USDT-perp mark_price (fallback last); 0.0 on any failure."""
-        url = f"{GATE_PERP_TICKERS}?contract={self._contract(symbol)}"
+        """Gate.io USDT-perp mark_price (fallback last); 0.0 on any failure.
+
+        Builds a ``urllib.request.Request`` for the GET (rather than passing a
+        bare URL string) so the connector can attach headers and the engine can
+        introspect the request via ``.full_url``. The contract segment is
+        ``urllib.parse.quote``-escaped because ``symbol`` originates from
+        Telegram signal parsing.
+        """
+        url = f"{GATE_PERP_TICKERS}?contract={urllib.parse.quote(self._contract(symbol))}"
         try:
             with urllib.request.urlopen(urllib.request.Request(url), timeout=5) as resp:
                 data = json.loads(resp.read().decode())
