@@ -542,3 +542,57 @@ class TestMenusListFutures:
         msg = h._startup_message()
         assert "/futures_status" in msg
         assert "/futures_pnl" in msg
+
+
+class TestTrendHistorySource:
+    """Regression: /trend_history must read the unified trades.db (engine='trend',
+    is_backfilled=0 live rows), NOT the vestigial data/trend_journal.db which
+    holds only stale rows and made trend P&L look like +$93 when it was actually
+    -$472. See memory: pnl-reporting-source-of-truth."""
+
+    def _seed(self, tmp_path):
+        import sqlite3
+        data = tmp_path / "data"
+        data.mkdir(exist_ok=True)
+        # Authoritative unified store.
+        conn = sqlite3.connect(data / "trades.db")
+        conn.execute("""CREATE TABLE trades (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT NOT NULL,
+            engine TEXT NOT NULL, pair TEXT NOT NULL, side TEXT,
+            entry_price REAL, exit_price REAL, quantity REAL, pnl REAL NOT NULL,
+            exit_reason TEXT, duration_mins INTEGER, is_backfilled INTEGER DEFAULT 0)""")
+        # Two LIVE trend rows (the real, losing trades).
+        conn.execute("INSERT INTO trades (timestamp,engine,pair,side,entry_price,exit_price,quantity,pnl,exit_reason,is_backfilled) VALUES ('2026-06-17','trend','ETH-USDT','BUY',2000,1800,1.0,-259.25,'stop_loss',0)")
+        conn.execute("INSERT INTO trades (timestamp,engine,pair,side,entry_price,exit_price,quantity,pnl,exit_reason,is_backfilled) VALUES ('2026-06-23','trend','BNB-USDT','BUY',607,600,1.0,-6.73,'signal_exit',0)")
+        # A stale BACKFILLED trend row (old winner) — must be excluded.
+        conn.execute("INSERT INTO trades (timestamp,engine,pair,side,entry_price,exit_price,quantity,pnl,exit_reason,is_backfilled) VALUES ('2026-06-14','trend','BNB-USDT','BUY',607,614,1.0,30.02,'tp1',1)")
+        # A grid row — wrong engine, must be excluded.
+        conn.execute("INSERT INTO trades (timestamp,engine,pair,side,entry_price,exit_price,quantity,pnl,exit_reason,is_backfilled) VALUES ('2026-06-18','grid','BNB-USDT','BUY',607,610,1.0,27.23,'grid_sell',0)")
+        conn.commit(); conn.close()
+        # Vestigial per-engine journal with a misleading phantom winner — must be IGNORED.
+        vj = sqlite3.connect(data / "trend_journal.db")
+        vj.execute("CREATE TABLE trend_trades (id INTEGER PRIMARY KEY, side TEXT, entry_price REAL, exit_price REAL, amount REAL, pnl REAL, exit_reason TEXT, pair TEXT)")
+        vj.execute("INSERT INTO trend_trades VALUES (1,'BUY',607,999,1.0,999.0,'phantom','BNB-USDT')")
+        vj.commit(); vj.close()
+
+    def test_reads_unified_trades_db_live_trend_rows(self, tmp_path, monkeypatch):
+        self._seed(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        trades = _handler(tmp_path)._rust_trend_trades(limit=10)
+        pnls = sorted(round(t["pnl"], 2) for t in trades)
+        assert pnls == [-259.25, -6.73], \
+            f"expected only the 2 live trend rows from trades.db, got {pnls}"
+
+    def test_result_shape_matches_display_template(self, tmp_path, monkeypatch):
+        self._seed(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        trades = _handler(tmp_path)._rust_trend_trades(limit=10)
+        assert trades, "expected seeded live trend rows"
+        # The /trend_history template reads these exact keys (amount <- quantity).
+        assert set(trades[0]) >= {"side", "entry_price", "exit_price", "amount", "pnl", "exit_reason", "pair"}
+        assert all(t["pair"] in ("ETH-USDT", "BNB-USDT") for t in trades)
+
+    def test_missing_trades_db_returns_empty(self, tmp_path, monkeypatch):
+        # No trades.db at all -> graceful empty list, no crash.
+        monkeypatch.chdir(tmp_path)
+        assert _handler(tmp_path)._rust_trend_trades(limit=10) == []
