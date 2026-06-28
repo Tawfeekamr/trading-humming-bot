@@ -596,3 +596,60 @@ class TestTrendHistorySource:
         # No trades.db at all -> graceful empty list, no crash.
         monkeypatch.chdir(tmp_path)
         assert _handler(tmp_path)._rust_trend_trades(limit=10) == []
+
+
+class TestTradesPagination:
+    def _seed(self, tmp_path, n=20):
+        import sqlite3
+        d = tmp_path / "data"
+        d.mkdir(exist_ok=True)
+        c = sqlite3.connect(d / "trades.db")
+        c.execute("CREATE TABLE trades (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT, "
+                  "engine TEXT, pair TEXT, side TEXT, entry_price REAL, exit_price REAL, "
+                  "quantity REAL, pnl REAL, exit_reason TEXT, duration_mins INTEGER, "
+                  "is_backfilled INTEGER DEFAULT 0)")
+        for i in range(n):
+            c.execute("INSERT INTO trades (timestamp,engine,pair,pnl,exit_reason,quantity) "
+                      "VALUES (?,?,?,?,?,?)",
+                      (f"2026-06-{(i % 27) + 1:02d}T00:00:00Z", "trend", "ETH-USDT",
+                       float(i), "signal_exit", 1.0))
+        c.commit(); c.close()
+
+    def _u(self, text):
+        u = _mock_update()
+        u.message.text = text
+        return u
+
+    def _run(self, tmp_path, text):
+        u = self._u(text)
+        _handler(tmp_path)._cmd_trades(u, None)
+        return _replied(u)
+
+    def test_default_is_page_one_with_next_hint(self, tmp_path, monkeypatch):
+        self._seed(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        out = self._run(tmp_path, "/trades")
+        assert "Page 1" in out and "/trades 2 for older" in out, out
+
+    def test_page_two_footer_advances(self, tmp_path, monkeypatch):
+        self._seed(tmp_path, 20)
+        monkeypatch.chdir(tmp_path)
+        out = self._run(tmp_path, "/trades 2")
+        assert "Page 2" in out and "/trades 3 for older" in out, out
+
+    def test_page_beyond_data_suggests_previous(self, tmp_path, monkeypatch):
+        self._seed(tmp_path, 5)
+        monkeypatch.chdir(tmp_path)
+        out = self._run(tmp_path, "/trades 99")
+        assert "page 99" in out and "/trades 98" in out, out
+
+    def test_invalid_page_arg_shows_usage(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        out = self._run(tmp_path, "/trades abc")
+        assert "Usage" in out, out
+
+    def test_no_trades_page_one(self, tmp_path, monkeypatch):
+        self._seed(tmp_path, 0)  # empty table — no rows, but table exists
+        monkeypatch.chdir(tmp_path)
+        out = self._run(tmp_path, "/trades")
+        assert "No trades yet" in out, out

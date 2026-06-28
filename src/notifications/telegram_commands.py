@@ -1909,10 +1909,27 @@ class TelegramCommandHandler:
             update.message.reply_text(f"⚠️ Error getting mean-reversion status: {e}")
 
     def _cmd_trades(self, update, context):
-        """Show recent individual trades across all bots from trades.db."""
+        """Show recent individual trades across all bots from trades.db.
+
+        Pagination: /trades (page 1) or /trades N (page N).
+        """
         try:
             import sqlite3
             logger.info("Telegram /trades received")
+            # Parse optional page number from the message text (e.g. "/trades 2").
+            parts = (update.message.text or "").split()
+            page = 1
+            if len(parts) > 1:
+                try:
+                    page = int(parts[1])
+                except ValueError:
+                    update.message.reply_text("Usage: /trades [page]  (e.g. /trades 2)")
+                    return
+            if page < 1:
+                update.message.reply_text("Usage: /trades [page]  (e.g. /trades 2)")
+                return
+            page_size = 15
+            offset = (page - 1) * page_size
             conn = sqlite3.connect("data/trades.db")
             # ORDER BY timestamp (trade time), NOT id — backfill re-inserts old
             # trades with fresh high IDs every restart, so id-ordering surfaces
@@ -1921,11 +1938,15 @@ class TelegramCommandHandler:
             rows = conn.execute(
                 "SELECT timestamp, engine, pair, pnl, exit_reason FROM trades "
                 "WHERE NOT (pnl = 0 AND COALESCE(quantity, 0) = 0) "
-                "ORDER BY timestamp DESC LIMIT 15"
+                "ORDER BY timestamp DESC LIMIT ? OFFSET ?",
+                (page_size, offset),
             ).fetchall()
             conn.close()
             if not rows:
-                update.message.reply_text("No trades yet.")
+                if page == 1:
+                    update.message.reply_text("No trades yet.")
+                else:
+                    update.message.reply_text(f"No trades on page {page}. Try /trades {page - 1}.")
                 return
             lines = ["📜 <b>Recent Trades</b> (all engines)", "•••"]
             for ts, engine, pair, pnl, reason in rows:
@@ -1936,7 +1957,7 @@ class TelegramCommandHandler:
                 p = pair.replace("-USDT", "").replace("-USD", "")
                 lines.append(f"{when}  {engine:<6} {p:<8} {reason:<12} {emoji} {sign}${pnl:.2f}")
             lines.append("•••")
-            lines.append(f"<i>{len(rows)} most recent</i>")
+            lines.append(f"Page {page} · /trades {page + 1} for older")
             update.message.reply_text("\n".join(lines), parse_mode="HTML")
         except Exception as e:
             update.message.reply_text(f"⚠️ Error: {e}")
