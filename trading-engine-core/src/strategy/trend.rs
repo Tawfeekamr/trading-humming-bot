@@ -352,10 +352,7 @@ impl TrendStrategy {
     }
 
     fn notify_exit(&self, exit_price: f64, pnl: f64, reason: &str) {
-        let emoji = if pnl >= 0.0 { "📈" } else { "⚠️" };
-        let msg = format!(
-            "{} Trend {} {} @ ${:.2} | PnL: ${:+.2}", emoji, self.pair, reason, exit_price, pnl
-        );
+        let msg = trend_exit_message(&self.pair, reason, exit_price, pnl, self.realized_pnl);
         // Fire-and-forget: never block the tick loop on Telegram latency.
         let tg = self.telegram.clone_for_signal();
         tokio::spawn(async move { let _ = tg.send(&msg).await; });
@@ -718,6 +715,17 @@ fn trend_entry_message(pair: &str, entry_price: f64, qty: f64, stop_loss: f64) -
     )
 }
 
+/// Telegram message for a trend EXIT. Losses are loud (🛑 LOSS) and carry the
+/// engine's running realized P&L so each alert is self-explanatory. Extracted
+/// so the format is unit-testable without a network send.
+fn trend_exit_message(pair: &str, reason: &str, exit_price: f64, pnl: f64, running_pnl: f64) -> String {
+    let marker = if pnl < 0.0 { "🛑 LOSS Trend" } else { "📈 Trend" };
+    format!(
+        "{} {} {} @ ${:.2} | this: ${:+.2} | Trend running: ${:+.2}",
+        marker, pair, reason, exit_price, pnl, running_pnl
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -739,5 +747,21 @@ mod tests {
         assert!(msg.contains("ETH-USDT"), "must name the pair: {}", msg);
         assert!(msg.contains("1795.9"), "must show entry price: {}", msg);
         assert!(msg.contains("1563.9"), "must show stop: {}", msg);
+    }
+
+    #[test]
+    fn trend_exit_message_loss_is_loud_with_running_total() {
+        let msg = trend_exit_message("ETH-USDT", "stop_loss", 1800.0, -259.25, -472.20);
+        assert!(msg.starts_with("🛑 LOSS Trend ETH-USDT stop_loss"), "got: {msg}");
+        assert!(msg.contains("$-259.25"), "should show this trade pnl: {msg}");
+        assert!(msg.contains("Trend running: $-472.20"), "should show running total: {msg}");
+    }
+
+    #[test]
+    fn trend_exit_message_win_is_rocket_no_loss_marker() {
+        let msg = trend_exit_message("BNB-USDT", "tp1", 614.5, 30.02, 93.49);
+        assert!(msg.starts_with("📈 Trend BNB-USDT tp1"), "got: {msg}");
+        assert!(!msg.contains("LOSS"), "wins must not be marked LOSS: {msg}");
+        assert!(msg.contains("Trend running: $+93.49"), "should show running total: {msg}");
     }
 }
