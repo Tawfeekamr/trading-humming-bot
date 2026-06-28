@@ -1398,20 +1398,24 @@ class TelegramCommandHandler:
             update.message.reply_text(f"⚠️ Error getting trend history: {e}")
 
     def _rust_trend_trades(self, limit: int = 10) -> list:
-        """Read recent closed trend trades from the Rust engine's SQLite journal.
+        """Read recent closed trend trades from the unified trades.db.
 
-        Used when the Python _trend_journal isn't wired (hybrid runner). The
-        data/ volume is shared with the Rust container, which writes
-        trend_trades in WAL mode — a concurrent read here is safe.
+        Every Rust engine writes its closes to data/trades.db via log_unified
+        (trend.rs: "Journal removed — trades go to unified trades.db"). The
+        legacy data/trend_journal.db is vestigial — it holds only stale rows and
+        is no longer written to, so reading it made /trend_history show outdated
+        trades (and hid real losses). Live rows are is_backfilled=0. The data/
+        volume is shared with the Rust container, which writes in WAL mode — a
+        concurrent read here is safe.
         """
         import sqlite3
-        path = os.environ.get("TREND_JOURNAL_PATH", "data/trend_journal.db")
         try:
-            conn = sqlite3.connect(path)
+            conn = sqlite3.connect("data/trades.db")
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
-                "SELECT side, entry_price, exit_price, amount, pnl, exit_reason, pair "
-                "FROM trend_trades ORDER BY id DESC LIMIT ?",
+                "SELECT side, entry_price, exit_price, quantity, pnl, exit_reason, pair "
+                "FROM trades WHERE engine = 'trend' AND COALESCE(is_backfilled, 0) = 0 "
+                "ORDER BY id DESC LIMIT ?",
                 (limit,),
             ).fetchall()
             conn.close()
@@ -1420,7 +1424,7 @@ class TelegramCommandHandler:
                     "side": r["side"] or "",
                     "entry_price": r["entry_price"] or 0.0,
                     "exit_price": r["exit_price"] or 0.0,
-                    "amount": r["amount"] or 0.0,
+                    "amount": r["quantity"] or 0.0,
                     "pnl": r["pnl"] or 0.0,
                     "exit_reason": r["exit_reason"] or "",
                     "pair": r["pair"] or "",
@@ -1428,7 +1432,7 @@ class TelegramCommandHandler:
                 for r in rows
             ]
         except Exception as e:
-            logger.warning(f"Rust trend journal read failed ({path}): {e}")
+            logger.warning(f"trades.db trend read failed: {e}")
             return []
 
     def _cmd_help(self, update, context):
