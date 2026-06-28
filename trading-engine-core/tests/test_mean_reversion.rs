@@ -155,3 +155,12 @@ fn test_deployed_capital_zero_when_flat() {
     let strategy = make_strategy();
     assert!(strategy.deployed_capital() < 1e-9, "flat MR has no deployed capital");
 }
+
+#[test]
+fn mr_sl_message_is_loud_with_running_total() {
+    use trading_engine_core::strategy::mean_reversion::mr_sl_message;
+    let msg = mr_sl_message("ETH-USDT", 90.0, -115.89, -149.05);
+    assert!(msg.starts_with("🛑 LOSS MR ETH-USDT SL"), "got: {msg}");
+    assert!(msg.contains("$-115.89"), "should show this trade pnl: {msg}");
+    assert!(msg.contains("MR running: $-149.05"), "should show running total: {msg}");
+}

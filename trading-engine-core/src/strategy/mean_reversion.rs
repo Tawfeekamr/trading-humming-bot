@@ -40,6 +40,16 @@ pub fn classify(s: &ReversionSignal, cfg: &ClassifierCfg) -> Verdict {
     Verdict::Trade { size_mult }
 }
 
+/// Stop-loss alert message for MR closes — loud (🛑 LOSS) with the engine's
+/// running realized P&L so each alert is self-explanatory. Pure so it is
+/// unit-testable without a network send.
+pub fn mr_sl_message(pair: &str, price: f64, pnl: f64, running_pnl: f64) -> String {
+    format!(
+        "🛑 LOSS MR {} SL @ ${:.2} | this: ${:+.2} | MR running: ${:+.2}",
+        pair, price, pnl, running_pnl
+    )
+}
+
 struct TickData {
     price: f64,
     timestamp: i64,
@@ -296,9 +306,10 @@ impl Strategy for MeanReversionStrategy {
                 self.in_position = false;
                 self.last_exit_time = now;
                 let pair = self.pair.clone();
+                let running = self.realized_pnl;  // cumulative; already includes this SL (updated above)
                 let tg = self.telegram.clone_for_signal();
                 tokio::spawn(async move {
-                    let _ = tg.send(&format!("⚠️ MR {} SL @ ${:.2} | PnL: ${:+.2}", pair, mid, pnl)).await;
+                    let _ = tg.send(&mr_sl_message(&pair, mid, pnl, running)).await;
                 });
                 self.save_state();
                 crate::strategy::trade_journal::log_unified("mr", &self.pair, Some(self.entry_price), Some(mid), Some(self.position_qty), pnl, Some("StopLoss"), Some((now - self.entry_time) / 60_000));
