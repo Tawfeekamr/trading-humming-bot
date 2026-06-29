@@ -62,16 +62,23 @@ pub struct TrendPosition {
 }
 
 impl TrendPosition {
-    pub fn calculate_tp_levels(entry_price: f64, stop_loss: f64, risk_reward_ratio: f64, runner_pct: f64) -> Vec<TpLevel> {
-        let risk = entry_price - stop_loss;
+    pub fn calculate_tp_levels(entry_price: f64, stop_loss: f64, risk_reward_ratio: f64, runner_pct: f64, side: OrderSide) -> Vec<TpLevel> {
+        // Signed per-unit risk, always positive in the trade's profit direction:
+        // long → stop below entry (entry−stop > 0); short → stop above (stop−entry > 0).
+        let risk = match side {
+            OrderSide::Buy => entry_price - stop_loss,
+            OrderSide::Sell => stop_loss - entry_price,
+        }.max(0.0);
         // Guard: a missing/zero RR would place TP3 at the entry price, making it
         // fire instantly. Fall back to 2:1 so the position always has real targets.
         let rr = if risk_reward_ratio > 0.0 { risk_reward_ratio } else { 2.0 };
         let tp3_close = if runner_pct > 0.0 { 1.0 - runner_pct } else { 1.0 };
+        // Profit lies in the trade's direction: above entry for longs, below for shorts.
+        let sign = match side { OrderSide::Buy => 1.0, OrderSide::Sell => -1.0 };
         vec![
-            TpLevel { price: entry_price + risk * 1.0, close_pct: 0.33, filled: false },
-            TpLevel { price: entry_price + risk * 1.5, close_pct: 0.50, filled: false },
-            TpLevel { price: entry_price + risk * rr, close_pct: tp3_close, filled: false },
+            TpLevel { price: entry_price + sign * risk * 1.0, close_pct: 0.33, filled: false },
+            TpLevel { price: entry_price + sign * risk * 1.5, close_pct: 0.50, filled: false },
+            TpLevel { price: entry_price + sign * risk * rr, close_pct: tp3_close, filled: false },
         ]
     }
 }
@@ -100,6 +107,11 @@ pub struct TrendStrategy {
     atr: Atr,
     // State
     position: Option<TrendPosition>,
+    /// Side of the entry order currently outstanding (None when none). on_fill
+    /// consumes this to distinguish an opening fill from a closing one — the Fill
+    /// struct carries no reduce_only, so this is the only signal available.
+    /// `pub` so tests can inject an entry intent before calling on_fill directly.
+    pub pending_entry: Option<OrderSide>,
     last_bar_count: usize,
     // Capital tracking
     initial_capital: f64,
@@ -153,6 +165,7 @@ impl TrendStrategy {
             rsi: Rsi::new(config.rsi_period),
             atr: Atr::new(14),
             position: None,
+            pending_entry: None,
             last_bar_count: 0,
             initial_capital: capital,
             realized_pnl: 0.0,
@@ -179,7 +192,8 @@ impl TrendStrategy {
         entry_time: i64,
     ) {
         let duration = duration_minutes(now_ts, entry_time);
-        crate::strategy::trade_journal::log_unified("trend", &self.pair, Some(entry_price), Some(exit_price), Some(amount), pnl, Some(exit_reason), Some(duration));
+        let side_str = match side { OrderSide::Buy => "BUY", OrderSide::Sell => "SELL" };
+        crate::strategy::trade_journal::log_unified("trend", &self.pair, Some(side_str), Some(entry_price), Some(exit_price), Some(amount), pnl, Some(exit_reason), Some(duration));
     }
 
     pub fn update_indicators(&mut self, bar: &Bar) {
@@ -295,12 +309,22 @@ impl TrendStrategy {
         (false, String::new())
     }
 
-    pub fn calculate_stop_loss(&self, entry_price: f64) -> f64 {
-        entry_price - 2.0 * self.atr.value()
+    pub fn calculate_stop_loss(&self, entry_price: f64, side: OrderSide) -> f64 {
+        // Stop sits on the losing side of entry: below for longs, above for shorts.
+        let dist = 2.0 * self.atr.value();
+        match side {
+            OrderSide::Buy => entry_price - dist,
+            OrderSide::Sell => entry_price + dist,
+        }
     }
 
-    fn calculate_quantity(&self, entry_price: f64, stop_loss: f64) -> f64 {
-        let sl_distance = entry_price - stop_loss;
+    fn calculate_quantity(&self, entry_price: f64, stop_loss: f64, side: OrderSide) -> f64 {
+        // Stop distance is always positive regardless of side (stop is on the
+        // losing side; for shorts that's above entry, so stop−entry not entry−stop).
+        let sl_distance = match side {
+            OrderSide::Buy => entry_price - stop_loss,
+            OrderSide::Sell => stop_loss - entry_price,
+        };
         if sl_distance <= 0.0 { return 0.0; }
         let current_capital = self.config.capital + self.realized_pnl;
         let risk_amount = current_capital * (self.config.risk_per_trade_pct / 100.0);
@@ -360,8 +384,8 @@ impl TrendStrategy {
 
     /// Ping on position open so a new trade is visible immediately (trend
     /// previously only notified on exit). Mirrors notify_exit's fire-and-forget.
-    fn notify_entry(&self, entry_price: f64, qty: f64, stop_loss: f64) {
-        let msg = trend_entry_message(&self.pair, entry_price, qty, stop_loss);
+    fn notify_entry(&self, entry_price: f64, qty: f64, stop_loss: f64, side: OrderSide) {
+        let msg = trend_entry_message(&self.pair, side, entry_price, qty, stop_loss);
         let tg = self.telegram.clone_for_signal();
         tokio::spawn(async move { let _ = tg.send(&msg).await; });
     }
@@ -424,7 +448,7 @@ impl Strategy for TrendStrategy {
         if let Some(pos) = &mut self.position {
             if pos.restored {
                 for tp in pos.tp_levels.iter_mut() {
-                    if !tp.filled && current_price >= tp.price {
+                    if !tp.filled && tp_hit(pos.side, current_price, tp.price) {
                         tp.filled = true;
                     }
                 }
@@ -442,17 +466,20 @@ impl Strategy for TrendStrategy {
             if current_price < pos.lowest_since_entry { pos.lowest_since_entry = current_price; }
 
             // Stop-loss
-            if current_price <= pos.stop_loss {
+            if stop_hit(pos.side, current_price, pos.stop_loss) {
+                let side = pos.side;
+                let entry = pos.entry_price;
                 let qty = pos.remaining_qty;
-                let pnl = (current_price - pos.entry_price) * qty;
+                let pnl = trade_pnl(side, entry, current_price, qty);
                 self.realized_pnl += pnl;
                 self.position = None;
+                self.pending_entry = None;
                 if let Some((s, ep, sl, tp3, et)) = snap {
                     self.log_close(s, ep, current_price, qty, pnl, sl, tp3, "stop_loss", ctx.timestamp, et);
                 }
                 self.notify_exit(current_price, pnl, "stop_loss");
                 orders.push(OrderRequest {
-                    symbol: self.pair.clone(), side: OrderSide::Sell, reduce_only: true,
+                    symbol: self.pair.clone(), side: close_side(side), reduce_only: true,
                     order_type: OrderTypeReq::Market, price: None,
                     quantity: qty, time_in_force: Some(TimeInForceReq::Gtc), client_order_id: None,
                 });
@@ -461,24 +488,26 @@ impl Strategy for TrendStrategy {
             }
 
             // TP partial exits — collect events to journal after the mutable borrow ends.
+            let tp_side = pos.side;
+            let tp_entry = pos.entry_price;
             let mut tp_exits: Vec<(f64, f64, &'static str)> = Vec::new();
             for (idx, tp) in pos.tp_levels.iter_mut().enumerate() {
                 if tp.filled { continue; }
-                if current_price >= tp.price {
+                if tp_hit(tp_side, current_price, tp.price) {
                     let sell_qty = pos.remaining_qty * tp.close_pct;
                     if sell_qty > 0.0 {
                         tp.filled = true;
                         pos.remaining_qty -= sell_qty;
-                        let pnl = (current_price - pos.entry_price) * sell_qty;
+                        let pnl = trade_pnl(tp_side, tp_entry, current_price, sell_qty);
                         self.realized_pnl += pnl;
                         let reason = match idx { 0 => "tp1", 1 => "tp2", _ => "tp3" };
                         tp_exits.push((sell_qty, pnl, reason));
                         orders.push(OrderRequest {
-                            symbol: self.pair.clone(), side: OrderSide::Sell, reduce_only: true,
+                            symbol: self.pair.clone(), side: close_side(tp_side), reduce_only: true,
                             order_type: OrderTypeReq::Limit, price: Some(current_price),
                             quantity: sell_qty, time_in_force: Some(TimeInForceReq::Gtc), client_order_id: None,
                         });
-                        if pos.remaining_qty <= 0.0001 { self.position = None; self.save_position(); break; }
+                        if pos.remaining_qty <= 0.0001 { self.position = None; self.pending_entry = None; self.save_position(); break; }
                     }
                 }
             }
@@ -512,16 +541,19 @@ impl Strategy for TrendStrategy {
                         OrderSide::Sell => current_price >= trail,
                     };
                     if hit {
+                        let side = pos.side;
+                        let entry = pos.entry_price;
                         let qty = pos.remaining_qty;
-                        let pnl = (current_price - pos.entry_price) * qty;
+                        let pnl = trade_pnl(side, entry, current_price, qty);
                         self.realized_pnl += pnl;
                         self.position = None;
+                        self.pending_entry = None;
                         if let Some((s, ep, sl, tp3, et)) = snap {
                             self.log_close(s, ep, current_price, qty, pnl, sl, tp3, "trailing_stop", ctx.timestamp, et);
                         }
                         self.notify_exit(current_price, pnl, "trailing_stop");
                         orders.push(OrderRequest {
-                            symbol: self.pair.clone(), side: OrderSide::Sell, reduce_only: true,
+                            symbol: self.pair.clone(), side: close_side(side), reduce_only: true,
                             order_type: OrderTypeReq::Limit, price: Some(current_price),
                             quantity: qty, time_in_force: Some(TimeInForceReq::Gtc), client_order_id: None,
                         });
@@ -536,16 +568,19 @@ impl Strategy for TrendStrategy {
                 let entry_dir = match pos.side { OrderSide::Buy => Direction::Up, OrderSide::Sell => Direction::Down };
                 let (exit, _reason) = self.should_exit_signal(current_price, entry_dir);
                 if exit {
+                    let side = pos.side;
+                    let entry = pos.entry_price;
                     let qty = pos.remaining_qty;
-                    let pnl = (current_price - pos.entry_price) * qty;
+                    let pnl = trade_pnl(side, entry, current_price, qty);
                     self.realized_pnl += pnl;
                     self.position = None;
+                    self.pending_entry = None;
                     if let Some((s, ep, sl, tp3, et)) = snap {
                         self.log_close(s, ep, current_price, qty, pnl, sl, tp3, "signal_exit", ctx.timestamp, et);
                     }
                     self.notify_exit(current_price, pnl, "signal_exit");
                     orders.push(OrderRequest {
-                        symbol: self.pair.clone(), side: OrderSide::Sell, reduce_only: true,
+                        symbol: self.pair.clone(), side: close_side(side), reduce_only: true,
                         order_type: OrderTypeReq::Limit, price: Some(current_price),
                         quantity: qty, time_in_force: Some(TimeInForceReq::Gtc), client_order_id: None,
                     });
@@ -561,8 +596,9 @@ impl Strategy for TrendStrategy {
         // ── No position: check for entry ──
         if self.position.is_none() {
             if self.should_activate(current_price) {
-                let stop_loss = self.calculate_stop_loss(current_price);
-                let quantity = self.calculate_quantity(current_price, stop_loss);
+                let side = entry_side_for(self.direction(current_price));
+                let stop_loss = self.calculate_stop_loss(current_price, side);
+                let quantity = self.calculate_quantity(current_price, stop_loss, side);
                 // Phase B2: cap to available free capital (compute-then-cap).
                 let quantity = match &ctx.capital {
                     Some(cm) => {
@@ -573,8 +609,12 @@ impl Strategy for TrendStrategy {
                     None => quantity,
                 };
                 if quantity > 0.0 {
+                    // Record entry intent: the Fill struct carries no reduce_only,
+                    // so on_fill can't otherwise tell this opening fill from a
+                    // closing one. Consumed by on_fill when the entry fills.
+                    self.pending_entry = Some(side);
                     orders.push(OrderRequest {
-                        symbol: self.pair.clone(), side: OrderSide::Buy, reduce_only: false,
+                        symbol: self.pair.clone(), side, reduce_only: false,
                         order_type: OrderTypeReq::Limit, price: Some(current_price),
                         quantity, time_in_force: Some(TimeInForceReq::Gtc), client_order_id: None,
                     });
@@ -597,30 +637,33 @@ impl Strategy for TrendStrategy {
     }
 
     async fn on_fill(&mut self, fill: &Fill) -> Result<Vec<OrderRequest>> {
-        match fill.side {
-            OrderSide::Buy => {
-                let stop_loss = self.calculate_stop_loss(fill.price);
-                let tp_levels = TrendPosition::calculate_tp_levels(fill.price, stop_loss, self.config.risk_reward_ratio, 0.10);
-                self.position = Some(TrendPosition {
-                    side: OrderSide::Buy, entry_price: fill.price, stop_loss,
-                    quantity: fill.quantity, remaining_qty: fill.quantity,
-                    trailing_stop: None, highest_since_entry: fill.price,
-                    lowest_since_entry: fill.price, tp_levels,
-                    entry_time: fill.timestamp,
-                    restored: false,
-                });
-                self.save_position();
-                self.notify_entry(fill.price, fill.quantity, stop_loss);
-            }
-            OrderSide::Sell => {
-                if let Some(mut pos) = self.position.take() {
-                    pos.remaining_qty -= fill.quantity;
-                    if pos.remaining_qty <= 0.0001 { self.position = None; }
-                    else { self.position = Some(pos); }
-                }
-                self.save_position();
-            }
+        // An entry fill opens a position in the side recorded at order time. The
+        // Fill struct carries no reduce_only, so `pending_entry` (set when the
+        // entry order was placed) is the only way to tell an opening fill from a
+        // closing one when the position is already flat. Any other fill reconciles
+        // remaining quantity — exit paths already booked PnL at detection time.
+        if let Some(side) = self.pending_entry.take() {
+            let stop_loss = self.calculate_stop_loss(fill.price, side);
+            let tp_levels = TrendPosition::calculate_tp_levels(fill.price, stop_loss, self.config.risk_reward_ratio, 0.10, side);
+            self.position = Some(TrendPosition {
+                side, entry_price: fill.price, stop_loss,
+                quantity: fill.quantity, remaining_qty: fill.quantity,
+                trailing_stop: None, highest_since_entry: fill.price,
+                lowest_since_entry: fill.price, tp_levels,
+                entry_time: fill.timestamp,
+                restored: false,
+            });
+            self.save_position();
+            self.notify_entry(fill.price, fill.quantity, stop_loss, side);
+            return Ok(Vec::new());
         }
+        // Exit / reduce fill: reconcile remaining quantity.
+        if let Some(mut pos) = self.position.take() {
+            pos.remaining_qty -= fill.quantity;
+            if pos.remaining_qty <= 0.0001 { self.position = None; }
+            else { self.position = Some(pos); }
+        }
+        self.save_position();
         Ok(Vec::new())
     }
 
@@ -693,6 +736,40 @@ impl Strategy for TrendStrategy {
     fn initial_capital(&self) -> f64 { self.initial_capital }
 }
 
+/// The order side to ENTER with for a given EMA direction: Buy on Up, Sell on
+/// Down (and Sell for the unreachable Flat case — `should_activate` filters it).
+/// Extracted so the entry-side decision is unit-testable independent of on_tick.
+fn entry_side_for(dir: Direction) -> OrderSide {
+    match dir { Direction::Up => OrderSide::Buy, Direction::Down | Direction::Flat => OrderSide::Sell }
+}
+
+/// The order side that CLOSES a position of the given side: Sell closes a long,
+/// Buy covers a short.
+fn close_side(side: OrderSide) -> OrderSide {
+    match side { OrderSide::Buy => OrderSide::Sell, OrderSide::Sell => OrderSide::Buy }
+}
+
+/// Realized PnL of a closed slice, sign-correct for both long and short.
+/// Long: (exit-entry)·qty. Short: (entry-exit)·qty.
+fn trade_pnl(side: OrderSide, entry_price: f64, exit_price: f64, qty: f64) -> f64 {
+    match side {
+        OrderSide::Buy => (exit_price - entry_price) * qty,
+        OrderSide::Sell => (entry_price - exit_price) * qty,
+    }
+}
+
+/// Has the hard stop been touched? Long stops below entry (price falls into it);
+/// short stops above entry (price rises into it).
+fn stop_hit(side: OrderSide, price: f64, stop: f64) -> bool {
+    match side { OrderSide::Buy => price <= stop, OrderSide::Sell => price >= stop }
+}
+
+/// Has a take-profit level been reached? Long TPs above entry (price rises to
+/// it); short TPs below entry (price falls to it).
+fn tp_hit(side: OrderSide, price: f64, tp: f64) -> bool {
+    match side { OrderSide::Buy => price >= tp, OrderSide::Sell => price <= tp }
+}
+
 /// Hold time in minutes from two millisecond timestamps. 0 if either is unset.
 ///
 /// Timestamps here are ms (Binance/chrono epoch-ms). The previous code divided by
@@ -708,10 +785,11 @@ fn duration_minutes(now_ts: i64, entry_time: i64) -> i64 {
 
 /// Telegram message for a trend ENTRY (position open). Extracted so the format
 /// is unit-testable without a network send.
-fn trend_entry_message(pair: &str, entry_price: f64, qty: f64, stop_loss: f64) -> String {
+fn trend_entry_message(pair: &str, side: OrderSide, entry_price: f64, qty: f64, stop_loss: f64) -> String {
+    let (emoji, verb) = match side { OrderSide::Buy => ("🚀", "Buy"), OrderSide::Sell => ("🔻", "Short") };
     format!(
-        "🚀 Trend ENTRY {} | Buy @ ${:.2} | Qty {:.4} | Stop ${:.2}",
-        pair, entry_price, qty, stop_loss
+        "{} Trend ENTRY {} | {} @ ${:.2} | Qty {:.4} | Stop ${:.2}",
+        emoji, pair, verb, entry_price, qty, stop_loss
     )
 }
 
@@ -742,11 +820,202 @@ mod tests {
 
     #[test]
     fn entry_message_flags_a_new_trade_with_price_and_stop() {
-        let msg = trend_entry_message("ETH-USDT", 1795.93, 1.10, 1563.91);
+        let msg = trend_entry_message("ETH-USDT", OrderSide::Buy, 1795.93, 1.10, 1563.91);
         assert!(msg.contains("ENTRY"), "must flag a new trade: {}", msg);
         assert!(msg.contains("ETH-USDT"), "must name the pair: {}", msg);
         assert!(msg.contains("1795.9"), "must show entry price: {}", msg);
         assert!(msg.contains("1563.9"), "must show stop: {}", msg);
+        assert!(msg.contains("Buy"), "long entry says Buy: {}", msg);
+    }
+
+    // ── Short-side unit tests (trade_shorts). The math below is the danger zone:
+    // a single sign flip inverts P&L or places the stop on the wrong side. ──
+
+    #[test]
+    fn entry_side_for_maps_direction_to_order_side() {
+        assert_eq!(entry_side_for(Direction::Up), OrderSide::Buy);
+        assert_eq!(entry_side_for(Direction::Down), OrderSide::Sell);
+    }
+
+    #[test]
+    fn close_side_flips_long_and_short() {
+        assert_eq!(close_side(OrderSide::Buy), OrderSide::Sell, "close a long by selling");
+        assert_eq!(close_side(OrderSide::Sell), OrderSide::Buy, "close a short by buying");
+    }
+
+    #[test]
+    fn trade_pnl_sign_correct_for_both_sides() {
+        // Long: exit above entry is profit.
+        assert!((trade_pnl(OrderSide::Buy, 100.0, 110.0, 2.0) - 20.0).abs() < 1e-9);
+        // Long: exit below entry is loss.
+        assert!((trade_pnl(OrderSide::Buy, 100.0, 90.0, 2.0) - (-20.0)).abs() < 1e-9);
+        // Short: exit BELOW entry is profit (sold high, bought low).
+        assert!((trade_pnl(OrderSide::Sell, 100.0, 90.0, 2.0) - 20.0).abs() < 1e-9,
+            "short profit when price falls: {}", trade_pnl(OrderSide::Sell, 100.0, 90.0, 2.0));
+        // Short: exit above entry is loss.
+        assert!((trade_pnl(OrderSide::Sell, 100.0, 110.0, 2.0) - (-20.0)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn stop_and_tp_hit_conditions_are_side_aware() {
+        // Long stop (below entry) hit when price falls to it.
+        assert!(stop_hit(OrderSide::Buy, 90.0, 95.0));
+        assert!(!stop_hit(OrderSide::Buy, 100.0, 95.0));
+        // Short stop (above entry) hit when price rises to it.
+        assert!(stop_hit(OrderSide::Sell, 110.0, 105.0));
+        assert!(!stop_hit(OrderSide::Sell, 100.0, 105.0));
+        // Long TP (above) hit when price rises to it.
+        assert!(tp_hit(OrderSide::Buy, 110.0, 105.0));
+        // Short TP (below) hit when price falls to it.
+        assert!(tp_hit(OrderSide::Sell, 90.0, 95.0));
+        assert!(!tp_hit(OrderSide::Sell, 100.0, 95.0));
+    }
+
+    fn warmed_strategy(trade_shorts: bool) -> TrendStrategy {
+        let mut config = base_test_config();
+        config.trade_shorts = trade_shorts;
+        let tg = crate::notifications::TelegramBot::new("", "");
+        let mut s = TrendStrategy::new("TESTPAIR-USDT", &config, tg);
+        for i in 0..260 {
+            let p = 100.0 + (i as f64 * 0.01); // gentle drift, keeps ATR modest
+            s.update_indicators(&Bar::new(p - 0.5, p + 0.5, p - 0.25, p, 100.0, 0));
+        }
+        s.last_bar_count = 260;
+        s
+    }
+
+    #[test]
+    fn short_stop_loss_is_above_entry_long_stop_below() {
+        let s = warmed_strategy(true);
+        let atr = s.atr.value();
+        assert!(atr > 0.0, "ATR should be warmed: {}", atr);
+        // Long stop below entry, short stop above entry, symmetric around entry.
+        let long_stop = s.calculate_stop_loss(100.0, OrderSide::Buy);
+        let short_stop = s.calculate_stop_loss(100.0, OrderSide::Sell);
+        assert!(long_stop < 100.0, "long stop below entry: {}", long_stop);
+        assert!(short_stop > 100.0, "SHORT STOP MUST BE ABOVE ENTRY: {}", short_stop);
+        // Each stop is exactly 2·ATR from entry (long below, short above).
+        assert!((long_stop - (100.0 - 2.0 * atr)).abs() < 1e-6, "long stop = entry − 2·ATR");
+        assert!((short_stop - (100.0 + 2.0 * atr)).abs() < 1e-6, "short stop = entry + 2·ATR");
+    }
+
+    #[test]
+    fn short_tp_levels_are_below_entry_and_descending() {
+        let s = warmed_strategy(true);
+        let short_stop = s.calculate_stop_loss(100.0, OrderSide::Sell); // > 100
+        let tps = TrendPosition::calculate_tp_levels(100.0, short_stop, 2.0, 0.10, OrderSide::Sell);
+        assert_eq!(tps.len(), 3);
+        assert!(tps[0].price < 100.0, "short TP1 below entry: {}", tps[0].price);
+        assert!(tps[2].price < tps[1].price && tps[1].price < tps[0].price,
+            "short TPs descend in profit direction: {:?}",
+            tps.iter().map(|t| t.price).collect::<Vec<_>>());
+        let risk = short_stop - 100.0; // short risk is stop-entry (>0)
+        assert!((tps[2].price - (100.0 - risk * 2.0)).abs() < 1e-6, "TP3 = entry − risk·RR");
+        // Long path unchanged: above entry, ascending.
+        let long_stop = s.calculate_stop_loss(100.0, OrderSide::Buy);
+        let ltps = TrendPosition::calculate_tp_levels(100.0, long_stop, 2.0, 0.10, OrderSide::Buy);
+        assert!(ltps[0].price > 100.0 && ltps[2].price > ltps[1].price, "long TPs unchanged");
+    }
+
+    #[test]
+    fn short_quantity_is_positive_with_stop_above_entry() {
+        let s = warmed_strategy(true);
+        let short_stop = s.calculate_stop_loss(100.0, OrderSide::Sell); // > 100
+        let qty = s.calculate_quantity(100.0, short_stop, OrderSide::Sell);
+        assert!(qty > 0.0, "short sizing must be positive (stop above entry): {}", qty);
+        // Long path unchanged.
+        let long_stop = s.calculate_stop_loss(100.0, OrderSide::Buy);
+        assert!(s.calculate_quantity(100.0, long_stop, OrderSide::Buy) > 0.0);
+    }
+
+    #[test]
+    fn short_entry_message_says_short_not_buy() {
+        let msg = trend_entry_message("ETH-USDT", OrderSide::Sell, 1795.93, 1.10, 1863.0);
+        assert!(msg.contains("ENTRY"), "{}", msg);
+        assert!(msg.contains("Short"), "short entry must say Short: {}", msg);
+        assert!(!msg.contains("Buy @"), "short entry must not say Buy @: {}", msg);
+    }
+
+    #[test]
+    fn short_position_stops_out_with_buy_order_and_negative_pnl() {
+        let mut s = warmed_strategy(true);
+        let short_stop = s.calculate_stop_loss(100.0, OrderSide::Sell); // > 100, e.g. ~106
+        let tps = TrendPosition::calculate_tp_levels(100.0, short_stop, 2.0, 0.10, OrderSide::Sell);
+        s.position = Some(TrendPosition {
+            side: OrderSide::Sell, entry_price: 100.0, stop_loss: short_stop,
+            quantity: 2.0, remaining_qty: 2.0, trailing_stop: None,
+            highest_since_entry: 100.0, lowest_since_entry: 100.0, tp_levels: tps,
+            entry_time: 1_700_000_000_000, restored: false,
+        });
+        let realized_before = s.realized_pnl;
+        // Price rises ABOVE the short stop → stop_hit(Sell) true.
+        let ctx = tick_at(short_stop + 5.0);
+        let orders = run_tick(&mut s, ctx);
+        assert!(s.position.is_none(), "stop must close the short");
+        assert!(s.realized_pnl < realized_before, "short stopped out at a loss: {}", s.realized_pnl);
+        assert_eq!(orders.len(), 1, "exactly one stop-loss exit order");
+        assert_eq!(orders[0].side, OrderSide::Buy, "closing a short BUYS to cover (got {:?})", orders[0].side);
+        assert!(orders[0].reduce_only, "exit must be reduce_only");
+    }
+
+    #[test]
+    fn short_position_takes_profit_with_buy_order_and_positive_pnl() {
+        let mut s = warmed_strategy(true);
+        let short_stop = s.calculate_stop_loss(100.0, OrderSide::Sell);
+        let tps = TrendPosition::calculate_tp_levels(100.0, short_stop, 2.0, 0.10, OrderSide::Sell);
+        let tp1 = tps[0].price; // capture before moving tps into the position
+        s.position = Some(TrendPosition {
+            side: OrderSide::Sell, entry_price: 100.0, stop_loss: short_stop,
+            quantity: 2.0, remaining_qty: 2.0, trailing_stop: None,
+            highest_since_entry: 100.0, lowest_since_entry: 100.0, tp_levels: tps,
+            entry_time: 1_700_000_000_000, restored: false,
+        });
+        let realized_before = s.realized_pnl;
+        // Price falls to TP1 (below entry) → tp_hit(Sell) true → profit.
+        let ctx = tick_at(tp1);
+        let orders = run_tick(&mut s, ctx);
+        assert!(s.realized_pnl > realized_before, "short TP must be a profit: {}", s.realized_pnl);
+        assert!(orders.iter().all(|o| o.side == OrderSide::Buy), "TP exits buy to cover");
+    }
+
+    // ── helpers for the on_tick flow tests above ──
+
+    fn base_test_config() -> crate::config::TrendConfig {
+        crate::config::TrendConfig {
+            ema_fast: 20, ema_slow: 50, ema_trend: 200, rsi_period: 14,
+            rsi_min: 40.0, rsi_max: 80.0, min_signal_score: 3, confirmation_ticks: 2,
+            risk_reward_ratio: 2.0, capital: 10000.0, risk_per_trade_pct: 2.0,
+            max_position_pct: 25.0, trailing_stop_pct: 1.5, trailing_stop_atr_mult: 2.5,
+            trailing_activation_pct: 1.5, exit_signal_threshold: 2, sl_buffer_pct: 0.2,
+            adx_gate_threshold: 25.0, adx_exit_threshold: 20.0, choppiness_threshold: 38.0,
+            volume_ratio_threshold: 1.2, entry_score_threshold: 5, rsi_long_max: 65.0,
+            rsi_short_min: 35.0, atr_trailing_mult: 3.0, trade_shorts: false,
+        }
+    }
+
+    fn tick_at(price: f64) -> TickContext {
+        use crate::connector::types::OrderBook;
+        let ob = OrderBook {
+            symbol: "TESTPAIR-USDT".to_string(),
+            bids: vec![(price - 0.5, 10.0)],
+            asks: vec![(price + 0.5, 10.0)],
+            timestamp: 1_700_000_001_000,
+        };
+        TickContext {
+            order_book: ob,
+            recent_bars: Vec::new(),
+            balances: std::collections::HashMap::new(),
+            open_orders: Vec::new(),
+            regime: None,
+            regime_confidence: 0.0,
+            timestamp: 1_700_000_001_000,
+            capital: None,
+        }
+    }
+
+    fn run_tick(s: &mut TrendStrategy, ctx: TickContext) -> Vec<OrderRequest> {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(s.on_tick(&ctx)).unwrap()
     }
 
     #[test]

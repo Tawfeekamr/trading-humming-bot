@@ -117,7 +117,10 @@ trend:
   rsi_period: 14
   rsi_long_max: 65              # Explicit — replaces confusing rsi_max (which was 60)
   rsi_short_min: 35
-  trade_shorts: false           # Set true to enable short trades on Direction::Down
+  trade_shorts: true            # Short trades on Direction::Down (implemented 2026-06-30).
+                               # NOTE: engine is SPOT — paper sim shorts via naked balance,
+                               # which is NOT realizable on live Binance spot. See memory
+                               # trend-shorts caveat; flip to false to revert to long-only.
   min_signal_score: 3
   confirmation_ticks: 1
   risk_per_trade_pct: 2.0

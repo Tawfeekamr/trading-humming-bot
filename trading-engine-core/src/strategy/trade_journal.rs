@@ -228,6 +228,7 @@ static JOURNAL: OnceLock<Option<UnifiedTradeJournal>> = OnceLock::new();
 pub fn log_unified(
     engine: &str,
     pair: &str,
+    side: Option<&str>,
     entry_price: Option<f64>,
     exit_price: Option<f64>,
     quantity: Option<f64>,
@@ -237,7 +238,7 @@ pub fn log_unified(
 ) {
     let journal = JOURNAL.get_or_init(|| UnifiedTradeJournal::new().ok());
     if let Some(j) = journal.as_ref() {
-        j.log_trade(engine, pair, Some("BUY"), entry_price, exit_price, quantity, pnl, exit_reason, duration_mins);
+        j.log_trade(engine, pair, side, entry_price, exit_price, quantity, pnl, exit_reason, duration_mins);
     }
 }
 
