@@ -783,7 +783,7 @@ impl Strategy for GridStrategy {
                 tokio::spawn(async move { let _ = tg.send(&msg).await; });
                 // Only the SELL (a realized round-trip) is journaled — like other engines.
                 crate::strategy::trade_journal::log_unified(
-                    "grid", &self.pair, Some(avg_cost), Some(fill.price),
+                    "grid", &self.pair, Some("BUY"), Some(avg_cost), Some(fill.price),
                     Some(fill.quantity), realized, Some("grid_sell"), None);
             }
         }

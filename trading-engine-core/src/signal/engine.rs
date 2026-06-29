@@ -240,7 +240,7 @@ impl SignalEngine {
             is_audit: if self.config.audit_mode { 1 } else { 0 },
         });
         crate::strategy::trade_journal::log_unified(
-            "signal", &pos.symbol, Some(pos.entry_price), Some(price),
+            "signal", &pos.symbol, Some("BUY"), Some(pos.entry_price), Some(price),
             Some(pos.remaining_amount()), pnl.unwrap_or(0.0), Some(reason), None,
         );
         self.notify(&format!(

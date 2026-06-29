@@ -2,6 +2,7 @@ use trading_engine_core::strategy::trend::{TrendStrategy, TrendPosition};
 use trading_engine_core::strategy::Strategy;
 use trading_engine_core::config::TrendConfig;
 use trading_engine_core::models::bar::Bar;
+use trading_engine_core::models::order::OrderSide;
 
 fn default_trend_config() -> TrendConfig {
     TrendConfig {
@@ -49,10 +50,10 @@ fn test_stop_loss_and_take_profit_calculation() {
         strategy.update_indicators(&make_bar(price));
     }
 
-    let sl = strategy.calculate_stop_loss(50000.0);
+    let sl = strategy.calculate_stop_loss(50000.0, OrderSide::Buy);
     assert!(sl < 50000.0, "Stop loss should be below entry");
 
-    let tp_levels = TrendPosition::calculate_tp_levels(50000.0, sl, 2.0, 0.10);
+    let tp_levels = TrendPosition::calculate_tp_levels(50000.0, sl, 2.0, 0.10, OrderSide::Buy);
     assert_eq!(tp_levels.len(), 3, "Should have 3 TP levels");
     assert!(tp_levels[0].price > 50000.0, "TP1 should be above entry");
     assert!(tp_levels[2].price > tp_levels[1].price, "TPs should be ascending");

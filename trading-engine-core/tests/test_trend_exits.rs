@@ -84,6 +84,9 @@ fn warmup(strategy: &mut TrendStrategy, base_price: f64) {
 }
 
 async fn enter_position(strategy: &mut TrendStrategy, price: f64, qty: f64) {
+    // Mimic production: on_tick sets pending_entry before the entry fill arrives,
+    // so on_fill knows this Buy is an opening fill (not a closing one).
+    strategy.pending_entry = Some(OrderSide::Buy);
     let fill = make_fill(OrderSide::Buy, price, qty);
     strategy.on_fill(&fill).await.unwrap();
 }
@@ -101,7 +104,7 @@ async fn test_stop_loss_triggers_exit() {
     assert!(strategy.position().is_some(), "Position should exist after entry");
 
     // Get stop loss level
-    let sl = strategy.calculate_stop_loss(50000.0);
+    let sl = strategy.calculate_stop_loss(50000.0, OrderSide::Buy);
     assert!(sl < 50000.0, "Stop loss should be below entry, got {}", sl);
 
     // Tick at price below stop loss
@@ -128,8 +131,8 @@ async fn test_tp1_partial_exit() {
     warmup(&mut strategy, 50000.0);
     enter_position(&mut strategy, 50000.0, 0.1).await;
 
-    let sl = strategy.calculate_stop_loss(50000.0);
-    let tp_levels = TrendPosition::calculate_tp_levels(50000.0, sl, config.risk_reward_ratio, 0.10);
+    let sl = strategy.calculate_stop_loss(50000.0, OrderSide::Buy);
+    let tp_levels = TrendPosition::calculate_tp_levels(50000.0, sl, config.risk_reward_ratio, 0.10, OrderSide::Buy);
 
     // Tick at TP1 price
     let mut bars = Vec::new();
@@ -164,8 +167,8 @@ async fn test_all_tp_levels_close_position() {
     warmup(&mut strategy, 50000.0);
     enter_position(&mut strategy, 50000.0, 0.1).await;
 
-    let sl = strategy.calculate_stop_loss(50000.0);
-    let tp_levels = TrendPosition::calculate_tp_levels(50000.0, sl, config.risk_reward_ratio, 0.10);
+    let sl = strategy.calculate_stop_loss(50000.0, OrderSide::Buy);
+    let tp_levels = TrendPosition::calculate_tp_levels(50000.0, sl, config.risk_reward_ratio, 0.10, OrderSide::Buy);
 
     // Tick through all TP levels — some may fire together in one tick
     let mut bars = Vec::new();
@@ -286,8 +289,8 @@ async fn test_restored_position_skips_catchup_exit_burst() {
     warmup(&mut s2, 50000.0);
 
     // 3. Tick at a price well above ALL TP levels.
-    let sl = s2.calculate_stop_loss(50000.0);
-    let tp_levels = TrendPosition::calculate_tp_levels(50000.0, sl, config.risk_reward_ratio, 0.10);
+    let sl = s2.calculate_stop_loss(50000.0, OrderSide::Buy);
+    let tp_levels = TrendPosition::calculate_tp_levels(50000.0, sl, config.risk_reward_ratio, 0.10, OrderSide::Buy);
     let high_price = tp_levels[2].price + 5000.0;
     let mut bars = Vec::new();
     let ctx = make_tick(high_price, &mut bars);
