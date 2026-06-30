@@ -123,8 +123,10 @@ trend:
                                # trend-shorts caveat; flip to false to revert to long-only.
   min_signal_score: 3
   confirmation_ticks: 1
-  risk_per_trade_pct: 2.0
-  max_position_pct: 40.0       # Capped at 40% — balances ETH sizing with cheap-coin safety
+  risk_per_trade_pct: 1.5        # Was 2.0 — lowered after 2026-06-30 -$855 ETH long loss.
+  max_position_pct: 15.0        # Was 40 — 40% let a single ETH position hit ~$8.4k and a
+                                # 10% crash gap cost -$855. 15% caps notional at ~$3.75k
+                                # so a worst-case 10% gap <= ~$375 loss per trade.
   max_positions: 2
   max_total_positions: 2        # Claude: 3×2%=6% > 5% daily limit — reduced to 2
   exit_signal_threshold: 2      # Close position when signal score drops below this
