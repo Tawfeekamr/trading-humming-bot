@@ -61,6 +61,11 @@ pub struct TrendPosition {
     /// load reconciles overdue TPs without firing a catch-up exit burst.
     #[serde(default)]
     pub restored: bool,
+    /// Unix-milliseconds of the last funding accrual for this short. serde
+    /// default 0 so old state files load; the first accrual fires after one
+    /// full 8h interval.
+    #[serde(default)]
+    pub last_funding_time: i64,
 }
 
 impl TrendPosition {
@@ -460,6 +465,35 @@ impl Strategy for TrendStrategy {
         }
         self.last_price = current_price;
 
+        // Funding accrual on open shorts, once per 8h (28_800_000 ms — ctx.timestamp
+        // and entry_time are both milliseconds), using the perp funding rate.
+        // Positive rate → short PAYS (negative pnl); negative rate → short RECEIVES.
+        // Two-phase borrow: read side+last_funding_time via as_ref, await the rate
+        // (no borrow held across .await), then as_mut to mutate + journal.
+        if self.config.funding_accrual {
+            if let Some(p) = &self.perp {
+                let mut accrue: Option<f64> = None;
+                if let Some(pos) = self.position.as_ref() {
+                    if pos.side == OrderSide::Sell && ctx.timestamp - pos.last_funding_time >= 28_800_000 {
+                        accrue = p.funding_rate(&self.pair).await;
+                    }
+                }
+                if let Some(rate) = accrue {
+                    if let Some(pos) = self.position.as_mut() {
+                        let notional = pos.entry_price * pos.remaining_qty;
+                        let funding_pnl = -rate * notional; // positive rate -> short pays
+                        self.realized_pnl += funding_pnl;
+                        pos.last_funding_time = ctx.timestamp;
+                        crate::strategy::trade_journal::log_unified(
+                            "trend", &self.pair, Some("SELL"),
+                            None, None, Some(0.0), funding_pnl, Some("funding"), None,
+                        );
+                        debug!("funding accrued on {}: rate={} pnl={}", self.pair, rate, funding_pnl);
+                    }
+                }
+            }
+        }
+
         // ── If in position: check exits ──
         // Snapshot entry metadata for journaling (all fields Copy; fixed at entry,
         // so valid for the whole tick). Captured before the mutable borrow below.
@@ -683,6 +717,7 @@ impl Strategy for TrendStrategy {
                 lowest_since_entry: fill.price, tp_levels,
                 entry_time: fill.timestamp,
                 restored: false,
+                last_funding_time: 0,
             });
             self.save_position();
             self.notify_entry(fill.price, fill.quantity, stop_loss, side);
@@ -976,7 +1011,7 @@ mod tests {
             side: OrderSide::Sell, entry_price: 100.0, stop_loss: short_stop,
             quantity: 2.0, remaining_qty: 2.0, trailing_stop: None,
             highest_since_entry: 100.0, lowest_since_entry: 100.0, tp_levels: tps,
-            entry_time: 1_700_000_000_000, restored: false,
+            entry_time: 1_700_000_000_000, restored: false, last_funding_time: 0,
         });
         let realized_before = s.realized_pnl;
         // Price rises ABOVE the short stop → stop_hit(Sell) true.
@@ -999,7 +1034,7 @@ mod tests {
             side: OrderSide::Sell, entry_price: 100.0, stop_loss: short_stop,
             quantity: 2.0, remaining_qty: 2.0, trailing_stop: None,
             highest_since_entry: 100.0, lowest_since_entry: 100.0, tp_levels: tps,
-            entry_time: 1_700_000_000_000, restored: false,
+            entry_time: 1_700_000_000_000, restored: false, last_funding_time: 0,
         });
         let realized_before = s.realized_pnl;
         // Price falls to TP1 (below entry) → tp_hit(Sell) true → profit.
@@ -1077,7 +1112,7 @@ mod tests {
             side: OrderSide::Sell, entry_price: 100.0, stop_loss: 110.0,
             quantity: 1.0, remaining_qty: 1.0, trailing_stop: None,
             highest_since_entry: 100.0, lowest_since_entry: 100.0, tp_levels: vec![],
-            entry_time: 1_700_000_000_000, restored: false,
+            entry_time: 1_700_000_000_000, restored: false, last_funding_time: 0,
         });
         // Spot mid is 100 here; the perp override must force current_price to 50.
         let _ = run_tick(&mut s, tick_at(100.0));
@@ -1085,5 +1120,26 @@ mod tests {
         // Unrealized at perp mark 50: (entry 100 - 50) * 1 = +50. Spot (100) would be 0.
         assert!(st.details.contains("Unrealized: $50.00"),
             "short must be marked at perp 50, not spot 100: {}", st.details);
+    }
+
+    #[test]
+    fn funding_accrues_negatively_for_short_on_positive_rate() {
+        use crate::connector::perp_price::FakePerp;
+        let mut s = warmed_strategy(true)
+            .with_perp(std::sync::Arc::new(FakePerp { mark: 100.0, funding: 0.0001 }));
+        s.config.funding_accrual = true; // test module can mutate private fields
+        s.position = Some(TrendPosition {
+            side: OrderSide::Sell, entry_price: 100.0, stop_loss: 110.0,
+            quantity: 1.0, remaining_qty: 1.0, trailing_stop: None,
+            highest_since_entry: 100.0, lowest_since_entry: 100.0, tp_levels: vec![],
+            entry_time: 1_700_000_000_000, restored: false, last_funding_time: 0,
+        });
+        let before = s.realized_pnl;
+        let _ = run_tick(&mut s, tick_at(100.0));
+        // Positive funding 0.0001 on notional 100*1 = -0.01 to a short.
+        assert!((s.realized_pnl - before - (-0.01)).abs() < 1e-9,
+            "realized_pnl should drop by 0.01: before={} after={}", before, s.realized_pnl);
+        // last_funding_time advanced to the tick's ms timestamp; won't re-fire next tick.
+        assert_eq!(s.position.as_ref().unwrap().last_funding_time, 1_700_000_001_000);
     }
 }
