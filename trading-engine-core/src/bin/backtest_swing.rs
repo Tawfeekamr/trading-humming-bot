@@ -97,6 +97,7 @@ async fn main() {
             open_orders: vec![],
             regime: None,
             regime_confidence: 0.0,
+            replay: false,
             timestamp,
             capital: None,
         };

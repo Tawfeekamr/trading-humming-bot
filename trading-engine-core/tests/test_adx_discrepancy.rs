@@ -63,6 +63,7 @@ fn make_ctx(bars: Vec<Bar>) -> TickContext {
         open_orders: vec![],
         regime: None,
         regime_confidence: 0.0,
+        replay: false,
         timestamp: 1640995200000,
         capital: None,
     }
