@@ -16,7 +16,7 @@ pub struct OrderRequest {
     pub reduce_only: bool,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum OrderTypeReq {
     Market,
     Limit,

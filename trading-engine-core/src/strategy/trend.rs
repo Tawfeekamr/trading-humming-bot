@@ -386,6 +386,14 @@ impl TrendStrategy {
                     Ok(state) => {
                         let mut pos = state.position;
                         pos.restored = true; // reconcile on the first on_tick after load
+                        // Back-fill the funding clock for old state files written
+                        // before last_funding_time existed (serde default 0). A
+                        // literal 0 would make the first post-restart tick pass
+                        // the 8h gate immediately and charge a full interval on
+                        // a position held only minutes. Measure from entry instead.
+                        if pos.last_funding_time == 0 && pos.entry_time > 0 {
+                            pos.last_funding_time = pos.entry_time;
+                        }
                         self.position = Some(pos);
                         self.realized_pnl = state.realized_pnl;
                     }
@@ -464,6 +472,9 @@ impl Strategy for TrendStrategy {
             }
         }
         self.last_price = current_price;
+        // A perp source is attached AND this is (or becomes) a SHORT position →
+        // exits must be Market, not Limit-at-perp (see exit_order_req).
+        let perp_attached = self.perp.is_some();
 
         // Funding accrual on open shorts, once per 8h (28_800_000 ms — ctx.timestamp
         // and entry_time are both milliseconds), using the perp funding rate.
@@ -472,11 +483,24 @@ impl Strategy for TrendStrategy {
         // (no borrow held across .await), then as_mut to mutate + journal.
         if self.config.funding_accrual {
             if let Some(p) = &self.perp {
+                // Three states: gate closed (None, false), gate open + rate fetched
+                // (Some(rate), _), gate open + rate unavailable (None, true → warn).
                 let mut accrue: Option<f64> = None;
+                let mut gate_open_but_unavailable = false;
                 if let Some(pos) = self.position.as_ref() {
                     if pos.side == OrderSide::Sell && ctx.timestamp - pos.last_funding_time >= 28_800_000 {
-                        accrue = p.funding_rate(&self.pair).await;
+                        match p.funding_rate(&self.pair).await {
+                            Some(rate) => accrue = Some(rate),
+                            None => gate_open_but_unavailable = true,
+                        }
                     }
+                }
+                if gate_open_but_unavailable {
+                    // Persistent perp-feed outage would otherwise accrue zero
+                    // funding with zero log signal. Surface it so operators can
+                    // see the feed is down (deployment note tells them to watch).
+                    // Do NOT advance last_funding_time — retry next tick.
+                    warn!("funding rate unavailable for {}; will retry next tick", self.pair);
                 }
                 if let Some(rate) = accrue {
                     if let Some(pos) = self.position.as_mut() {
@@ -567,9 +591,10 @@ impl Strategy for TrendStrategy {
                         self.realized_pnl += pnl;
                         let reason = match idx { 0 => "tp1", 1 => "tp2", _ => "tp3" };
                         tp_exits.push((sell_qty, pnl, reason));
+                        let (ot, price_opt) = exit_order_req(perp_attached, tp_side, current_price);
                         orders.push(OrderRequest {
                             symbol: self.pair.clone(), side: close_side(tp_side), reduce_only: true,
-                            order_type: OrderTypeReq::Limit, price: Some(current_price),
+                            order_type: ot, price: price_opt,
                             quantity: sell_qty, time_in_force: Some(TimeInForceReq::Gtc), client_order_id: None,
                         });
                         if pos.remaining_qty <= 0.0001 { self.position = None; self.pending_entry = None; self.save_position(); break; }
@@ -617,9 +642,10 @@ impl Strategy for TrendStrategy {
                             self.log_close(s, ep, current_price, qty, pnl, sl, tp3, "trailing_stop", ctx.timestamp, et);
                         }
                         self.notify_exit(current_price, pnl, "trailing_stop");
+                        let (ot, price_opt) = exit_order_req(perp_attached, side, current_price);
                         orders.push(OrderRequest {
                             symbol: self.pair.clone(), side: close_side(side), reduce_only: true,
-                            order_type: OrderTypeReq::Limit, price: Some(current_price),
+                            order_type: ot, price: price_opt,
                             quantity: qty, time_in_force: Some(TimeInForceReq::Gtc), client_order_id: None,
                         });
                         self.save_position();
@@ -644,9 +670,10 @@ impl Strategy for TrendStrategy {
                         self.log_close(s, ep, current_price, qty, pnl, sl, tp3, "signal_exit", ctx.timestamp, et);
                     }
                     self.notify_exit(current_price, pnl, "signal_exit");
+                    let (ot, price_opt) = exit_order_req(perp_attached, side, current_price);
                     orders.push(OrderRequest {
                         symbol: self.pair.clone(), side: close_side(side), reduce_only: true,
-                        order_type: OrderTypeReq::Limit, price: Some(current_price),
+                        order_type: ot, price: price_opt,
                         quantity: qty, time_in_force: Some(TimeInForceReq::Gtc), client_order_id: None,
                     });
                     self.save_position();
@@ -717,7 +744,10 @@ impl Strategy for TrendStrategy {
                 lowest_since_entry: fill.price, tp_levels,
                 entry_time: fill.timestamp,
                 restored: false,
-                last_funding_time: 0,
+                // Start the funding clock at entry so the first 8h interval is
+                // measured from open, not from epoch (0) — which would charge a
+                // full 8h immediately. Restored positions back-fill this in load_position.
+                last_funding_time: fill.timestamp,
             });
             self.save_position();
             self.notify_entry(fill.price, fill.quantity, stop_loss, side);
@@ -834,6 +864,24 @@ fn stop_hit(side: OrderSide, price: f64, stop: f64) -> bool {
 /// it); short TPs below entry (price falls to it).
 fn tp_hit(side: OrderSide, price: f64, tp: f64) -> bool {
     match side { OrderSide::Buy => price >= tp, OrderSide::Sell => price <= tp }
+}
+
+/// Order type + price for a reduce-only exit. Longs (or shorts with no perp
+/// attached) push a Limit at the current price — `current_price` is the spot
+/// mid for longs, so the paper fill gate (`spot <= limit`) is satisfied and the
+/// fill is correct. But an open SHORT with a perp source attached is marked at
+/// the perp price, so a Limit-at-perp exit would be gated against the spot mid
+/// and misfire when perp and spot diverge (perp<spot → never fills; perp>spot →
+/// fills spuriously at a price the spot book never reached). For that case we
+/// push Market instead — it always fills (`paper.rs (_, None) => true`) at the
+/// spot mark with taker slippage, the honest model for an aggressive short
+/// cover, and keeps the paper balance consistent with the strategy's bookkeeping.
+fn exit_order_req(perp_attached: bool, side: OrderSide, current_price: f64) -> (OrderTypeReq, Option<f64>) {
+    if perp_attached && side == OrderSide::Sell {
+        (OrderTypeReq::Market, None)
+    } else {
+        (OrderTypeReq::Limit, Some(current_price))
+    }
 }
 
 /// Hold time in minutes from two millisecond timestamps. 0 if either is unset.
@@ -1120,6 +1168,118 @@ mod tests {
         // Unrealized at perp mark 50: (entry 100 - 50) * 1 = +50. Spot (100) would be 0.
         assert!(st.details.contains("Unrealized: $50.00"),
             "short must be marked at perp 50, not spot 100: {}", st.details);
+    }
+
+    /// Finding 1 regression: a SHORT exit whose TP level is hit at the perp mark
+    /// (perp BELOW spot) must push a Market order, not a Limit at the perp price.
+    /// A Limit at the perp price would misfire against the paper fill engine,
+    /// which gates Buy-to-cover on `spot_mid <= limit_price` (false when perp<spot).
+    #[test]
+    fn short_tp_exit_with_perp_is_market_not_limit() {
+        use crate::connector::perp_price::FakePerp;
+        // Spot via tick_at(100). Perp mark 50 — divergent, BELOW spot.
+        let mut s = warmed_strategy(true)
+            .with_perp(std::sync::Arc::new(FakePerp { mark: 50.0, funding: 0.0 }));
+        // TP1 below entry 100 so tp_hit(Sell, perp=50) is true at the perp mark.
+        let tps = TrendPosition::calculate_tp_levels(100.0, 110.0, 2.0, 0.10, OrderSide::Sell);
+        s.position = Some(TrendPosition {
+            side: OrderSide::Sell, entry_price: 100.0, stop_loss: 110.0,
+            quantity: 2.0, remaining_qty: 2.0, trailing_stop: None,
+            highest_since_entry: 100.0, lowest_since_entry: 100.0, tp_levels: tps,
+            entry_time: 1_700_000_000_000, restored: false, last_funding_time: 1_700_000_001_000,
+        });
+        let orders = run_tick(&mut s, tick_at(100.0));
+        // At least one TP exit order pushed; assert it is Market, not Limit.
+        assert!(orders.iter().any(|o| o.reduce_only && o.side == OrderSide::Buy),
+            "expected a buy-to-cover exit order: {:?}", orders);
+        for o in &orders {
+            if o.reduce_only && o.side == OrderSide::Buy {
+                assert_eq!(o.order_type, OrderTypeReq::Market,
+                    "SHORT exit must be Market (fills at spot+taker), not Limit at perp: {:?}", o.order_type);
+                assert!(o.price.is_none(), "Market exit carries no price: {:?}", o.price);
+            }
+        }
+    }
+
+    /// Finding 1 control: a LONG TP exit (no perp attached) stays Limit at the
+    /// spot mid — longs must be unchanged by the short-only fix.
+    #[test]
+    fn long_tp_exit_without_perp_still_limit() {
+        let mut s = warmed_strategy(false); // no perp, longs only
+        let long_stop = s.calculate_stop_loss(100.0, OrderSide::Buy); // < 100
+        let tps = TrendPosition::calculate_tp_levels(100.0, long_stop, 2.0, 0.10, OrderSide::Buy);
+        let tp3 = tps[2].price; // above entry
+        s.position = Some(TrendPosition {
+            side: OrderSide::Buy, entry_price: 100.0, stop_loss: long_stop,
+            quantity: 2.0, remaining_qty: 2.0, trailing_stop: None,
+            highest_since_entry: 100.0, lowest_since_entry: 100.0, tp_levels: tps,
+            entry_time: 1_700_000_000_000, restored: false, last_funding_time: 1_700_000_001_000,
+        });
+        let orders = run_tick(&mut s, tick_at(tp3));
+        assert!(orders.iter().any(|o| o.reduce_only && o.side == OrderSide::Sell
+            && o.order_type == OrderTypeReq::Limit),
+            "long TP exit must remain Limit at spot: {:?}", orders);
+    }
+
+    /// Finding 2 regression: a position restored from disk with last_funding_time: 0
+    /// (an old state file from before the field existed) and a recent entry_time
+    /// must NOT accrue a full 8h funding on the first post-restart tick — only
+    /// after 8h have actually elapsed since entry. The fix back-fills
+    /// last_funding_time = entry_time in load_position.
+    #[test]
+    fn restored_short_with_zero_last_funding_no_immediate_accrual() {
+        use crate::connector::perp_price::FakePerp;
+        // Serialize a legacy-style state via the real structs but then strip the
+        // last_funding_time key from the JSON to emulate an old state file.
+        let pos = TrendPosition {
+            side: OrderSide::Sell, entry_price: 100.0, stop_loss: 110.0,
+            quantity: 1.0, remaining_qty: 1.0, trailing_stop: None,
+            highest_since_entry: 100.0, lowest_since_entry: 100.0, tp_levels: vec![],
+            entry_time: 1_700_000_000_000, restored: false, last_funding_time: 0,
+        };
+        let mut v = serde_json::to_value(&TrendPositionState {
+            position: pos, realized_pnl: 0.0,
+        }).unwrap();
+        // Remove the key so serde's default (0) kicks in on load — exactly the
+        // legacy-file scenario this fix guards against. (as_mut Object remove,
+        // since `take()` would leave an explicit null which serde_default ignores.)
+        if let Some(obj) = v["position"].as_object_mut() {
+            obj.remove("last_funding_time");
+        }
+        let state_json = v.to_string();
+
+        let path = std::path::PathBuf::from("data/TESTPAIR_USDT_trend_position.json");
+        std::fs::create_dir_all("data").ok();
+        std::fs::write(&path, state_json).unwrap();
+
+        let config = {
+            let mut c = base_test_config();
+            c.trade_shorts = true;
+            c.funding_accrual = true;
+            c
+        };
+        let tg = crate::notifications::TelegramBot::new("", "");
+        // new() calls load_position, which must back-fill last_funding_time.
+        let mut s = TrendStrategy::new("TESTPAIR-USDT", &config, tg)
+            .with_perp(std::sync::Arc::new(FakePerp { mark: 100.0, funding: 0.0001 }));
+        let _ = std::fs::remove_file(&path); // clean up the temp state file
+
+        // Back-fill happened on load:
+        assert_eq!(s.position.as_ref().unwrap().last_funding_time, 1_700_000_000_000,
+            "load_position back-fills last_funding_time to entry_time for legacy files");
+        // Warm indicators so on_tick proceeds past the ready gate.
+        for i in 0..260 {
+            let p = 100.0 + (i as f64 * 0.01);
+            s.update_indicators(&Bar::new(p - 0.5, p + 0.5, p - 0.25, p, 100.0, 0));
+        }
+        s.last_bar_count = 260;
+
+        let before = s.realized_pnl;
+        let _ = run_tick(&mut s, tick_at(100.0));
+        // Only 1s elapsed since entry — must NOT accrue a full 8h funding.
+        assert!((s.realized_pnl - before).abs() < 1e-9,
+            "no funding accrual expected on first tick after restart: delta={}",
+            s.realized_pnl - before);
     }
 
     #[test]
