@@ -4,6 +4,7 @@ pub mod binance_ws;
 pub mod gateio_rest;
 pub mod gateio_ws;
 pub mod paper;
+pub mod perp_price;
 
 use async_trait::async_trait;
 use anyhow::Result;

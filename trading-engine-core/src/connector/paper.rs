@@ -4,8 +4,6 @@ use crate::connector::types::*;
 use crate::connector::binance_rest::BinanceRest;
 use crate::models::order::OrderSide;
 
-const FEE_RATE: f64 = 0.001; // 0.1% per side
-
 struct PaperOrder {
     id: String,
     client_order_id: Option<String>,
@@ -43,6 +41,11 @@ pub struct PaperTradeEngine {
     /// guard). 0 = disabled. See set_fill_cooldown.
     fill_cooldown_ms: i64,
     last_fill_ms: HashMap<String, i64>,
+    /// Adverse slippage in bps applied to TAKER fills only (Market, StopMarket).
+    /// Maker limits fill at their resting price. 0 = off (preserve old behavior).
+    slippage_bps: f64,
+    taker_fee_bps: f64,
+    maker_fee_bps: f64,
 }
 
 impl PaperTradeEngine {
@@ -54,6 +57,9 @@ impl PaperTradeEngine {
             next_order_id: 1,
             fill_cooldown_ms: 0,
             last_fill_ms: HashMap::new(),
+            slippage_bps: 0.0,
+            taker_fee_bps: 10.0, // 0.1%
+            maker_fee_bps: 10.0, // 0.1%
         }
     }
 
@@ -62,6 +68,14 @@ impl PaperTradeEngine {
     /// keeps paper mode from instantly re-filling entry/exit loops.
     pub fn set_fill_cooldown(&mut self, ms: i64) {
         self.fill_cooldown_ms = ms.max(0);
+    }
+
+    /// Configure slippage (taker-only) and tiered fees. Defaults (0 / 10 / 10)
+    /// reproduce the original flat-0.1%-fee, zero-slippage behavior.
+    pub fn set_realism(&mut self, slippage_bps: f64, taker_fee_bps: f64, maker_fee_bps: f64) {
+        self.slippage_bps = slippage_bps.max(0.0);
+        self.taker_fee_bps = taker_fee_bps.max(0.0);
+        self.maker_fee_bps = maker_fee_bps.max(0.0);
     }
 
     pub fn place_order(&mut self, req: &OrderRequest) -> Result<OrderResponse> {
@@ -165,9 +179,22 @@ impl PaperTradeEngine {
                     }
                 }
 
-                let fill_price = order.price.unwrap_or(market_price);
                 let fill_qty = order.quantity;
-                let fee = fill_price * fill_qty * FEE_RATE;
+                // Maker limits fill at their resting price (no slippage);
+                // taker orders (Market, StopMarket) fill at the mark minus
+                // adverse slippage (buys higher, sells lower).
+                let is_maker = matches!(order.order_type, OrderTypeReq::Limit | OrderTypeReq::LimitMaker);
+                let fill_price = if is_maker {
+                    order.price.unwrap_or(market_price)
+                } else {
+                    let adverse = match order.side {
+                        OrderSide::Buy => 1.0,
+                        OrderSide::Sell => -1.0,
+                    };
+                    market_price * (1.0 + adverse * self.slippage_bps / 1e4)
+                };
+                let fee_bps = if is_maker { self.maker_fee_bps } else { self.taker_fee_bps };
+                let fee = fill_price * fill_qty * (fee_bps / 1e4);
 
                 match order.side {
                     OrderSide::Buy => {
@@ -251,6 +278,14 @@ impl PaperTradeConnector {
     pub fn with_fill_cooldown(self, ms: i64) -> Self {
         if let Ok(mut engine) = self.engine.lock() {
             engine.set_fill_cooldown(ms);
+        }
+        self
+    }
+
+    /// Configure slippage + tiered fees. Call after constructing.
+    pub fn with_realism(self, slippage_bps: f64, taker_fee_bps: f64, maker_fee_bps: f64) -> Self {
+        if let Ok(mut engine) = self.engine.lock() {
+            engine.set_realism(slippage_bps, taker_fee_bps, maker_fee_bps);
         }
         self
     }
@@ -429,5 +464,85 @@ mod tests {
         assert_eq!(fills.len(), 1, "reduce_only sell must fill when you hold the base");
         let btc = e.balances().get("BTC").copied().unwrap_or(0.0);
         assert!((btc - 0.5).abs() < 1e-9, "BTC should drop 1.0 → 0.5");
+    }
+
+    fn market_buy(qty: f64) -> OrderRequest {
+        OrderRequest {
+            symbol: "BTCUSDT".to_string(),
+            side: OrderSide::Buy,
+            order_type: OrderTypeReq::Market,
+            price: None,
+            quantity: qty,
+            time_in_force: None,
+            client_order_id: None,
+            reduce_only: false,
+        }
+    }
+
+    #[test]
+    fn taker_buy_fills_above_mark_with_slippage() {
+        let mut e = engine();
+        e.set_realism(10.0, 5.0, 2.0); // 10 bps slippage
+        e.place_order(&market_buy(0.1)).unwrap();
+        let fills = e.try_fill_at_price("BTCUSDT", 50_000.0);
+        assert_eq!(fills.len(), 1);
+        // Buy slippage adverse (higher): 50000 * (1 + 10/10000) = 50050
+        assert!((fills[0].price - 50_050.0).abs() < 1e-6, "got {}", fills[0].price);
+    }
+
+    #[test]
+    fn taker_sell_fills_below_mark_with_slippage() {
+        let mut e = engine();
+        e.set_realism(10.0, 5.0, 2.0);
+        e.place_order(&sell_stop(50_000.0, 0.5)).unwrap(); // StopMarket Sell
+        let fills = e.try_fill_at_price("BTCUSDT", 49_900.0);
+        assert_eq!(fills.len(), 1);
+        // Sell slippage adverse (lower): 49900 * (1 - 10/10000) = 49850.1
+        assert!((fills[0].price - 49_850.1).abs() < 1e-3, "got {}", fills[0].price);
+    }
+
+    #[test]
+    fn maker_limit_unaffected_by_slippage() {
+        let mut e = engine();
+        e.set_realism(10.0, 5.0, 2.0);
+        e.place_order(&OrderRequest {
+            symbol: "BTCUSDT".to_string(),
+            side: OrderSide::Buy,
+            order_type: OrderTypeReq::LimitMaker,
+            price: Some(50_000.0),
+            quantity: 0.1,
+            time_in_force: None,
+            client_order_id: None,
+            reduce_only: false,
+        }).unwrap();
+        let fills = e.try_fill_at_price("BTCUSDT", 50_000.0);
+        // Maker fills at its resting limit, no slippage.
+        assert!((fills[0].price - 50_000.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn tiered_fees_maker_vs_taker() {
+        let mut e = engine();
+        e.set_realism(0.0, 5.0, 2.0); // taker 5bps, maker 2bps
+        e.place_order(&market_buy(1.0)).unwrap();
+        let taker_fee = e.try_fill_at_price("BTCUSDT", 50_000.0)[0].fee;
+        // 50000 * 1.0 * 5/10000 = 25.0
+        assert!((taker_fee - 25.0).abs() < 1e-6, "taker fee {}", taker_fee);
+
+        let mut e2 = engine();
+        e2.set_realism(0.0, 5.0, 2.0);
+        e2.place_order(&OrderRequest {
+            symbol: "BTCUSDT".to_string(),
+            side: OrderSide::Buy,
+            order_type: OrderTypeReq::Limit,
+            price: Some(50_000.0),
+            quantity: 1.0,
+            time_in_force: None,
+            client_order_id: None,
+            reduce_only: false,
+        }).unwrap();
+        let maker_fee = e2.try_fill_at_price("BTCUSDT", 50_000.0)[0].fee;
+        // 50000 * 1.0 * 2/10000 = 10.0
+        assert!((maker_fee - 10.0).abs() < 1e-6, "maker fee {}", maker_fee);
     }
 }

@@ -23,9 +23,32 @@ pub struct AppConfig {
     pub swing: Option<SwingConfig>,
     #[serde(default = "default_timeframe")]
     pub timeframe: String,
+    #[serde(default)]
+    pub paper: PaperConfig,
 }
 
 fn default_timeframe() -> String { "1m".to_string() }
+
+/// Paper-trading realism knobs: adverse slippage on taker fills and tiered
+/// maker/taker fees. Defaults (0 / 10 / 10) reproduce the original flat-0.1%,
+/// zero-slippage behavior so existing tests and back-compat configs are
+/// unchanged until an operator opts in.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PaperConfig {
+    /// Adverse slippage (bps) on taker fills only. 0 = off (old behavior).
+    #[serde(default)]
+    pub slippage_bps: f64,
+    #[serde(default = "default_10")]
+    pub taker_fee_bps: f64,
+    #[serde(default = "default_10")]
+    pub maker_fee_bps: f64,
+}
+
+impl Default for PaperConfig {
+    fn default() -> Self {
+        Self { slippage_bps: 0.0, taker_fee_bps: 10.0, maker_fee_bps: 10.0 }
+    }
+}
 
 /// Centralized capital accounting config (Phase A: visibility only).
 #[derive(Debug, Deserialize)]
@@ -231,6 +254,14 @@ pub struct TrendConfig {
     /// Allow short trades. Default false (long-only). When true, Direction::Down generates sell entries.
     #[serde(default)]
     pub trade_shorts: bool,
+    /// If set (e.g. "gateio_usdt_perp"), open SHORT positions are marked /
+    /// triggered / exited against the perpetual mark instead of the spot mid.
+    /// Longs always use spot. None disables (old behavior).
+    #[serde(default)]
+    pub perp_mark_source: Option<String>,
+    /// Accrue funding on open shorts every 8h (requires perp_mark_source).
+    #[serde(default)]
+    pub funding_accrual: bool,
 }
 
 fn default_10k() -> f64 { 10000.0 }

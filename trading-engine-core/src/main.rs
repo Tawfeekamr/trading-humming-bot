@@ -56,7 +56,12 @@ async fn async_main() -> Result<()> {
                 &api_secret,
                 true, // testnet flag for BinanceRest
             )
-            .with_fill_cooldown(fill_cooldown_ms),
+            .with_fill_cooldown(fill_cooldown_ms)
+            .with_realism(
+                config.paper.slippage_bps,
+                config.paper.taker_fee_bps,
+                config.paper.maker_fee_bps,
+            ),
         )
     } else if config.exchange.name.contains("gate") {
         info!("Using LIVE Gate.io connector");
@@ -91,6 +96,15 @@ async fn async_main() -> Result<()> {
         .with_budgets(config.capital.budgets.clone());
     let mut engine = trading_engine_core::engine::Engine::new(config, connector.clone(), risk, telegram.clone_for_signal(), bar_cache.clone(), status_cache.clone(), regime_cache.clone(), capital.clone());
 
+    // Build the perp mark source ONCE for all pairs when trend opts into it.
+    // Cloned as Arc per pair below; a single shared client + cache serves all.
+    let perp_source: Option<Arc<dyn trading_engine_core::connector::perp_price::PerpPriceSource>> =
+        if trend_cfg.perp_mark_source.as_deref() == Some("gateio_usdt_perp") {
+            Some(Arc::new(trading_engine_core::connector::perp_price::GateioPerpSource::new()))
+        } else {
+            None
+        };
+
     // Add strategies for each enabled pair
     for (symbol, pc) in &pair_configs {
         // Grid strategy per pair
@@ -104,11 +118,14 @@ async fn async_main() -> Result<()> {
         engine.add_strategy(Box::new(grid));
 
         // Trend strategy per pair
-        let trend = trading_engine_core::strategy::trend::TrendStrategy::new(
+        let mut trend = trading_engine_core::strategy::trend::TrendStrategy::new(
             symbol,
             &trend_cfg,
             telegram.clone_for_signal(),
         );
+        if let Some(p) = &perp_source {
+            trend = trend.with_perp(p.clone());
+        }
         engine.add_strategy(Box::new(trend));
 
         // Mean Reversion strategy per pair

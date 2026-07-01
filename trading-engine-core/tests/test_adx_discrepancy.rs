@@ -33,6 +33,8 @@ fn make_config() -> TrendConfig {
         rsi_short_min: 30.0,
         atr_trailing_mult: 0.0,
         trade_shorts: false,
+        perp_mark_source: None,
+        funding_accrual: false,
     }
 }
 

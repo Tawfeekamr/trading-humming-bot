@@ -49,6 +49,16 @@ capital:
     swing: 15000
     mean_reversion: 20000         # was starved to 0 — now has a real slice
 
+# ── Paper Fill Realism ─────────────────────────────────────────────
+# Adverse slippage + tiered maker/taker fees applied to paper taker fills
+# (Market, StopMarket). Maker limits fill at their resting price (no slippage).
+# Defaults below preserve the original flat-0.1%-fee, zero-slippage behavior;
+# flip slippage_bps to ~8 and the fees to ~5/2 for realistic USDT-M modeling.
+paper:
+  slippage_bps: 0       # 0 preserves old behavior; ~8 for realistic
+  taker_fee_bps: 10     # 0.1% (current). Realistic USDT-M taker ~5
+  maker_fee_bps: 10     # 0.1% (current). Realistic USDT-M maker ~2
+
 # ── Grid Parameters ───────────────────────────────────────────────
 grid:
   levels: 5                   # Claude: 5 is fine — activation logic matters more than count
@@ -121,6 +131,10 @@ trend:
                                # NOTE: engine is SPOT — paper sim shorts via naked balance,
                                # which is NOT realizable on live Binance spot. See memory
                                # trend-shorts caveat; flip to false to revert to long-only.
+  perp_mark_source: gateio_usdt_perp  # Mark open shorts against the Gate.io perp feed so
+                                      # short MTM/triggers/exits reflect the perpetual, not spot.
+  funding_accrual: true         # Accrue perp funding on open shorts every 8h (positive rate
+                                # → short pays). Makes paper shorts honest about carry cost.
   min_signal_score: 3
   confirmation_ticks: 1
   risk_per_trade_pct: 1.5        # Was 2.0 — lowered after 2026-06-30 -$855 ETH long loss.
