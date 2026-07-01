@@ -254,6 +254,14 @@ pub struct TrendConfig {
     /// Allow short trades. Default false (long-only). When true, Direction::Down generates sell entries.
     #[serde(default)]
     pub trade_shorts: bool,
+    /// If set (e.g. "gateio_usdt_perp"), open SHORT positions are marked /
+    /// triggered / exited against the perpetual mark instead of the spot mid.
+    /// Longs always use spot. None disables (old behavior).
+    #[serde(default)]
+    pub perp_mark_source: Option<String>,
+    /// Accrue funding on open shorts every 8h (requires perp_mark_source).
+    #[serde(default)]
+    pub funding_accrual: bool,
 }
 
 fn default_10k() -> f64 { 10000.0 }

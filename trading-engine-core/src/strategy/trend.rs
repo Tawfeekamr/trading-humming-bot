@@ -10,7 +10,9 @@ use async_trait::async_trait;
 use anyhow::Result;
 use serde::{Serialize, Deserialize};
 use std::fs;
+use std::sync::Arc;
 use tracing::{warn, debug};
+use crate::connector::perp_price::PerpPriceSource;
 
 /// Direction from EMA cross + price position.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -121,6 +123,10 @@ pub struct TrendStrategy {
     /// shows when an entry would actually fire (price must be > ema_slow).
     last_price: f64,
     telegram: TelegramBot,
+    /// Optional perp price source. When set, open SHORT positions are marked /
+    /// triggered / exited against the perpetual mark instead of the spot mid.
+    /// Longs and no-position ticks always use the spot mid.
+    perp: Option<Arc<dyn PerpPriceSource>>,
 }
 
 impl TrendStrategy {
@@ -155,6 +161,8 @@ impl TrendStrategy {
                 rsi_short_min: config.rsi_short_min,
                 atr_trailing_mult: config.atr_trailing_mult,
                 trade_shorts: config.trade_shorts,
+                perp_mark_source: config.perp_mark_source.clone(),
+                funding_accrual: config.funding_accrual,
             },
             ema_fast: Ema::new(config.ema_fast),
             ema_slow: Ema::new(config.ema_slow),
@@ -171,9 +179,17 @@ impl TrendStrategy {
             realized_pnl: 0.0,
             last_price: 0.0,
             telegram,
+            perp: None,
         };
         me.load_position();
         me
+    }
+
+    /// Attach a perp price source so open shorts are marked against the
+    /// perpetual instead of the spot mid. Longs are unaffected.
+    pub fn with_perp(mut self, perp: Arc<dyn PerpPriceSource>) -> Self {
+        self.perp = Some(perp);
+        self
     }
 
     /// Log a close event to the journal (no-op if the journal is unavailable).
@@ -425,8 +441,23 @@ impl Strategy for TrendStrategy {
         // every historical bar's close became "current_price" and fired phantom
         // TP exits at prices the live market never reached (ETH "exits" at
         // $1832.52 while real ETH was ~$1.6k). No live quote => hold.
-        let current_price = ctx.order_book.mid_price().unwrap_or(0.0);
+        let mut current_price = ctx.order_book.mid_price().unwrap_or(0.0);
         if current_price <= 0.0 { return Ok(orders); }
+        // Open SHORT positions are marked against the perp feed (configurable),
+        // so short MTM/triggers/exits reflect the perpetual, not spot. Longs and
+        // no-position ticks keep the spot mid. On perp fetch failure, fall back
+        // to spot and warn. The perp override is intentionally short-only: a
+        // paper spot short is a naked-balance fiction whose only honest signal
+        // is the perp mark; longs already trade real spot.
+        if let Some(p) = &self.perp {
+            let is_short = self.position.as_ref().map_or(false, |pos| pos.side == OrderSide::Sell);
+            if is_short {
+                match p.mark(&self.pair).await {
+                    Some(mark) if mark > 0.0 => { current_price = mark; }
+                    _ => warn!("perp mark unavailable for {}; using spot mid", self.pair),
+                }
+            }
+        }
         self.last_price = current_price;
 
         // ── If in position: check exits ──
@@ -990,6 +1021,7 @@ mod tests {
             adx_gate_threshold: 25.0, adx_exit_threshold: 20.0, choppiness_threshold: 38.0,
             volume_ratio_threshold: 1.2, entry_score_threshold: 5, rsi_long_max: 65.0,
             rsi_short_min: 35.0, atr_trailing_mult: 3.0, trade_shorts: false,
+            perp_mark_source: None, funding_accrual: false,
         }
     }
 
@@ -1032,5 +1064,26 @@ mod tests {
         assert!(msg.starts_with("📈 Trend BNB-USDT tp1"), "got: {msg}");
         assert!(!msg.contains("LOSS"), "wins must not be marked LOSS: {msg}");
         assert!(msg.contains("Trend running: $+93.49"), "should show running total: {msg}");
+    }
+
+    #[test]
+    fn short_unrealized_uses_perp_mark_not_spot() {
+        use crate::connector::perp_price::FakePerp;
+        // warmed_strategy(true) builds a short-enabled strategy around price ~100.
+        // Attach a FakePerp returning mark 50; inject a SHORT at entry 100.
+        let mut s = warmed_strategy(true)
+            .with_perp(std::sync::Arc::new(FakePerp { mark: 50.0, funding: 0.0 }));
+        s.position = Some(TrendPosition {
+            side: OrderSide::Sell, entry_price: 100.0, stop_loss: 110.0,
+            quantity: 1.0, remaining_qty: 1.0, trailing_stop: None,
+            highest_since_entry: 100.0, lowest_since_entry: 100.0, tp_levels: vec![],
+            entry_time: 1_700_000_000_000, restored: false,
+        });
+        // Spot mid is 100 here; the perp override must force current_price to 50.
+        let _ = run_tick(&mut s, tick_at(100.0));
+        let st = s.status();
+        // Unrealized at perp mark 50: (entry 100 - 50) * 1 = +50. Spot (100) would be 0.
+        assert!(st.details.contains("Unrealized: $50.00"),
+            "short must be marked at perp 50, not spot 100: {}", st.details);
     }
 }
