@@ -407,8 +407,7 @@ impl Strategy for SwingStrategy {
                 if is_reversal { score += 1; }
                 if volume_spike { score += 1; }
 
-                const SWING_MIN_SCORE: usize = 3;
-                if swing_entry_ready(ranging, near_lower_band, score, SWING_MIN_SCORE) {
+                if swing_entry_ready(ranging, near_lower_band, score, self.config.min_score) {
                     let alloc = self.current_capital();
                     let risk_amt = alloc * (self.config.risk_per_trade_pct / 100.0);
                     let stop_dist = atr_val * self.config.atr_stop_mult;
@@ -460,7 +459,7 @@ impl Strategy for SwingStrategy {
                     debug!(
                         "[{}] Swing setup at range low, {}/{} confirmations \
                          (rsi_oversold={} divergence={} macd_turn={} reversal={} vol_spike={})",
-                        self.pair, score, SWING_MIN_SCORE,
+                        self.pair, score, self.config.min_score,
                         rsi_oversold, rsi_divergence, macd_turn, is_reversal, volume_spike
                     );
                 }
@@ -652,7 +651,7 @@ mod tests {
             band_atr_mult: 0.5, rsi_period: 14, rsi_oversold: 30.0, volume_multiplier: 1.5,
             volume_avg_period: 20, atr_period: 14, atr_stop_mult: 1.5, min_rr: 2.0,
             risk_per_trade_pct: 1.0, adx_range_entry: 22.0, adx_trend_exit: 28.0,
-            capital: 10_000.0, max_bars_in_trade: 48,
+            capital: 10_000.0, max_bars_in_trade: 48, min_score: 3,
             enabled_pairs: vec![], step_size: None, tick_size: None,
             maker_entry: false, entry_timeout_bars: 2,
         }

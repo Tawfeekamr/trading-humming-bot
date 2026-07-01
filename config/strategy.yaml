@@ -197,7 +197,7 @@ signal_copy:
 
 # ── Mean Reversion (retuned + enabled 2026-06-14) ──────────────────
 mean_reversion:
-  enabled: true                     # Backtest-validated at 2% threshold (85% win, +1.8% / 6mo)
+  enabled: false                    # Disabled 2026-07-02: validated NO-EDGE (-$170 / 41 trades; avg loss 2.8× avg win = negative EV). Code retained.
   capital: 1000                     # per-entry notional base (was hardcoded 100); cumulative ≤ budgets.mean_reversion (20000)
 
 # ── Reversal Swing (paper only; ETH-only after corrected backtest) ───
@@ -238,8 +238,9 @@ swing:
                                   # user-data-stream, not yet wired).
   entry_timeout_bars: 2            # LTF bars a maker entry may rest before cancel.
   min_rr: 2.0
+  min_score: 2                     # Braver 2026-07-02: default 3 → 2 (2-of-5 confirmations). Reversible.
   risk_per_trade_pct: 1.0
-  adx_range_entry: 22.0
+  adx_range_entry: 25.0            # Braver 2026-07-02: 22 → 25 (enter mild-trend/range; was too strict → idle). Still < adx_trend_exit (28).
   adx_trend_exit: 28.0
   capital: 15000                # swing's slice = capital.budgets.swing
 
