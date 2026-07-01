@@ -62,7 +62,7 @@ fn base_config(atr_stop_mult: f64) -> SwingConfig {
         htf_period: "1h".to_string(), ltf_period: "5m".to_string(),
         donchian_period: 20, band_atr_mult: 0.5, rsi_period: 14, rsi_oversold: 30.0,
         volume_multiplier: 1.5, volume_avg_period: 20, atr_period: 14, atr_stop_mult,
-        min_rr: 2.0, risk_per_trade_pct: 1.0, adx_range_entry: 22.0, adx_trend_exit: 28.0,
+        min_rr: 2.0, min_score: 3, risk_per_trade_pct: 1.0, adx_range_entry: 22.0, adx_trend_exit: 28.0,
         capital: 10_000.0, max_bars_in_trade: 48,
         enabled_pairs: vec![], step_size: None, tick_size: None,
         maker_entry: false, entry_timeout_bars: 2,

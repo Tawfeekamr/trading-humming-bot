@@ -34,6 +34,7 @@ async fn main() {
         atr_period: 14,
         atr_stop_mult: 1.5,
         min_rr: 2.0,
+        min_score: 3,
         risk_per_trade_pct: 1.0,
         adx_range_entry: 22.0,
         adx_trend_exit: 28.0,

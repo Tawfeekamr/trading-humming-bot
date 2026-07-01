@@ -359,6 +359,7 @@ pub struct SignalConfig {
 fn default_ai_model() -> String { "deepseek-chat".to_string() }
 fn default_max_positions() -> u8 { 3 }
 fn default_3() -> f64 { 3.0 }
+fn default_3_usize() -> usize { 3 }
 fn default_10() -> f64 { 10.0 }
 fn default_1000() -> f64 { 1000.0 }
 fn default_2() -> f64 { 2.0 }
@@ -502,6 +503,10 @@ pub struct SwingConfig {
     pub atr_stop_mult: f64,
     #[serde(default = "default_2")]
     pub min_rr: f64,
+    /// Min confirmation score (of 5) required for entry. Default 3 (backtested);
+    /// lower = braver (more entries at the cost of weaker setups).
+    #[serde(default = "default_3_usize")]
+    pub min_score: usize,
     #[serde(default = "default_1")]
     pub risk_per_trade_pct: f64,
     #[serde(default = "default_22")]
