@@ -39,6 +39,7 @@ fn make_tick(price: f64, bid_qty: f64) -> TickContext {
         open_orders: vec![],
         regime: None,
         regime_confidence: 0.0,
+        replay: false,
         timestamp: chrono::Utc::now().timestamp_millis(),
         capital: None,
     }

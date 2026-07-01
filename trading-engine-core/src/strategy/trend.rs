@@ -686,7 +686,9 @@ impl Strategy for TrendStrategy {
         self.save_position();
 
         // ── No position: check for entry ──
-        if self.position.is_none() {
+        // Skip during warmup replay (ctx.replay) so restarts don't regenerate
+        // ghost positions/trades from historical bars — indicators still warm.
+        if self.position.is_none() && !ctx.replay {
             if self.should_activate(current_price) {
                 let side = entry_side_for(self.direction(current_price));
                 let stop_loss = self.calculate_stop_loss(current_price, side);
@@ -1125,12 +1127,52 @@ mod tests {
             regime_confidence: 0.0,
             timestamp: 1_700_000_001_000,
             capital: None,
+            replay: false,
         }
     }
 
     fn run_tick(s: &mut TrendStrategy, ctx: TickContext) -> Vec<OrderRequest> {
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         rt.block_on(s.on_tick(&ctx)).unwrap()
+    }
+
+    fn tick_at_replay(price: f64) -> TickContext {
+        let mut c = tick_at(price);
+        c.replay = true;
+        c
+    }
+
+    /// Strong smooth uptrend with entry gates lowered so should_activate fires.
+    /// (We're testing the *replay* gate, not the entry conditions — so make
+    /// entry deterministic.) Proves replay suppresses an entry live would take.
+    fn uptrend_strategy() -> TrendStrategy {
+        let mut config = base_test_config();
+        config.entry_score_threshold = 1;
+        config.adx_gate_threshold = 0.1; // effectively disable ADX gate for the test
+        let tg = crate::notifications::TelegramBot::new("", "");
+        let mut s = TrendStrategy::new("TESTPAIR-USDT", &config, tg);
+        for i in 0..260 {
+            let p = 100.0 * 1.005_f64.powi(i as i32); // smooth compounding uptrend
+            s.update_indicators(&Bar::new(p * 0.999, p * 1.001, p * 0.9985, p, 100.0, 0));
+        }
+        s.last_bar_count = 260;
+        s.position = None; // ignore any stale position file loaded by new()
+        s
+    }
+
+    #[test]
+    fn replay_tick_suppresses_entry_that_live_tick_takes() {
+        let last = 100.0 * 1.005_f64.powi(259);
+        let is_entry = |orders: &[OrderRequest]| orders.iter().any(|o| !o.reduce_only);
+
+        let mut live = uptrend_strategy();
+        let live_orders = run_tick(&mut live, tick_at(last));
+        assert!(is_entry(&live_orders),
+            "live tick should place an entry order (setup must trigger entry for this test to mean anything)");
+
+        let mut rep = uptrend_strategy();
+        let rep_orders = run_tick(&mut rep, tick_at_replay(last));
+        assert!(!is_entry(&rep_orders), "replay tick must NOT place an entry order (ghost-entry guard)");
     }
 
     #[test]

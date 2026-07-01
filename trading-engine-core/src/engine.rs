@@ -229,6 +229,7 @@ impl Engine {
                 regime_confidence,
                 timestamp: chrono::Utc::now().timestamp_millis(),
                 capital: Some(self.capital.clone()),
+                replay: false,
             };
 
             match strategy.on_tick(&ctx).await {
@@ -437,6 +438,7 @@ impl Engine {
                             regime_confidence: 0.0,
                             timestamp: bar.timestamp,
                             capital: None,
+                            replay: true,
                         };
                         let _ = strategy.on_tick(&ctx).await;
                     }

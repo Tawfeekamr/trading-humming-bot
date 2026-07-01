@@ -28,6 +28,11 @@ pub struct TickContext {
     /// Central capital allocator (Phase B). None when capital management isn't
     /// wired (strategies then size from their own config, uncapped).
     pub capital: Option<CapitalManager>,
+    /// True while the engine replays historical bars to warm indicators on
+    /// startup. Strategies must NOT open NEW positions/entries when set (they'd
+    /// regenerate ghost trades on every restart); managing existing positions
+    /// and warming indicators is fine.
+    pub replay: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

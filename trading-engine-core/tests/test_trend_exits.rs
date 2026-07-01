@@ -59,6 +59,7 @@ fn make_tick(price: f64, bars: &mut Vec<Bar>) -> TickContext {
         open_orders: vec![],
         regime: None,
         regime_confidence: 0.0,
+        replay: false,
         timestamp: 0,
         capital: None,
     }
