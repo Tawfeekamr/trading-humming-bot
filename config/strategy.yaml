@@ -49,6 +49,16 @@ capital:
     swing: 15000
     mean_reversion: 20000         # was starved to 0 — now has a real slice
 
+# ── Paper Fill Realism ─────────────────────────────────────────────
+# Adverse slippage + tiered maker/taker fees applied to paper taker fills
+# (Market, StopMarket). Maker limits fill at their resting price (no slippage).
+# Defaults below preserve the original flat-0.1%-fee, zero-slippage behavior;
+# flip slippage_bps to ~8 and the fees to ~5/2 for realistic USDT-M modeling.
+paper:
+  slippage_bps: 0       # 0 preserves old behavior; ~8 for realistic
+  taker_fee_bps: 10     # 0.1% (current). Realistic USDT-M taker ~5
+  maker_fee_bps: 10     # 0.1% (current). Realistic USDT-M maker ~2
+
 # ── Grid Parameters ───────────────────────────────────────────────
 grid:
   levels: 5                   # Claude: 5 is fine — activation logic matters more than count

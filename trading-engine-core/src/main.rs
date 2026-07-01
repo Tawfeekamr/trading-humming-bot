@@ -56,7 +56,12 @@ async fn async_main() -> Result<()> {
                 &api_secret,
                 true, // testnet flag for BinanceRest
             )
-            .with_fill_cooldown(fill_cooldown_ms),
+            .with_fill_cooldown(fill_cooldown_ms)
+            .with_realism(
+                config.paper.slippage_bps,
+                config.paper.taker_fee_bps,
+                config.paper.maker_fee_bps,
+            ),
         )
     } else if config.exchange.name.contains("gate") {
         info!("Using LIVE Gate.io connector");
