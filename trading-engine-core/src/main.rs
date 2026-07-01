@@ -128,13 +128,17 @@ async fn async_main() -> Result<()> {
         }
         engine.add_strategy(Box::new(trend));
 
-        // Mean Reversion strategy per pair
-        let mean_reversion = trading_engine_core::strategy::mean_reversion::MeanReversionStrategy::new(
-            symbol,
-            &mr_cfg,
-            telegram.clone_for_signal(),
-        );
-        engine.add_strategy(Box::new(mean_reversion));
+        // Mean Reversion strategy per pair — gated by mean_reversion.enabled
+        // (grid/trend have no enabled flag and always run; MR is the only one
+        // that can be switched off via config.)
+        if mr_cfg.enabled {
+            let mean_reversion = trading_engine_core::strategy::mean_reversion::MeanReversionStrategy::new(
+                symbol,
+                &mr_cfg,
+                telegram.clone_for_signal(),
+            );
+            engine.add_strategy(Box::new(mean_reversion));
+        }
 
         // Swing strategy — only on configured pairs (empty = all). The backtest
         // showed edge concentrated on ETH (DOGE loses, XRP inconclusive, BNB needs
