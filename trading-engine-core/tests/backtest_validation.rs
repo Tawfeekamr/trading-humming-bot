@@ -34,6 +34,13 @@ async fn run_validation_produces_three_metric_sets_and_gap() {
     assert!((rep.is_oos_sharpe_gap - (rep.is_metrics.sharpe - rep.oos.sharpe)).abs() < 1e-9);
     // overfit flag is the gap > 1.0 test
     assert_eq!(rep.overfit_suspect, rep.is_oos_sharpe_gap > 1.0);
+    // Slices genuinely differ: full saw ≥ the bars of either half; IS (more live bars
+    // after warmup) and OOS trade counts differ. Catches a slice-collapse regression
+    // (passing `bars` to all three run_engine_on_bars calls) that the gap/overfit
+    // tautologies above cannot detect.
+    assert!(rep.full.total_trades >= rep.is_metrics.total_trades);
+    assert!(rep.full.total_trades >= rep.oos.total_trades);
+    assert_ne!(rep.is_metrics.total_trades, rep.oos.total_trades);
 }
 
 #[test]
