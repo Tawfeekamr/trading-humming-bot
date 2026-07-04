@@ -9,19 +9,26 @@
 //! orders at the same bar's close while limit/stop orders rest for future
 //! bars):
 //!   for each bar:
-//!     1. `fill_sim.evaluate(bar)` → for each fill: `grid.on_fill` + `port.apply_fill`
+//!     1. `fill_sim.evaluate(bar)` → for each fill:
+//!          a. `strategy.on_fill(fill)` → returns reactive `OrderRequest`s
+//!          b. `port.apply_fill(fill)`
+//!          c. submit reactive orders through `fill_sim.submit(.., bar, ..)`
+//!             (resting for our engines; Market would same-bar fill — guarded
+//!             by a `debug_assert!` since no engine returns Market today)
 //!     2. build `TickContext` (recent_bars window, regime=None, replay flag)
-//!        and call `grid.on_tick(ctx)` → new orders
+//!        and call `strategy.on_tick(ctx)` → new orders
 //!     3. `fill_sim.submit(new_orders, bar)` → market fills now; limit/stop rest
-//!        for each immediate fill: `grid.on_fill` + `port.apply_fill`
-//!     4. `fill_sim.cancel(grid.pending_cancels())`
+//!        for each immediate fill: same a/b/c capture-and-submit as step 1
+//!     4. `fill_sim.cancel(strategy.pending_cancels())`
 //!     5. record equity at `bar.close`
 //!
-//! Phase-1 simplification: `on_fill` may itself return `OrderRequest`s (e.g.
-//! a stop-loss re placement after a fill). Those are discarded here —
-//! `on_tick` re-evaluates every bar and re-emits any orders the strategy
-//! still wants. This is fine for grid, whose resting orders are recreated
-//! each tick from `grid_layout`. Acceptable for Phase 1; flagged for review.
+//! `on_fill`'s returned orders are SUBMITTED (not discarded) at both sites.
+//! This matters for Swing: its `on_fill` returns resting TP1 (LimitMaker) and
+//! hard-stop (StopMarket) orders on entry-fill, and a runner-stop replacement
+//! on TP1-fill — `on_tick` does NOT re-emit these. Grid/Trend/MR return empty
+//! from `on_fill` today, so the extra `submit` call is a no-op for them. The
+//! `debug_assert!` at each site guards against a future engine returning a
+//! Market order from `on_fill` (which would same-bar fill and could cascade).
 use std::collections::HashMap;
 
 use crate::capital::CapitalManager;
@@ -238,11 +245,14 @@ fn build_capital(rc: &ReplayConfig) -> CapitalManager {
 /// The engine-agnostic bar loop extracted from the Phase-1 grid-only
 /// `run_grid_on_bars`. Identical ordering to Phase 1 (no lookahead):
 ///   for each bar:
-///     1. `fill_sim.evaluate(bar)` → for each fill: `on_fill` + `port.apply_fill`
+///     1. `fill_sim.evaluate(bar)` → for each fill:
+///          `on_fill` (capture returned orders) + `port.apply_fill`, then
+///          `fill_sim.submit(returned_orders, bar)` so they enter the resting
+///          book (or same-bar fill if Market — `debug_assert!` guards this).
 ///     2. build `TickContext` (recent_bars window, regime=None, replay flag)
 ///        and call `on_tick(ctx)` → new orders
 ///     3. `fill_sim.submit(new_orders, bar)` → market fills now; limit/stop rest
-///        for each immediate fill: `on_fill` + `port.apply_fill`
+///        for each immediate fill: same capture-and-submit as step 1.
 ///     4. `fill_sim.cancel(pending_cancels())`
 ///     5. record equity at `bar.close`
 ///
@@ -251,7 +261,13 @@ fn build_capital(rc: &ReplayConfig) -> CapitalManager {
 /// (needed for trend-short MTM/funding; grid passes `None`), and
 /// `capital.set_deployed({name → port.deployed(bar.close)})` mirrors live's
 /// per-tick deployment push so CapitalManager budget caps behave correctly.
-async fn run_loop(
+///
+/// `on_fill`'s returned orders are wired back through `fill_sim.submit` (not
+/// discarded). Swing's `on_fill` returns resting TP1/stop orders that
+/// `on_tick` does NOT re-emit — submitting them here is the only way they
+/// reach the resting book. Grid/Trend/MR return empty, so this is a no-op for
+/// them.
+pub async fn run_loop(
     strategy: &mut dyn Strategy,
     sim: &mut FillSim,
     port: &mut Portfolio,
@@ -282,14 +298,30 @@ async fn run_loop(
 
         // 1. Evaluate resting orders against this bar (limit/stop crosses).
         sim.evaluate(bar, &mut fills_buf);
+        // Capture `on_fill`'s returned orders instead of discarding them. Grid
+        // re-emits its resting orders each `on_tick` from `grid_layout`, so it
+        // returns empty here; trend also returns empty. But Swing returns
+        // non-empty resting orders (entry-buy fill → LimitMaker TP1 + StopMarket
+        // hard stop; TP1 fill → runner-stop replacement) that `on_tick` does NOT
+        // re-emit — discarding them meant TP1 scale-out never fired and the hard
+        // stop drifted. Submitting them through `sim.submit(.., bar, ..)` puts
+        // them in the resting book (or, if any future engine returns Market,
+        // fills at bar.close). Errors still propagate via `?`.
+        let mut on_fill_orders = Vec::new();
         for f in fills_buf.drain(..) {
-            // Phase-1 simplification: `on_fill`'s returned orders are discarded
-            // (on_tick re-emits them next bar). Errors, however, propagate via
-            // `?` — grid never errors here, but Trend/Swing/MR can (disk writes,
-            // indicator paths). Replaces the Phase-1 `.expect` panic.
-            let _ = strategy.on_fill(&f).await?;
+            on_fill_orders.extend(strategy.on_fill(&f).await?);
             port.apply_fill(&f);
         }
+        // Submit reactive orders from on_fill (resting for our engines).
+        // decision_bar = bar — same bar that just produced the fill.
+        let mut reactive = Vec::new();
+        sim.submit(on_fill_orders, bar, &mut reactive);
+        // No engine returns Market from on_fill today; if one did, `reactive`
+        // would hold same-bar market fills that we must NOT also re-feed (infinite
+        // loop). The assert catches a future regression. (reactive market fills,
+        // if a future engine needs them, must be held for next-bar-open — out of
+        // scope.)
+        debug_assert!(reactive.is_empty(), "on_fill returned a Market order — same-bar cascade not supported");
 
         // 2. Build context and run the engine for this bar.
         let ctx = build_ctx_from(symbol_of(strategy), bar, &bars[..i], &capital, /*replay*/ i < warmup_bars);
@@ -297,10 +329,15 @@ async fn run_loop(
 
         // 3. Submit. Market fills now (at bar.close ± slippage); limit/stop rest.
         sim.submit(new_orders, bar, &mut fills_buf);
+        // Same capture-and-submit as site 1 — see comment there for rationale.
+        let mut on_fill_orders = Vec::new();
         for f in fills_buf.drain(..) {
-            let _ = strategy.on_fill(&f).await?;
+            on_fill_orders.extend(strategy.on_fill(&f).await?);
             port.apply_fill(&f);
         }
+        let mut reactive = Vec::new();
+        sim.submit(on_fill_orders, bar, &mut reactive);
+        debug_assert!(reactive.is_empty(), "on_fill returned a Market order — same-bar cascade not supported");
 
         // 4. Cancels requested by the strategy this tick.
         sim.cancel(&strategy.pending_cancels());

@@ -7,9 +7,17 @@
 //!
 //! Task 3 adds the Trend smoke test: the real `TrendStrategy` runs verbatim
 //! against a synthetic uptrend with the perp source wired (long-only leg).
-use trading_engine_core::backtest::replay::{run_engine_on_bars, run_grid_on_bars, EngineKind, ReplayConfig};
+use trading_engine_core::backtest::fills::FillSim;
+use trading_engine_core::backtest::portfolio::Portfolio;
+use trading_engine_core::backtest::replay::{run_engine_on_bars, run_grid_on_bars, run_loop, EngineKind, ReplayConfig};
+use trading_engine_core::capital::CapitalManager;
 use trading_engine_core::config::{AppConfig, GridConfig, TrendConfig};
+use trading_engine_core::connector::types::{Fill, OrderRequest, OrderTypeReq};
 use trading_engine_core::models::bar::Bar;
+use trading_engine_core::models::order::OrderSide;
+use trading_engine_core::strategy::{Strategy, StrategyStatus, TickContext};
+
+use async_trait::async_trait;
 
 fn grid_cfg() -> GridConfig {
     // GridConfig is NOT Default-derived — load the real deployed config.
@@ -205,4 +213,167 @@ async fn swing_runs_on_synthetic_range() {
     // caveat as Phase-1 grid and Task-3 trend). `res.trades.len()` is
     // intentionally not asserted.
     let _ = res.trades.len();
+}
+
+// ── Task 4 follow-up: on_fill chaining regression ─────────────────────────
+//
+// Proves `run_loop` SUBMITS the `OrderRequest`s returned by `on_fill` (rather
+// than discarding them). This is the fix that makes Swing's TP1 scale-out and
+// hard-stop replacement actually rest in the book. Under the buggy discard
+// (`let _ = strategy.on_fill(&f).await?;`), a resting order returned from
+// `on_fill` never enters the `FillSim`'s resting book → it can never fill on
+// a later crossing bar. Under the fix, it rests and fills.
+//
+// We use a minimal mock `Strategy` (no engine dependencies) so the test is
+// deterministic and does not depend on swing's score gate firing. The mock:
+//   - on_tick: emits ONE Market BUY on the first live bar (so `on_fill` fires).
+//   - on_fill(BUY): returns a resting Limit SELL @105 (the "TP" we want to
+//     prove gets submitted). Subsequent fills return empty.
+//   - on_fill(SELL): returns empty (no cascade).
+// The series: warmup bars (replay=true) + bar0 at ~100 (Market buy fills) +
+// bar1 with high=106 (crosses 105 → Limit sell fills, closes the long).
+// PASS = a Trade is recorded (long opened then closed by the resting sell).
+// FAIL (under discard) = no Trade: the Limit sell never rested.
+
+/// Bar constructor matching the `sawtooth_bars` shape: deterministic OHLC.
+fn mk_bar(open: f64, high: f64, low: f64, close: f64, ts_idx: i64) -> Bar {
+    Bar::new(open, high, low, close, 10.0, ts_idx * 3_600_000)
+}
+
+/// Minimal mock strategy: emits one Market BUY on the first live `on_tick`,
+/// then returns a resting Limit SELL @105 from `on_fill` for that entry fill.
+struct EchoLimit {
+    pair: String,
+    /// Whether the first live on_tick has fired its Market buy yet.
+    armed: bool,
+    /// Whether on_fill has already emitted the resting TP for the entry.
+    tp_placed: bool,
+}
+
+#[async_trait]
+impl Strategy for EchoLimit {
+    fn name(&self) -> &str { "echo" }
+    fn trading_pair(&self) -> &str { &self.pair }
+
+    async fn on_tick(&mut self, ctx: &TickContext) -> Result<Vec<OrderRequest>, anyhow::Error> {
+        // Only fire on live bars (not warmup), and only once.
+        if ctx.replay || self.armed {
+            return Ok(vec![]);
+        }
+        self.armed = true;
+        Ok(vec![OrderRequest {
+            symbol: self.pair.clone(),
+            side: OrderSide::Buy,
+            order_type: OrderTypeReq::Market,
+            price: None,
+            quantity: 1.0,
+            time_in_force: None,
+            client_order_id: Some("echo-entry".into()),
+            reduce_only: false,
+        }])
+    }
+
+    async fn on_fill(&mut self, f: &Fill) -> Result<Vec<OrderRequest>, anyhow::Error> {
+        // On the entry BUY fill, place ONE resting Limit SELL at 105 (the TP
+        // we want to prove gets submitted through FillSim, not discarded).
+        if f.side == OrderSide::Buy && !self.tp_placed {
+            self.tp_placed = true;
+            return Ok(vec![OrderRequest {
+                symbol: self.pair.clone(),
+                side: OrderSide::Sell,
+                order_type: OrderTypeReq::Limit,
+                price: Some(105.0),
+                quantity: 1.0,
+                time_in_force: None,
+                client_order_id: Some("echo-tp".into()),
+                reduce_only: true,
+            }]);
+        }
+        // SELL fill (TP) → no further orders. Avoids any cascade.
+        Ok(vec![])
+    }
+
+    async fn on_start(&mut self) -> Result<Vec<OrderRequest>, anyhow::Error> { Ok(vec![]) }
+    async fn on_stop(&mut self) -> Result<(), anyhow::Error> { Ok(()) }
+    fn status(&self) -> StrategyStatus {
+        StrategyStatus {
+            name: "echo".into(),
+            pair: self.pair.clone(),
+            state: "".into(),
+            pnl: 0.0,
+            open_orders: 0,
+            details: "".into(),
+        }
+    }
+}
+
+#[tokio::test]
+async fn on_fill_returned_orders_are_submitted_not_discarded() {
+    // Series:
+    //   - 5 warmup bars (replay=true), price ~100.
+    //   - bar5: live, close=100. on_tick emits Market BUY → fills at 100.
+    //     on_fill(BUY) returns Limit SELL @105. UNDER FIX: it rests.
+    //   - bar6: live, high=106 (crosses 105). UNDER FIX: Limit SELL fills,
+    //     closing the long → Portfolio records a Trade.
+    let bars: Vec<Bar> = (0..5)
+        .map(|i| mk_bar(100.0, 101.0, 99.0, 100.0, i as i64))
+        .chain(std::iter::once(mk_bar(100.0, 101.0, 99.0, 100.0, 5))) // entry bar
+        .chain(std::iter::once(mk_bar(100.0, 106.0, 99.0, 104.0, 6))) // TP cross bar
+        .collect();
+
+    // Build the harness pieces directly so we can pass our mock into run_loop.
+    // (TRADES_JOURNAL_PATH isolation mirrors run_engine_on_bars — the mock's
+    // on_fill does not journal, but Portfolio/Trade construction is uniform.)
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    std::env::set_var("TRADES_JOURNAL_PATH", tmp.path().join("trades.db"));
+
+    let mut strat = EchoLimit { pair: "ETHUSDT".into(), armed: false, tp_placed: false };
+    let mut sim = FillSim::new(10.0, 10.0, 0.0);
+    let mut port = Portfolio::new(10_000.0, 10_000.0);
+    let capital = CapitalManager::new(20.0).with_budgets({
+        let mut b = std::collections::BTreeMap::new();
+        b.insert("echo".to_string(), 10_000.0);
+        b
+    });
+
+    let res = run_loop(
+        &mut strat,
+        &mut sim,
+        &mut port,
+        &capital,
+        &bars,
+        /*warmup_bars*/ 5,
+        /*bar_hours*/ 1.0,
+        /*perp*/ None,
+    )
+    .await
+    .expect("run_loop must complete");
+
+    // Under the buggy discard: Market BUY fills (bar5), but the Limit SELL
+    // returned from on_fill(BUY) is dropped → never rests → bar6's high=106
+    // can't trigger it → no SELL fill → no Trade recorded (long stays open).
+    //
+    // Under the fix: the Limit SELL rests at bar5, fills at bar6 (high>105),
+    // and Portfolio records a Trade (long opened at 100, closed at 105).
+    assert!(
+        !res.trades.is_empty(),
+        "on_fill's resting Limit was discarded — no TP fill / no Trade recorded. \
+         trades={:?} final_inventory={}",
+        res.trades,
+        port.inventory_qty
+    );
+    // The recorded trade should be a LONG close (entry_side=Buy) at exit 105.0.
+    let t = &res.trades[0];
+    assert_eq!(t.side, OrderSide::Buy, "expected a long-close trade");
+    assert!(
+        (t.exit_price - 105.0).abs() < 1e-9,
+        "expected the resting Limit @105 to fill, got exit_price={}",
+        t.exit_price
+    );
+    // And the position should be flat after the TP fill.
+    assert!(
+        port.inventory_qty.abs() < 1e-9,
+        "expected flat inventory after TP fill, got {}",
+        port.inventory_qty
+    );
 }
