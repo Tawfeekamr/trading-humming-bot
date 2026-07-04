@@ -8,7 +8,7 @@
 use std::path::Path;
 
 use trading_engine_core::backtest::report;
-use trading_engine_core::backtest::replay::{run_grid_on_bars, ReplayConfig};
+use trading_engine_core::backtest::replay::{run_grid_on_bars, EngineKind, ReplayConfig};
 use trading_engine_core::backtest::bars;
 use trading_engine_core::config::AppConfig;
 
@@ -44,6 +44,8 @@ async fn main() -> anyhow::Result<()> {
         symbol: pair.clone(),
         init_cash: cfg.capital.account_usdt,
         warmup_bars: 220,
+        bar_hours: 1.0,
+        engine: EngineKind::Grid,
         grid: cfg.grid.clone(),
         tick_size: cfg.pairs.values().next().map(|p| p.tick_size).unwrap_or(0.01),
         step_size: cfg.pairs.values().next().map(|p| p.step_size).unwrap_or(0.0001),
@@ -52,7 +54,7 @@ async fn main() -> anyhow::Result<()> {
         slippage_bps: cfg.paper.slippage_bps,
     };
     let run = run_grid_on_bars(&rc, bars).await?;
-    let m = report::compute(&run, 0.0);
+    let m = report::compute(&run, 0.0, 1.0);
     report::write_report(Path::new("backtest/results/replay"), &pair, &run, &m)?;
     println!("{:#?}", m);
     Ok(())

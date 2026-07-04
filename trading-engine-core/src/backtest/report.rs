@@ -26,14 +26,17 @@ pub struct Metrics {
 /// Compute metrics from a `RunResult`. `risk_free_per_bar` is reserved for a
 /// future risk-free-rate adjustment to the Sharpe numerator; currently unused
 /// (the strategies are short-lived and the adjustment is negligible vs the
-/// annualization factor).
-pub fn compute(run: &RunResult, _risk_free_per_bar: f64) -> Metrics {
+/// annualization factor). `bar_hours` is the bar interval in hours (1h bars
+/// → ×sqrt(24*365) annualization); parametrized so non-1h engines pass their
+/// own interval.
+pub fn compute(run: &RunResult, _risk_free_per_bar: f64, bar_hours: f64) -> Metrics {
     let eq: Vec<f64> = run.equity_curve.iter().map(|(_, e)| *e).collect();
     let first = eq.first().copied().unwrap_or(0.0);
     let last = eq.last().copied().unwrap_or(0.0);
     let total_return_pct = if first > 0.0 { (last / first - 1.0) * 100.0 } else { 0.0 };
 
-    // Per-bar returns → Sharpe (annualized × sqrt(24*365) for 1h bars).
+    // Per-bar returns → Sharpe (annualized × sqrt(bars_per_year); 1h bars
+    // → bars_per_year = 24*365, reproducing the previous hard-coded factor).
     let mut rets: Vec<f64> = Vec::with_capacity(eq.len().saturating_sub(1));
     for w in eq.windows(2) {
         if w[0] > 0.0 {
@@ -44,7 +47,8 @@ pub fn compute(run: &RunResult, _risk_free_per_bar: f64) -> Metrics {
     let mean = rets.iter().sum::<f64>() / n as f64;
     let var = rets.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / n as f64;
     let std: f64 = var.sqrt();
-    let sharpe = if std > 0.0 { mean / std * (24f64 * 365f64).sqrt() } else { 0.0 };
+    let bars_per_year = (24.0 / bar_hours) * 365.0;
+    let sharpe = if std > 0.0 { mean / std * bars_per_year.sqrt() } else { 0.0 };
 
     // Max drawdown (% peak-to-trough). Monotonic rise → 0.
     let mut peak = f64::NEG_INFINITY;

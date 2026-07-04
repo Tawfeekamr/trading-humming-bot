@@ -4,7 +4,7 @@
 //! equity curve. Grid's regime gate (ADX<25, Choppiness>50, NATR in range)
 //! may not fire on synthetic data, so grid may not actually trade — that's
 //! fine. The real proof is Task 7's run on real ETHUSDT data.
-use trading_engine_core::backtest::replay::{run_grid_on_bars, ReplayConfig};
+use trading_engine_core::backtest::replay::{run_grid_on_bars, EngineKind, ReplayConfig};
 use trading_engine_core::config::{AppConfig, GridConfig};
 use trading_engine_core::models::bar::Bar;
 
@@ -21,6 +21,8 @@ fn cfg() -> ReplayConfig {
         symbol: "ETHUSDT".into(),
         init_cash: 10_000.0,
         warmup_bars: 220,
+        bar_hours: 1.0,
+        engine: EngineKind::Grid,
         tick_size: 0.01,
         step_size: 0.0001,
         taker_fee_bps: 10.0,

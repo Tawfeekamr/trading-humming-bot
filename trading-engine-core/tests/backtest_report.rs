@@ -17,7 +17,7 @@ fn sharpe_and_drawdown_from_known_curve() {
         final_equity: 109.0,
         hodl_return_pct: 0.0,
     };
-    let m: Metrics = compute(&run, 0.0);
+    let m: Metrics = compute(&run, 0.0, 1.0);
     // Resolution #3: (109/100 - 1)*100 = 9.0, not 10.0.
     assert!((m.total_return_pct - 9.0).abs() < 1e-6, "got {}", m.total_return_pct);
     // Monotonic rise → zero drawdown.
