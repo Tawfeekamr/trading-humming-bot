@@ -7,6 +7,7 @@
 //! accumulates the GROSS PnL, while `Trade.pnl` is the NET PnL (fee subtracted).
 use crate::connector::types::Fill;
 use crate::models::order::OrderSide;
+use tracing::warn;
 
 #[derive(Clone, Debug)]
 pub struct Trade {
@@ -67,7 +68,15 @@ impl Portfolio {
                 self.realized += gross;
                 self.inventory_qty -= qty;
                 self.inventory_cost -= qty * avg;
-                self.cash += f.quantity * f.price;
+                if qty < f.quantity {
+                    warn!(
+                        requested = f.quantity,
+                        filled_clamped = qty,
+                        inventory_before = self.inventory_qty + qty,
+                        "SELL over-sell clamped to open long inventory; cash credited for clamped qty only"
+                    );
+                }
+                self.cash += qty * f.price;
                 if qty > 0.0 {
                     self.trades.push(Trade {
                         side: f.side,
