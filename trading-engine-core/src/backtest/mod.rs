@@ -4,3 +4,4 @@ pub mod bars;
 pub mod fills;
 pub mod perp;
 pub mod portfolio;
+pub mod replay;
