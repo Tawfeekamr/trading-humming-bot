@@ -56,6 +56,7 @@ async fn main() -> anyhow::Result<()> {
         perp_bars: None,
         funding_rate: None,
         swing: cfg.swing.clone(),
+        mean_reversion: cfg.mean_reversion.clone(),
     };
     let run = run_grid_on_bars(&rc, bars).await?;
     let m = report::compute(&run, 0.0, 1.0);

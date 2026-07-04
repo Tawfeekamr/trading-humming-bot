@@ -44,12 +44,13 @@ use super::perp::HistoricalPerpSource;
 use super::portfolio::{Portfolio, Trade};
 
 /// Which production engine to drive in the replay loop. Grid is Phase-1;
-/// Trend added in Task 3; Swing added in Task 4; MeanReversion comes in Task 5.
+/// Trend added in Task 3; Swing added in Task 4; MeanReversion added in Task 5.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EngineKind {
     Grid,
     Trend,
     Swing,
+    MeanReversion,
 }
 
 impl EngineKind {
@@ -61,6 +62,7 @@ impl EngineKind {
             EngineKind::Grid => "grid",
             EngineKind::Trend => "trend",
             EngineKind::Swing => "swing",
+            EngineKind::MeanReversion => "mean_reversion",
         }
     }
 }
@@ -99,6 +101,11 @@ pub struct ReplayConfig {
     /// construction (mirrors main.rs:151-153). Swing is long-only, so no
     /// perp is needed — the signed Portfolio (Task 2) handles it directly.
     pub swing: Option<crate::config::SwingConfig>,
+    /// MeanReversion dispatch input: production `MeanReversionConfig` (cloned
+    /// from AppConfig). MR is long-only (buy flush / sell revert) and its
+    /// `on_fill` returns empty (exits decided in `on_tick`), so the run_loop
+    /// `on_fill`-chaining fix (Task 4) is a no-op for it. No perp needed.
+    pub mean_reversion: crate::config::MeanReversionConfig,
 }
 
 #[derive(Debug)]
@@ -217,6 +224,33 @@ pub async fn run_engine_on_bars(
             );
             Ok(run_loop(
                 &mut swing,
+                &mut sim,
+                &mut port,
+                &capital,
+                &bars,
+                rc.warmup_bars,
+                rc.bar_hours,
+                None,
+            )
+            .await?)
+        }
+        EngineKind::MeanReversion => {
+            // MR's state file (data/<pair>_mean_reversion_state.json) is CWD-relative and NOT
+            // env-driven, so unlike grid state it can't be redirected to the TempDir. Remove any
+            // pre-existing file for a fresh start (load_state silently ignores missing). MR writes
+            // a small idempotent state file to CWD data/ during the run — documented isolation gap
+            // (grid state + trade journal ARE isolated).
+            // FIDELITY GAP: build_ctx synthesizes a mid-only order book (single 1-unit bid/ask
+            // around bar.close); MR's `calculate_bid_depth` signal is degenerate in replay (depth
+            // always ~1 unit). Faithful depth needs a real historical L2 book — out of scope here.
+            let _ = std::fs::remove_file(format!("data/{}_mean_reversion_state.json", rc.symbol));
+            let mut mr = crate::strategy::mean_reversion::MeanReversionStrategy::new(
+                &rc.symbol,
+                &rc.mean_reversion,
+                crate::notifications::TelegramBot::disabled(),
+            );
+            Ok(run_loop(
+                &mut mr,
                 &mut sim,
                 &mut port,
                 &capital,
