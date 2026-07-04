@@ -65,6 +65,15 @@ pub async fn run_grid_on_bars(rc: &ReplayConfig, bars: Vec<Bar>) -> anyhow::Resu
     // Isolate grid's state file (orders.json / inventory) in a temp dir —
     // NEVER "data", which is the production live directory.
     let tmp = tempfile::TempDir::new()?;
+
+    // Route grid's trade_journal::log_unified away from the live data/trades.db
+    // (the production source-of-truth) into this run's isolated tempdir. Must
+    // be set before the first on_fill, which lazily initializes the journal's
+    // OnceLock-connected DB path. NOTE: set_var is process-global — safe here
+    // because the backtest binary is single-purpose (no other engine runs in
+    // this process). See task-6 critical-fix note.
+    std::env::set_var("TRADES_JOURNAL_PATH", tmp.path().join("trades.db"));
+
     let mut grid = GridStrategy::new_with_state_dir(
         &rc.symbol,
         &rc.grid,
