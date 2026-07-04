@@ -52,6 +52,9 @@ async fn main() -> anyhow::Result<()> {
         taker_fee_bps: cfg.paper.taker_fee_bps,
         maker_fee_bps: cfg.paper.maker_fee_bps,
         slippage_bps: cfg.paper.slippage_bps,
+        trend: cfg.trend.clone(),
+        perp_bars: None,
+        funding_rate: None,
     };
     let run = run_grid_on_bars(&rc, bars).await?;
     let m = report::compute(&run, 0.0, 1.0);

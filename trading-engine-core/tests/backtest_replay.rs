@@ -4,8 +4,11 @@
 //! equity curve. Grid's regime gate (ADX<25, Choppiness>50, NATR in range)
 //! may not fire on synthetic data, so grid may not actually trade — that's
 //! fine. The real proof is Task 7's run on real ETHUSDT data.
-use trading_engine_core::backtest::replay::{run_grid_on_bars, EngineKind, ReplayConfig};
-use trading_engine_core::config::{AppConfig, GridConfig};
+//!
+//! Task 3 adds the Trend smoke test: the real `TrendStrategy` runs verbatim
+//! against a synthetic uptrend with the perp source wired (long-only leg).
+use trading_engine_core::backtest::replay::{run_engine_on_bars, run_grid_on_bars, EngineKind, ReplayConfig};
+use trading_engine_core::config::{AppConfig, GridConfig, TrendConfig};
 use trading_engine_core::models::bar::Bar;
 
 fn grid_cfg() -> GridConfig {
@@ -29,6 +32,9 @@ fn cfg() -> ReplayConfig {
         maker_fee_bps: 10.0,
         slippage_bps: 0.0,
         grid: grid_cfg(),
+        trend: TrendConfig::default(),
+        perp_bars: None,
+        funding_rate: None,
     }
 }
 
@@ -82,4 +88,63 @@ async fn replay_does_not_write_to_production_trades_db() {
         "replay wrote to the production data/trades.db — TRADES_JOURNAL_PATH not isolated"
     );
     let _ = std::fs::remove_file(&prod_journal); // cleanup in case
+}
+
+// ── Task 3: Trend dispatch smoke test ──────────────────────────────────────
+//
+// Proves the real `TrendStrategy` runs end-to-end against the replay driver
+// (EngineKind::Trend arm) with `HistoricalPerpSource` wiring available for
+// the short side. Long-only leg here (`trade_shorts=false`) — the perp
+// source stays unattached, exercising the pure long path. The short leg /
+// perp-attached path is covered by the trend engine's own unit tests; this
+// test only proves the dispatcher constructs and drives the engine without
+// panic and without returning an `Err`.
+//
+// The trend score gate may or may not fire on synthetic monotonic data; the
+// assertion is "completes + produces an equity curve", not "trades N times"
+// (same caveat as the Phase-1 grid smoke).
+
+/// 400-bar monotonic uptrend: 100 → 299.5 in 0.5 steps. Sufficient bars for
+/// trend's warmup (220) + indicator priming (ADX/RSI/ATR need ~50 bars).
+fn trending_bars(up: bool, n: usize) -> Vec<Bar> {
+    (0..n)
+        .map(|i| {
+            let p = if up { 100.0 + i as f64 * 0.5 } else { 200.0 - i as f64 * 0.5 };
+            Bar::new(p, p + 1.0, p - 1.0, p, 10.0, (i as i64) * 3_600_000)
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn trend_long_runs_on_uptrend() {
+    // Load the deployed TrendConfig (cloned), force long-only for this leg.
+    let path = format!("{}/../config/strategy.yaml", env!("CARGO_MANIFEST_DIR"));
+    let app_cfg = AppConfig::load(&path).expect("strategy.yaml must load");
+    let mut tc = app_cfg.trend.clone();
+    tc.trade_shorts = false; // long-only leg — perp stays unattached
+    let rc = ReplayConfig {
+        symbol: "ETHUSDT".into(),
+        init_cash: 100_000.0,
+        warmup_bars: 220,
+        bar_hours: 1.0,
+        engine: EngineKind::Trend,
+        tick_size: 0.01,
+        step_size: 0.0001,
+        taker_fee_bps: app_cfg.paper.taker_fee_bps,
+        maker_fee_bps: app_cfg.paper.maker_fee_bps,
+        slippage_bps: app_cfg.paper.slippage_bps,
+        grid: app_cfg.grid.clone(),
+        trend: tc,
+        perp_bars: None,
+        funding_rate: None,
+    };
+    let bars = trending_bars(true, 400);
+    let res = run_engine_on_bars(EngineKind::Trend, &rc, bars)
+        .await
+        .expect("trend replay must complete without error");
+    assert!(!res.equity_curve.is_empty(), "equity curve should be non-empty");
+    // Smoke: completes without panic/error; entries depend on the score gate
+    // firing on this synthetic series, which is not asserted (same caveat as
+    // Phase-1 grid). `res.trades.len()` is intentionally not asserted.
+    let _ = res.trades.len();
 }

@@ -36,11 +36,12 @@ use super::fills::FillSim;
 use super::perp::HistoricalPerpSource;
 use super::portfolio::{Portfolio, Trade};
 
-/// Which production engine to drive in the replay loop. Only `Grid` this
-/// task; Tasks 3/4/5 add `Trend` / `Swing` / `MeanReversion`.
+/// Which production engine to drive in the replay loop. Grid is Phase-1;
+/// Trend added in Task 3; Swing/MeanReversion come in Tasks 4/5.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EngineKind {
     Grid,
+    Trend,
 }
 
 impl EngineKind {
@@ -50,6 +51,7 @@ impl EngineKind {
     pub fn budget_key(self) -> &'static str {
         match self {
             EngineKind::Grid => "grid",
+            EngineKind::Trend => "trend",
         }
     }
 }
@@ -60,7 +62,8 @@ impl EngineKind {
 ///
 /// `engine` selects which production strategy to drive; `bar_hours` is the
 /// bar interval in hours (used for Sharpe annualization downstream). Per-
-/// engine configs (TrendConfig etc.) are added by Tasks 3/4/5.
+/// engine configs: `grid` (Phase 1) + `trend`/`perp_bars`/`funding_rate`
+/// (Task 3). Swing/MR fields append in Tasks 4/5.
 #[derive(Debug)]
 pub struct ReplayConfig {
     pub symbol: String,
@@ -74,6 +77,14 @@ pub struct ReplayConfig {
     pub taker_fee_bps: f64,
     pub maker_fee_bps: f64,
     pub slippage_bps: f64,
+    /// Trend dispatch inputs. `trend` is the production `TrendConfig`
+    /// (cloned from AppConfig for replay). `perp_bars`/`funding_rate`
+    /// construct the `HistoricalPerpSource` used for short-side MTM and
+    /// funding accrual when `trend.trade_shorts == true`; both `None` for
+    /// the long-only leg.
+    pub trend: crate::config::TrendConfig,
+    pub perp_bars: Option<Vec<Bar>>,
+    pub funding_rate: Option<f64>,
 }
 
 #[derive(Debug)]
@@ -93,8 +104,10 @@ pub async fn run_grid_on_bars(rc: &ReplayConfig, bars: Vec<Bar>) -> anyhow::Resu
 
 /// Engine-agnostic dispatcher: construct the strategy + state for `kind`,
 /// then hand off to `run_loop`. Construction (TempDir, set_var, strategy
-/// ctor) happens here; the bar loop itself does not fail, so `run_loop`
-/// returns `RunResult` directly (this wrapper wraps it in `Ok`).
+/// ctor) happens here. `run_loop` itself returns `anyhow::Result<RunResult>`:
+/// unlike Phase 1 (grid-only, which never errors), Trend/Swing/MR can return
+/// `Err` from `on_tick`/`on_fill` (disk writes, indicator paths) — those
+/// propagate as `anyhow::Error` so callers see a real error instead of a panic.
 pub async fn run_engine_on_bars(
     kind: EngineKind,
     rc: &ReplayConfig,
@@ -136,7 +149,41 @@ pub async fn run_engine_on_bars(
                 rc.bar_hours,
                 None,
             )
-            .await)
+            .await?)
+        }
+        EngineKind::Trend => {
+            let mut trend = crate::strategy::trend::TrendStrategy::new(
+                &rc.symbol,
+                &rc.trend,
+                TelegramBot::disabled(),
+            );
+            // Attach a `HistoricalPerpSource` iff shorts are enabled — the
+            // trend engine uses it for short-side MTM (`perp_mark`) and
+            // funding accrual. Long-only legs skip perp entirely. The same
+            // `Arc` is handed to both `with_perp` (as `Arc<dyn PerpPriceSource>`)
+            // and `run_loop` (as `Option<&HistoricalPerpSource>` via
+            // `as_deref`) so `set_clock(bar.timestamp)` can drive it each bar.
+            let perp = if rc.trend.trade_shorts {
+                let p = std::sync::Arc::new(crate::backtest::perp::HistoricalPerpSource::from_bars(
+                    rc.perp_bars.clone().unwrap_or_default(),
+                    rc.funding_rate,
+                ));
+                trend = trend.with_perp(p.clone());
+                Some(p)
+            } else {
+                None
+            };
+            Ok(run_loop(
+                &mut trend,
+                &mut sim,
+                &mut port,
+                &capital,
+                &bars,
+                rc.warmup_bars,
+                rc.bar_hours,
+                perp.as_deref(),
+            )
+            .await?)
         }
     }
 }
@@ -178,7 +225,7 @@ async fn run_loop(
     warmup_bars: usize,
     _bar_hours: f64,
     perp: Option<&HistoricalPerpSource>,
-) -> RunResult {
+) -> anyhow::Result<RunResult> {
     let mut equity_curve = Vec::with_capacity(bars.len());
     let mut fills_buf = Vec::new();
 
@@ -201,30 +248,22 @@ async fn run_loop(
         // 1. Evaluate resting orders against this bar (limit/stop crosses).
         sim.evaluate(bar, &mut fills_buf);
         for f in fills_buf.drain(..) {
-            // Phase-1 simplification: `on_fill`'s returned orders are discarded.
-            // `.expect` preserves the Phase-1 fail-fast semantics (engine errors
-            // abort the replay); grid never errors here in practice.
-            let _ = strategy
-                .on_fill(&f)
-                .await
-                .expect("on_fill must not fail in replay");
+            // Phase-1 simplification: `on_fill`'s returned orders are discarded
+            // (on_tick re-emits them next bar). Errors, however, propagate via
+            // `?` — grid never errors here, but Trend/Swing/MR can (disk writes,
+            // indicator paths). Replaces the Phase-1 `.expect` panic.
+            let _ = strategy.on_fill(&f).await?;
             port.apply_fill(&f);
         }
 
         // 2. Build context and run the engine for this bar.
         let ctx = build_ctx_from(symbol_of(strategy), bar, &bars[..i], &capital, /*replay*/ i < warmup_bars);
-        let new_orders = strategy
-            .on_tick(&ctx)
-            .await
-            .expect("on_tick must not fail in replay");
+        let new_orders = strategy.on_tick(&ctx).await?;
 
         // 3. Submit. Market fills now (at bar.close ± slippage); limit/stop rest.
         sim.submit(new_orders, bar, &mut fills_buf);
         for f in fills_buf.drain(..) {
-            let _ = strategy
-                .on_fill(&f)
-                .await
-                .expect("on_fill must not fail in replay");
+            let _ = strategy.on_fill(&f).await?;
             port.apply_fill(&f);
         }
 
@@ -237,13 +276,13 @@ async fn run_loop(
 
     let first_close = bars.first().map(|b| b.close).filter(|p| *p > 0.0).unwrap_or(1.0);
     let last_close = bars.last().map(|b| b.close).filter(|p| *p > 0.0).unwrap_or(1.0);
-    RunResult {
+    Ok(RunResult {
         equity_curve,
         trades: port.trades.clone(),
         realized: port.realized,
         final_equity: port.equity(last_close),
         hodl_return_pct: (last_close / first_close - 1.0) * 100.0,
-    }
+    })
 }
 
 /// Helper: pull the trading pair out of a `dyn Strategy` for `build_ctx_from`.
