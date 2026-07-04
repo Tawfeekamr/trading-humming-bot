@@ -29,7 +29,7 @@ async-trait = "0.1"
 futures = "0.3"
 
 # HTTP + WebSocket
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking"] }
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-native-roots"] }
 
 # Serialization
@@ -74,6 +74,10 @@ rusqlite_migration = "=2.0.0"
 
 # Collections
 rustc-hash = "2"
+
+# Backtest harness: kline download + parse (bars.rs)
+csv = "1"
+zip = "2"
 
 # Python bindings (optional — enabled for maturin wheel builds)
 pyo3 = { version = "0.24", features = ["extension-module"], optional = true }
