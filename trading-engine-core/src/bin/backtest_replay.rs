@@ -52,6 +52,7 @@ async fn main() -> anyhow::Result<()> {
     let mut months: u32 = 6;
     let mut engine: Option<EngineKind> = None;
     let mut cfg_path: String = "config/strategy.yaml".into();
+    let mut validate = false;
 
     let mut args = std::env::args().skip(1);
     let mut positional_idx = 0;
@@ -70,6 +71,8 @@ async fn main() -> anyhow::Result<()> {
             cfg_path = args
                 .next()
                 .ok_or_else(|| anyhow::anyhow!("--config requires a value"))?;
+        } else if a == "--validate" {
+            validate = true;
         } else if a.starts_with("--") {
             return Err(anyhow::anyhow!("unknown flag: {}", a));
         } else {
@@ -160,19 +163,39 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // ---- Run + report ----
-    let run = run_engine_on_bars(kind, &rc, bars).await?;
-    let m = report::compute(&run, 0.0, bar_hours);
-    report::write_report(Path::new("backtest/results/replay"), &pair, &run, &m)?;
-    println!(
-        "engine={:?} trades={} return_pct={:.2} sharpe={:.3} max_dd_pct={:.2} win_pct={:.2} hodl_pct={:.2}",
-        kind,
-        m.total_trades,
-        m.total_return_pct,
-        m.sharpe,
-        m.max_drawdown_pct,
-        m.win_rate_pct,
-        m.hodl_return_pct,
-    );
-    println!("{:#?}", m);
+    if validate {
+        use trading_engine_core::backtest::validation::run_validation;
+        let rep = run_validation(kind, &rc, bars, 1.0 / 3.0, bar_hours).await?;
+        println!(
+            "validate engine={:?} full_sharpe={:.2} is_sharpe={:.2} oos_sharpe={:.2} gap={:.2} overfit={}",
+            kind,
+            rep.full.sharpe,
+            rep.is_metrics.sharpe,
+            rep.oos.sharpe,
+            rep.is_oos_sharpe_gap,
+            rep.overfit_suspect,
+        );
+        report::write_validation_report(
+            Path::new("backtest/results/replay"),
+            &pair,
+            kind,
+            &rep,
+        )?;
+    } else {
+        let run = run_engine_on_bars(kind, &rc, bars).await?;
+        let m = report::compute(&run, 0.0, bar_hours);
+        report::write_report(Path::new("backtest/results/replay"), &pair, &run, &m)?;
+        println!(
+            "engine={:?} trades={} return_pct={:.2} sharpe={:.3} max_dd_pct={:.2} win_pct={:.2} hodl_pct={:.2}",
+            kind,
+            m.total_trades,
+            m.total_return_pct,
+            m.sharpe,
+            m.max_drawdown_pct,
+            m.win_rate_pct,
+            m.hodl_return_pct,
+        );
+        println!("{:#?}", m);
+    }
     Ok(())
 }
