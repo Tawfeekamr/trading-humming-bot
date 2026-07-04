@@ -37,11 +37,12 @@ use super::perp::HistoricalPerpSource;
 use super::portfolio::{Portfolio, Trade};
 
 /// Which production engine to drive in the replay loop. Grid is Phase-1;
-/// Trend added in Task 3; Swing/MeanReversion come in Tasks 4/5.
+/// Trend added in Task 3; Swing added in Task 4; MeanReversion comes in Task 5.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EngineKind {
     Grid,
     Trend,
+    Swing,
 }
 
 impl EngineKind {
@@ -52,6 +53,7 @@ impl EngineKind {
         match self {
             EngineKind::Grid => "grid",
             EngineKind::Trend => "trend",
+            EngineKind::Swing => "swing",
         }
     }
 }
@@ -63,7 +65,7 @@ impl EngineKind {
 /// `engine` selects which production strategy to drive; `bar_hours` is the
 /// bar interval in hours (used for Sharpe annualization downstream). Per-
 /// engine configs: `grid` (Phase 1) + `trend`/`perp_bars`/`funding_rate`
-/// (Task 3). Swing/MR fields append in Tasks 4/5.
+/// (Task 3) + `swing` (Task 4). MR fields append in Task 5.
 #[derive(Debug)]
 pub struct ReplayConfig {
     pub symbol: String,
@@ -85,6 +87,11 @@ pub struct ReplayConfig {
     pub trend: crate::config::TrendConfig,
     pub perp_bars: Option<Vec<Bar>>,
     pub funding_rate: Option<f64>,
+    /// Swing dispatch input: production `SwingConfig` (cloned from AppConfig).
+    /// `tick_size`/`step_size` are injected from `ReplayConfig` before
+    /// construction (mirrors main.rs:151-153). Swing is long-only, so no
+    /// perp is needed — the signed Portfolio (Task 2) handles it directly.
+    pub swing: Option<crate::config::SwingConfig>,
 }
 
 #[derive(Debug)]
@@ -182,6 +189,34 @@ pub async fn run_engine_on_bars(
                 rc.warmup_bars,
                 rc.bar_hours,
                 perp.as_deref(),
+            )
+            .await?)
+        }
+        EngineKind::Swing => {
+            // Mirror main.rs:151-153 — clone the deployed SwingConfig and
+            // inject tick/step before construction so resting-order rounding
+            // (round_step) doesn't no-op on `None`. Long-only: no perp needed,
+            // so the signed Portfolio (Task 2) handles fills directly.
+            let mut sc = rc
+                .swing
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("swing config required for EngineKind::Swing"))?;
+            sc.tick_size = Some(rc.tick_size);
+            sc.step_size = Some(rc.step_size);
+            let mut swing = crate::strategy::swing::SwingStrategy::new(
+                &rc.symbol,
+                &sc,
+                crate::notifications::TelegramBot::disabled(),
+            );
+            Ok(run_loop(
+                &mut swing,
+                &mut sim,
+                &mut port,
+                &capital,
+                &bars,
+                rc.warmup_bars,
+                rc.bar_hours,
+                None,
             )
             .await?)
         }

@@ -35,6 +35,7 @@ fn cfg() -> ReplayConfig {
         trend: TrendConfig::default(),
         perp_bars: None,
         funding_rate: None,
+        swing: None,
     }
 }
 
@@ -137,6 +138,7 @@ async fn trend_long_runs_on_uptrend() {
         trend: tc,
         perp_bars: None,
         funding_rate: None,
+        swing: None,
     };
     let bars = trending_bars(true, 400);
     let res = run_engine_on_bars(EngineKind::Trend, &rc, bars)
@@ -146,5 +148,61 @@ async fn trend_long_runs_on_uptrend() {
     // Smoke: completes without panic/error; entries depend on the score gate
     // firing on this synthetic series, which is not asserted (same caveat as
     // Phase-1 grid). `res.trades.len()` is intentionally not asserted.
+    let _ = res.trades.len();
+}
+
+// ── Task 4: Swing dispatch smoke test ──────────────────────────────────────
+//
+// Proves the real long-only `SwingStrategy` runs end-to-end against the
+// replay driver (EngineKind::Swing arm) verbatim — same engine the live Rust
+// binary drives. The min_score entry gate may not fire on synthetic data, so
+// the assertion is "completes + produces an equity curve", not "trades N
+// times" (same caveat as the Phase-1 grid and Task-3 trend smokes).
+
+/// 300-bar oscillation in a 100-110 band with 1-high/low wicks — gives the
+/// Donchian/RSI/volume gate something to chew on without being a clean trend
+/// (swing is a reversal strategy, so a monotonic ramp would never trigger).
+fn ranging_bars(n: usize) -> Vec<Bar> {
+    (0..n)
+        .map(|i| {
+            // Sine oscillation around 105 with amplitude 5; integer-step cycle
+            // gives visible higher-highs/lower-lows for the donchian + RSI gates.
+            let phase = (i as f64) * 0.2;
+            let p = 105.0 + 5.0 * phase.sin();
+            Bar::new(p, p + 1.0, p - 1.0, p, 15.0, (i as i64) * 3_600_000)
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn swing_runs_on_synthetic_range() {
+    let path = format!("{}/../config/strategy.yaml", env!("CARGO_MANIFEST_DIR"));
+    let app_cfg = AppConfig::load(&path).expect("strategy.yaml must load");
+    let rc = ReplayConfig {
+        symbol: "ETHUSDT".into(),
+        init_cash: 100_000.0,
+        warmup_bars: 220,
+        bar_hours: 1.0,
+        engine: EngineKind::Swing,
+        tick_size: 0.01,
+        step_size: 0.0001,
+        taker_fee_bps: app_cfg.paper.taker_fee_bps,
+        maker_fee_bps: app_cfg.paper.maker_fee_bps,
+        slippage_bps: app_cfg.paper.slippage_bps,
+        grid: app_cfg.grid.clone(),
+        trend: app_cfg.trend.clone(),
+        perp_bars: None,
+        funding_rate: None,
+        swing: app_cfg.swing.clone(),
+    };
+    let bars = ranging_bars(300);
+    let res = run_engine_on_bars(EngineKind::Swing, &rc, bars)
+        .await
+        .expect("swing replay must complete without error");
+    assert!(!res.equity_curve.is_empty(), "equity curve should be non-empty");
+    // Smoke: completes without panic/error; entries depend on the min_score
+    // gate firing on this synthetic series, which is not asserted (same
+    // caveat as Phase-1 grid and Task-3 trend). `res.trades.len()` is
+    // intentionally not asserted.
     let _ = res.trades.len();
 }

@@ -55,6 +55,7 @@ async fn main() -> anyhow::Result<()> {
         trend: cfg.trend.clone(),
         perp_bars: None,
         funding_rate: None,
+        swing: cfg.swing.clone(),
     };
     let run = run_grid_on_bars(&rc, bars).await?;
     let m = report::compute(&run, 0.0, 1.0);
