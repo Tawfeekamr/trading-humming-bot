@@ -1,7 +1,9 @@
 use trading_engine_core::backtest::validation::{split_is_oos, run_validation, ValidationReport};
 use trading_engine_core::backtest::replay::{ReplayConfig, EngineKind};
+use trading_engine_core::backtest::report::{write_validation_report, Metrics};
 use trading_engine_core::config::AppConfig;
 use trading_engine_core::models::bar::Bar;
+use tempfile::TempDir;
 
 fn bars(n: usize) -> Vec<Bar> {
     (0..n).map(|i| Bar::new(100.0, 101.0, 99.0, 100.0, 1.0, i as i64 * 3_600_000)).collect()
@@ -59,4 +61,26 @@ fn split_is_two_thirds_one_third_contiguous_no_overlap() {
 fn split_empty_input_returns_two_empty_vecs() {
     let (is_b, oos_b) = split_is_oos(&[], 1.0 / 3.0);
     assert!(is_b.is_empty() && oos_b.is_empty());
+}
+
+#[test]
+fn validation_report_markdown_has_is_oos_table_overfit_flag_and_gap_stamps() {
+    let mk = |sharpe: f64, trades: usize| Metrics {
+        total_return_pct: 10.0, sharpe, max_drawdown_pct: 5.0, win_rate_pct: 60.0,
+        total_trades: trades, profit_factor: 1.5, hodl_return_pct: 0.0,
+    };
+    // IS sharpe 2.0, OOS sharpe 0.5 → gap 1.5 → overfit
+    let rep = ValidationReport {
+        full: mk(1.2, 30), is_metrics: mk(2.0, 20), oos: mk(0.5, 10),
+        is_oos_sharpe_gap: 1.5, overfit_suspect: true,
+    };
+    let tmp = TempDir::new().unwrap();
+    write_validation_report(tmp.path(), "ETHUSDT", EngineKind::Trend, &rep).unwrap();
+    let md = std::fs::read_to_string(tmp.path().join("validation_report.md")).unwrap();
+    assert!(md.contains("IS")); assert!(md.contains("OOS"));
+    assert!(md.contains("Sharpe")); assert!(md.contains("1.5"));      // the gap
+    assert!(md.contains("overfit") || md.contains("Overfit"));        // the flag
+    assert!(md.contains("regime") || md.contains("fidelity") || md.contains("Fidelity")); // gap stamps
+    // JSON artifact present
+    assert!(tmp.path().join("ETHUSDT_trend_validation.json").exists());
 }

@@ -10,7 +10,8 @@ use std::path::Path;
 use anyhow::Result;
 use serde::Serialize;
 
-use super::replay::RunResult;
+use super::replay::{EngineKind, RunResult};
+use super::validation::ValidationReport;
 
 #[derive(Debug, Serialize)]
 pub struct Metrics {
@@ -108,5 +109,60 @@ pub fn write_report(dir: &Path, symbol: &str, _run: &RunResult, m: &Metrics) -> 
         m.hodl_return_pct,
     );
     std::fs::write(dir.join("report.md"), md)?;
+    Ok(())
+}
+
+/// Write the IS/OOS validation artifacts:
+/// - `<dir>/<SYMBOL>_<engine>_validation.json` — pretty-printed `ValidationReport`.
+/// - `<dir>/validation_report.md` — human-readable IS/OOS table, the IS→OOS
+///   Sharpe gap with the overfit flag, and the three fidelity-gap stamps that
+///   apply uniformly to every metric in the table (regime gate off,
+///   perp-as-spot-proxy + flat funding for trend shorts, MR excluded from this
+///   1h harness). Creates `dir` if missing.
+pub fn write_validation_report(
+    dir: &Path,
+    symbol: &str,
+    kind: EngineKind,
+    rep: &ValidationReport,
+) -> Result<()> {
+    std::fs::create_dir_all(dir)?;
+    let json = serde_json::to_string_pretty(rep)?;
+    std::fs::write(
+        dir.join(format!("{}_{}_validation.json", symbol, kind.budget_key())),
+        json,
+    )?;
+
+    let row = |label: &str, m: &Metrics| {
+        format!(
+            "| {} | {:.2}% | {:.2} | {:.2}% | {:.0}% | {} |",
+            label, m.total_return_pct, m.sharpe, m.max_drawdown_pct, m.win_rate_pct, m.total_trades
+        )
+    };
+    let flag = if rep.overfit_suspect {
+        "⚠️ Overfit suspected"
+    } else {
+        "✅ no overfit flag"
+    };
+    let md = format!(
+        "# Validation: {} {} (IS/OOS)\n\n\
+         | Slice | Return | Sharpe | MaxDD | Win | Trades |\n\
+         |---|---|---|---|---|---|\n\
+         {}\n\
+         {}\n\
+         {}\n\n\
+         - IS→OOS Sharpe gap: **{:.2}** → {}\n\n\
+         ## Fidelity gaps (apply to every metric above)\n\
+         - **regime=None** — grid/trend ML regime gate is OFF (optimistic; live uses ML regime).\n\
+         - **perp-as-spot-proxy + flat funding** — trend-short MTM uses spot≈perp, funding accrual = 0 (trend shorts approximate).\n\
+         - **MR excluded** — MR is tick-resolution (30s flush window); its faithful backtest is the separate `backtest/mean_reversion/` tick-replay, not this 1h harness.\n",
+        symbol,
+        kind.budget_key(),
+        row("Full", &rep.full),
+        row("IS", &rep.is_metrics),
+        row("OOS", &rep.oos),
+        rep.is_oos_sharpe_gap,
+        flag
+    );
+    std::fs::write(dir.join("validation_report.md"), md)?;
     Ok(())
 }
