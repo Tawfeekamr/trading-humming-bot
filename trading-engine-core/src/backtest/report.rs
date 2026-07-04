@@ -163,6 +163,6 @@ pub fn write_validation_report(
         rep.is_oos_sharpe_gap,
         flag
     );
-    std::fs::write(dir.join("validation_report.md"), md)?;
+    std::fs::write(dir.join(format!("{}_{}_validation.md", symbol, kind.budget_key())), md)?;
     Ok(())
 }

@@ -76,7 +76,7 @@ fn validation_report_markdown_has_is_oos_table_overfit_flag_and_gap_stamps() {
     };
     let tmp = TempDir::new().unwrap();
     write_validation_report(tmp.path(), "ETHUSDT", EngineKind::Trend, &rep).unwrap();
-    let md = std::fs::read_to_string(tmp.path().join("validation_report.md")).unwrap();
+    let md = std::fs::read_to_string(tmp.path().join(format!("ETHUSDT_{}_validation.md", EngineKind::Trend.budget_key()))).unwrap();
     assert!(md.contains("IS")); assert!(md.contains("OOS"));
     assert!(md.contains("Sharpe")); assert!(md.contains("1.5"));      // the gap
     assert!(md.contains("overfit") || md.contains("Overfit"));        // the flag
