@@ -6,3 +6,4 @@ pub mod perp;
 pub mod portfolio;
 pub mod replay;
 pub mod report;
+pub mod validation;
