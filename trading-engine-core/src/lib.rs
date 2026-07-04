@@ -16,6 +16,7 @@ pub mod signal;
 pub mod bar_cache;
 pub mod engine;
 pub mod api;
+pub mod backtest;
 
 // ── PyO3 Python module (enabled with --features python) ─────────────
 #[cfg(feature = "python")]
