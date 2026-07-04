@@ -38,6 +38,7 @@ use super::portfolio::{Portfolio, Trade};
 /// Replay configuration. `start` / `end` are intentionally absent: this is
 /// the bar-fed entry point (`run_grid_on_bars`); a future `run_grid` wrapper
 /// can own date-range → bars loading and call into `run_grid_on_bars`.
+#[derive(Debug)]
 pub struct ReplayConfig {
     pub symbol: String,
     pub init_cash: f64,
@@ -50,6 +51,7 @@ pub struct ReplayConfig {
     pub slippage_bps: f64,
 }
 
+#[derive(Debug)]
 pub struct RunResult {
     pub equity_curve: Vec<(i64, f64)>,
     pub trades: Vec<Trade>,
@@ -112,8 +114,8 @@ pub async fn run_grid_on_bars(rc: &ReplayConfig, bars: Vec<Bar>) -> anyhow::Resu
         equity_curve.push((bar.timestamp, port.equity(bar.close)));
     }
 
-    let first_close = bars.first().map(|b| b.close).unwrap_or(1.0);
-    let last_close = bars.last().map(|b| b.close).unwrap_or(1.0);
+    let first_close = bars.first().map(|b| b.close).filter(|p| *p > 0.0).unwrap_or(1.0);
+    let last_close = bars.last().map(|b| b.close).filter(|p| *p > 0.0).unwrap_or(1.0);
     Ok(RunResult {
         equity_curve,
         trades: port.trades.clone(),
@@ -128,6 +130,19 @@ pub async fn run_grid_on_bars(rc: &ReplayConfig, bars: Vec<Bar>) -> anyhow::Resu
 /// `balances` carries a large fake USDT balance so the engine's internal
 /// "do I have anything to spend" guards don't trip (real sizing flows through
 /// `CapitalManager`). `regime=None` — replay does not synthesize ML regime.
+///
+/// Warmup gate: when `replay == true` (the bar index is in the warmup
+/// window), we synthesize the `OrderBook` with **empty `bids` and `asks`** so
+/// `mid_price()` returns `None`. This matters because `GridStrategy::on_tick`
+/// ignores `ctx.replay` entirely — its only entry gate is
+/// `evaluate_state_with_ml` which flips `GridState::Active`. Grid updates its
+/// stateful indicators (ADX / Choppiness / ATR / SupportResistance) from
+/// `recent_bars` *before* the `mid_price` None-check (grid.rs ~533-554), then
+/// early-returns on `None` mid_price (grid.rs ~557-565) without ever calling
+/// `evaluate_state_with_ml`. So warmup bars prime indicators but cannot arm
+/// the grid → zero warmup trades, indicators warm by the time live bars
+/// arrive. (Equivalent to a trend-style replay gate without needing the
+/// strategy to read the flag.)
 fn build_ctx(
     symbol: &str,
     bar: &Bar,
@@ -136,11 +151,22 @@ fn build_ctx(
     replay: bool,
 ) -> TickContext {
     let recent: Vec<Bar> = prior.iter().rev().take(200).cloned().rev().collect();
-    let ob = OrderBook {
-        symbol: symbol.into(),
-        bids: vec![(bar.close * 0.9999, 1.0)],
-        asks: vec![(bar.close * 1.0001, 1.0)],
-        timestamp: bar.timestamp,
+    let ob = if replay {
+        // Empty book → mid_price() = None → grid early-returns after priming
+        // indicators. Suppresses all warmup entries.
+        OrderBook {
+            symbol: symbol.into(),
+            bids: vec![],
+            asks: vec![],
+            timestamp: bar.timestamp,
+        }
+    } else {
+        OrderBook {
+            symbol: symbol.into(),
+            bids: vec![(bar.close * 0.9999, 1.0)],
+            asks: vec![(bar.close * 1.0001, 1.0)],
+            timestamp: bar.timestamp,
+        }
     };
     let mut balances = HashMap::new();
     balances.insert("USDT".to_string(), 1e9);
