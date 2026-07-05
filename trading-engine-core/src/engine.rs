@@ -148,6 +148,11 @@ impl Engine {
         self.regime_cache.load_from_file().await;
         info!("Regime cache loaded from file");
 
+        // Load routing cache from file (fallback for when the PPO router hasn't
+        // pushed yet — same cold-start shape as the regime cache above).
+        self.routing_cache.load_from_file().await;
+        info!("Routing cache loaded from file");
+
         // Restore circuit-breaker state (peak equity, daily baseline, halt) across restarts.
         let risk_path = std::env::var("RISK_STATE_PATH").unwrap_or_else(|_| "data/risk_state.json".to_string());
         let boot_balances = self.connector.get_balances().await.unwrap_or_default();
@@ -783,5 +788,39 @@ mod tests {
         assert_eq!(trend_log.lock().unwrap().paused, None);
         assert!(!grid_log.lock().unwrap().flat_called);
         assert!(!trend_log.lock().unwrap().flat_called);
+    }
+
+    /// Task 6 boot test: when `data/routing_cache.json` exists at startup, the
+    /// engine's `routing_cache` field must load it (mirrors the regime cache's
+    /// boot load). This proves the file-fallback path works through the Engine
+    /// — the production wire-up is `Engine::run()` calling
+    /// `self.routing_cache.load_from_file().await` right after the regime load.
+    #[tokio::test]
+    async fn test_engine_loads_routing_from_file() {
+        let path = "/tmp/test_engine_routing_boot.json";
+        let entry = crate::strategy::routing_cache::RoutingEntry {
+            active_engine: "trend".into(),
+            size_mult: 1.0,
+            flat: false,
+            timestamp: chrono::Utc::now().timestamp_millis(),
+        };
+        std::fs::write(path, serde_json::to_string_pretty(&entry).unwrap())
+            .expect("write routing_cache.json fixture");
+
+        // Build an Engine whose routing_cache points at the fixture file. The
+        // minimal_engine helper seeds an empty strategy vec — we don't tick.
+        let routing = RoutingCache::new(path, 0);
+        let engine = minimal_engine(vec![], routing);
+
+        // Mirror what Engine::run() does at boot (right after regime_cache load).
+        engine.routing_cache.load_from_file().await;
+
+        let loaded = engine.routing_cache.get().await
+            .expect("routing entry must be loaded from file");
+        assert_eq!(loaded.active_engine, "trend");
+        assert_eq!(loaded.size_mult, 1.0);
+        assert!(!loaded.flat);
+
+        let _ = std::fs::remove_file(path);
     }
 }
