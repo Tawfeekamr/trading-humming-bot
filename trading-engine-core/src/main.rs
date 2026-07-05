@@ -92,10 +92,13 @@ async fn async_main() -> Result<()> {
     let bar_cache = trading_engine_core::bar_cache::BarCache::new();
     let status_cache = trading_engine_core::strategy::status_cache::StrategyStatusCache::new();
     let regime_cache = trading_engine_core::strategy::regime_cache::RegimeCache::new("data/regime_cache.json", 180_000); // 3min TTL = 3×60s poll
-    // Routing cache: Python PPO router POSTs {active_engine, size_mult, flat} every
-    // tick; Rust reads it from the engine (Task 6 wires it into Engine::new).
-    // 3min TTL matches regime_cache (3× the 60s Python push cadence).
-    let routing_cache = trading_engine_core::strategy::routing_cache::RoutingCache::new("data/routing_cache.json", 180_000);
+    // Routing cache: Python PPO router POSTs {active_engine, size_mult, flat} once
+    // per closed 1h bar (config/strategy.yaml `routing.bar_seconds: 3600`).
+    // TTL = 3 × bar_seconds = 10_800_000ms (3h margin) so a single missed push
+    // (e.g. brief network blip) doesn't flip the engine to "no routing decision"
+    // and pause everything. C3 fix: was 180_000 (3min), 20× too short for the
+    // hourly push cadence — every decision went stale before the next arrived.
+    let routing_cache = trading_engine_core::strategy::routing_cache::RoutingCache::new("data/routing_cache.json", 10_800_000);
     let capital = trading_engine_core::capital::CapitalManager::new(config.capital.reserve_limit_pct)
         .with_budgets(config.capital.budgets.clone());
     let mut engine = trading_engine_core::engine::Engine::new(config, connector.clone(), risk, telegram.clone_for_signal(), bar_cache.clone(), status_cache.clone(), regime_cache.clone(), routing_cache.clone(), capital.clone());

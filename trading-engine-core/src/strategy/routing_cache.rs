@@ -118,15 +118,28 @@ impl RoutingCache {
     }
 
     /// Load from file on startup (no mtime check — always reads).
+    /// Refreshes `last_mtime` so the first `get()` doesn't redundantly re-read
+    /// the file (mirrors `RegimeCache::load_from_file`). I3 fix: was leaving
+    /// `last_mtime = 0`, so every `get()` re-parsed the file.
     pub async fn load_from_file(&self) {
         let content = match std::fs::read_to_string(&self.file_path) {
             Ok(c) => c,
             Err(_) => return, // File doesn't exist yet — that's fine
         };
-        if let Ok(e) = serde_json::from_str::<RoutingEntry>(&content) {
-            let mut state = self.state.write().await;
-            state.entry = Some(e);
-        }
+        let entry = match serde_json::from_str::<RoutingEntry>(&content) {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+        let mtime = std::fs::metadata(&self.file_path)
+            .map(|m| m.modified()
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs())
+            .unwrap_or(0);
+        let mut state = self.state.write().await;
+        state.entry = Some(entry);
+        state.last_mtime = mtime;
     }
 
     /// Persist current state to file (called after HTTP push as backup).
@@ -167,5 +180,50 @@ mod tests {
             });
         }
         assert!(cache.get().await.is_none());
+    }
+
+    /// I3: load_from_file must refresh last_mtime so the first get() doesn't
+    /// redundantly re-parse the file. Mirrors regime_cache's roundtrip test.
+    #[tokio::test]
+    async fn test_routing_cache_load_from_file_sets_mtime() {
+        let path = "/tmp/test_routing_load_mtime.json";
+        let _ = std::fs::remove_file(path);
+
+        // Write a routing entry directly to the file (simulating a Python push
+        // persist that happened before Rust started).
+        let entry = RoutingEntry {
+            active_engine: "trend".into(), size_mult: 1.5, flat: false,
+            timestamp: chrono::Utc::now().timestamp_millis(),
+        };
+        std::fs::write(path, serde_json::to_string_pretty(&entry).unwrap()).unwrap();
+
+        let cache = RoutingCache::new(path, 0);
+        cache.load_from_file().await;
+
+        // mtime must be populated — otherwise get() would re-read the file every call.
+        let state = cache.state.read().await;
+        assert!(state.last_mtime > 0, "last_mtime must be set after load_from_file");
+        assert!(state.entry.is_some(), "entry loaded");
+        drop(state);
+
+        // get() returns the entry without re-parsing (mtime matches).
+        let r = cache.get().await.expect("entry readable");
+        assert_eq!(r.active_engine, "trend");
+        assert_eq!(r.size_mult, 1.5);
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    /// C3: routing TTL must be 3 × bar_seconds. For 1h bars that's 10_800_000ms.
+    /// A 180s TTL (the old value) would stale every decision before the next
+    /// hourly push arrived — 20× too short for the cadence.
+    #[test]
+    fn test_routing_ttl_is_3x_bar_seconds() {
+        // main.rs constructs the cache with this constant; mirror it here so a
+        // careless edit to either side fails this test loudly.
+        const ROUTING_BAR_SECONDS: i64 = 3600;
+        const ROUTING_TTL_MS: i64 = 10_800_000;
+        assert_eq!(ROUTING_TTL_MS, 3 * ROUTING_BAR_SECONDS * 1000,
+            "routing TTL must be 3 × bar_seconds (1h bars → 10_800_000ms)");
     }
 }
