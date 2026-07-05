@@ -98,7 +98,7 @@ async fn async_main() -> Result<()> {
     let routing_cache = trading_engine_core::strategy::routing_cache::RoutingCache::new("data/routing_cache.json", 180_000);
     let capital = trading_engine_core::capital::CapitalManager::new(config.capital.reserve_limit_pct)
         .with_budgets(config.capital.budgets.clone());
-    let mut engine = trading_engine_core::engine::Engine::new(config, connector.clone(), risk, telegram.clone_for_signal(), bar_cache.clone(), status_cache.clone(), regime_cache.clone(), capital.clone());
+    let mut engine = trading_engine_core::engine::Engine::new(config, connector.clone(), risk, telegram.clone_for_signal(), bar_cache.clone(), status_cache.clone(), regime_cache.clone(), routing_cache.clone(), capital.clone());
 
     // Build the perp mark source ONCE for all pairs when trend opts into it.
     // Cloned as Arc per pair below; a single shared client + cache serves all.
