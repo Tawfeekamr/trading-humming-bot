@@ -150,9 +150,14 @@ impl GridStrategy {
     }
 
     fn load_state(&mut self) {
-        let content = match std::fs::read_to_string(self.state_path()) {
+        let path = self.state_path();
+        if !path.exists() { return; } // no file yet — fresh start
+        // File EXISTS — if unreadable/unparseable, the exchange may hold open grid
+        // orders/levels we'd lose track of by starting fresh. HALT, don't trade blind.
+        // (Same pattern/rationale as trend::load_position.)
+        let content = match std::fs::read_to_string(&path) {
             Ok(c) => c,
-            Err(_) => return, // no file yet — fresh start
+            Err(e) => Self::halt_unreadable(&path, &format!("read failed: {e}")),
         };
         match serde_json::from_str::<GridStateSnapshot>(&content) {
             Ok(s) => {
@@ -161,8 +166,20 @@ impl GridStrategy {
                 self.level_cooldowns = s.level_cooldowns;
                 self.current_capital = self.initial_capital + self.total_pnl;
             }
-            Err(e) => warn!("Corrupt grid state for {}: {} — starting fresh", self.pair, e),
+            Err(e) => Self::halt_unreadable(&path, &format!("parse failed: {e}")),
         }
+    }
+
+    /// Halt: a grid-state file that exists but won't load means open orders/levels
+    /// may be unmanaged. Panic (don't start fresh blind). Never returns.
+    fn halt_unreadable(path: &std::path::Path, reason: &str) -> ! {
+        panic!(
+            "GRID STATE UNREADABLE: {} ({}) — the state file exists but won't load, \
+             so the exchange may hold open grid orders/levels this bot would lose \
+             track of. HALTING (refusing to resume blind). Reconcile the exchange, \
+             then fix or remove {} and restart.",
+            path.display(), reason, path.display()
+        );
     }
 
     fn save_state_internal(&self) {
@@ -913,6 +930,23 @@ mod tests {
             "BTC-USDT", &test_config(), 0.01, 0.001,
             dir.to_str().unwrap(), TelegramBot::disabled(),
         )
+    }
+
+    #[test]
+    #[should_panic(expected = "GRID STATE UNREADABLE")]
+    fn corrupt_grid_state_halts_boot_instead_of_starting_fresh() {
+        // Regression: a corrupt-but-present grid_state.json must PANIC (so the bot
+        // stays down until reconciled), not silently start fresh — which would lose
+        // track of open grid orders/levels on the exchange.
+        let dir = tempfile::TempDir::new().unwrap();
+        let pair = "CORRUPTGRID-USDT";
+        let path = dir.path().join(format!("{}_grid_state.json", pair.replace("-", "_")));
+        std::fs::write(&path, "{ NOT VALID JSON").unwrap();
+        // new_with_state_dir -> load_state sees the corrupt file and must HALT.
+        let _ = GridStrategy::new_with_state_dir(
+            pair, &test_config(), 0.01, 0.001,
+            dir.path().to_str().unwrap(), TelegramBot::disabled(),
+        );
     }
 
     #[test]

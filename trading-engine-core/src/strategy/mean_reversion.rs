@@ -111,12 +111,26 @@ impl MeanReversionStrategy {
     }
 
     fn load_state(&mut self) {
-        if let Ok(content) = std::fs::read_to_string(self.state_path()) {
-            if let Ok(s) = serde_json::from_str::<MrState>(&content) {
+        let path = self.state_path();
+        if !path.exists() { return; } // no file yet — fresh start
+        // MR state is bookkeeping (realized_pnl/trades/wins) — a corrupt file is a
+        // reporting glitch, NOT a position risk (MR places no resting protective
+        // orders + is disabled in prod). So WARN loudly + start fresh rather than
+        // halt: halting here would take down the ENABLED engines over MR's glitch.
+        let content = match std::fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(e) => {
+                warn!("Mean-reversion state {} unreadable ({}); starting fresh", path.display(), e);
+                return;
+            }
+        };
+        match serde_json::from_str::<MrState>(&content) {
+            Ok(s) => {
                 self.realized_pnl = s.realized_pnl;
                 self.trades = s.trades;
                 self.wins = s.wins;
             }
+            Err(e) => warn!("Corrupt mean-reversion state {} ({}); starting fresh", path.display(), e),
         }
     }
 
