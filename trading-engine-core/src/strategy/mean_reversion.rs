@@ -71,10 +71,6 @@ pub struct MeanReversionStrategy {
     /// Cooldown after exit — prevents re-entering on the same flush signal
     /// (churn loop: exit → flush still in window → immediate re-buy → exit → ...).
     last_exit_time: i64,
-    /// Real-clock startup time — used to skip the bar-replay warmup phase
-    /// (same phantom-trade class as the trend replay bug). MR must not trade
-    /// during the replay; it re-trades historical bars as if live.
-    startup_time_ms: i64,
 }
 
 /// Persisted MR summary state (cumulative P&L across restarts).
@@ -100,7 +96,6 @@ impl MeanReversionStrategy {
             wins: 0,
             entry_time: 0,
             last_exit_time: 0,
-            startup_time_ms: chrono::Utc::now().timestamp_millis(),
         };
         me.load_state();
         me

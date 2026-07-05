@@ -206,8 +206,10 @@ impl TrendStrategy {
         exit_price: f64,
         amount: f64,
         pnl: f64,
-        stop_loss: f64,
-        take_profit: f64,
+        // Prefixed `_` — passed by callers (sl, tp3) but not yet recorded in the
+        // unified journal. Reserved for future SL/TP logging.
+        _stop_loss: f64,
+        _take_profit: f64,
         exit_reason: &str,
         now_ts: i64,
         entry_time: i64,
