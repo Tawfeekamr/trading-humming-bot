@@ -1,21 +1,26 @@
 # RL Multi-Pair + Walk-Forward OOS Harness — Design
 
-**Status: harness IMPLEMENTED (minimal) + smoke-validated.** The pure helpers
-(`walk_forward_slices`, `pool_returns`, `aggregate_dm`) and the orchestrator
-(`run_walk_forward` / `main`) live in `src/rl/walk_forward.py`, unit-tested in
-`tests/test_rl_walk_forward.py` (7 tests). Validated end-to-end on a 2-slice /
-3k-step ETH smoke (plumbing proven; numbers meaningless at that step count).
+**Status: harness + RF trainer IMPLEMENTED.** Walk-forward pure helpers +
+orchestrator in `src/rl/walk_forward.py` (7 tests). RF reproducible trainer in
+`src/ml/train_regime.py` over a documented labeling scheme in
+`src/data/label_generation.py` (5 tests). **Full 2-pair sweep is RUNNING.**
 
-**The full sweep is NOT run** — it's a one-command follow-up awaiting your
-sign-off on the open questions below (pair count, window sizes, RF option).
-
-> ⚠️ **RF labeling gap confirmed (blocks option A).** `src/data/label_generation.py`
-> does not exist, `generate_regime_labels` is defined nowhere in the repo, and
-> `backtest/ml_walk_forward.py` is broken scratch code (imports two missing
-> modules + uses dummy data). The committed `regime_*.pkl` files were trained
-> by code that was never committed. Closing this needs a regime-labeling
-> **methodology decision** (what makes a bar ranging/trending/danger) — not a
-> code fix. See "RF baseline parity" below.
+> ✅ **RF labeling gap RESOLVED.** `src/data/label_generation.py` now defines a
+> documented, lookahead-free-per-bar 3-class forward-looking labeling
+> (1=trending if |24-bar fwd ret|≥2%, 2=danger if min 24-bar fwd ret≤−3%,
+> 0=ranging otherwise; danger takes precedence). `src/ml/train_regime.py`
+> trains a reproducible RF per pair → `models/regime_{PAIR}_clean.pkl`
+> (does NOT overwrite the legacy opaque `.pkl`). ETH clean RF trained
+> (17,231 rows; ranging 48% / danger 26% / trending 25%).
+>
+> ⚠️ **Honest consequence:** the clean RF is a *stronger* baseline than the
+> legacy opaque `.pkl`. ETH single-window OOS, PPO −3.42% vs clean RF −11.50%
+> (DM p=0.096, **not** significant), versus vs legacy RF −19.37% (p=0.0147,
+> significant). PPO still wins on raw return and drawdown either way; whether
+> the edge is *statistically* significant depends on baseline quality. The
+> walk-forward pooled test (more power) is the right arbiter — the running
+> sweep uses the legacy RF; a clean-RF re-eval of the cached per-slice PPO
+> models is the definitive follow-up.
 
 ---
 
