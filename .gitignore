@@ -20,7 +20,8 @@ backtest/data_cache/
 backtest/results/
 models/*.pkl
 models/rl/*.log
-models/rl/_wf_*            # walk-forward per-slice research checkpoints (regenerable)
+# walk-forward per-slice research checkpoints (regenerable via the sweep)
+models/rl/_wf_*
 logs/
 reports/
 tb/
