@@ -1,0 +1,9 @@
+# RL (PPO) training pipeline dependencies — kept separate from the live bot
+# image so the production container stays lean. Install only when training.
+stable-baselines3>=2.0
+gymnasium>=0.29
+tensorboard>=2.15
+torch>=2.0
+pandas>=2.0
+numpy>=1.24
+pyyaml>=6.0
