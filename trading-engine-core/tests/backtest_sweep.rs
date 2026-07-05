@@ -17,7 +17,9 @@
 //! test does not depend on the literal integer types (labels are formatted
 //! the same either way); it only checks count + label + Sharpe finiteness.
 use trading_engine_core::backtest::replay::{EngineKind, ReplayConfig};
-use trading_engine_core::backtest::sweep::{grid_for, sweep_is, Grid};
+use trading_engine_core::backtest::report::Metrics;
+use trading_engine_core::backtest::sweep::{apply_gate, grid_for, sweep_is, ApplyDecision, Grid};
+use trading_engine_core::backtest::validation::ValidationReport;
 use trading_engine_core::config::AppConfig;
 use trading_engine_core::models::bar::Bar;
 
@@ -66,4 +68,66 @@ async fn sweep_is_runs_each_grid_point_on_the_is_slice() {
     assert_eq!(results.len(), grid_for(EngineKind::Trend).len());
     // every result has a label + a Metrics (Sharpe is finite)
     assert!(results.iter().all(|(_, m)| m.sharpe.is_finite()));
+}
+
+// ── Phase 4 Task 2: the OOS apply-gate (spec §6) ────────────────────────────
+// The gate is the ONLY thing protecting the live config from a bad sweep
+// winner — every branch below pins one of the 5 verbatim checks. A change in
+// any constant here is a live-config safety regression.
+
+fn vr(oos_sharpe: f64, oos_trades: usize, oos_dd: f64) -> ValidationReport {
+    let m = |s: f64, t: usize, dd: f64| Metrics {
+        total_return_pct: 1.0,
+        sharpe: s,
+        max_drawdown_pct: dd,
+        win_rate_pct: 50.0,
+        total_trades: t,
+        profit_factor: 1.0,
+        hodl_return_pct: 0.0,
+    };
+    ValidationReport {
+        full: m(oos_sharpe, oos_trades, oos_dd),
+        is_metrics: m(oos_sharpe, oos_trades, oos_dd),
+        oos: m(oos_sharpe, oos_trades, oos_dd),
+        is_oos_sharpe_gap: 0.0,
+        overfit_suspect: false,
+    }
+}
+
+#[test]
+fn gate_applies_when_candidate_beats_baseline_oos_by_margin_positive_and_enough_trades() {
+    // baseline oos sharpe 0.5, dd 4%; candidate oos sharpe 1.0 (>0.5+0.3), 20 trades (>=15), dd 5% (<=4+5)
+    let d: ApplyDecision = apply_gate(&vr(0.5, 20, 4.0), &vr(1.0, 20, 5.0));
+    assert!(d.apply);
+    assert!(d.gate_reasons.is_empty(), "no failures: {:?}", d.gate_reasons);
+}
+
+#[test]
+fn gate_rejects_when_candidate_does_not_beat_baseline_by_margin() {
+    // candidate oos sharpe 0.7 vs baseline 0.5 → diff 0.2 < 0.3 margin
+    let d = apply_gate(&vr(0.5, 20, 4.0), &vr(0.7, 20, 5.0));
+    assert!(!d.apply);
+    assert!(d.gate_reasons.iter().any(|r| r.contains("beat current") || r.contains("margin")));
+}
+
+#[test]
+fn gate_rejects_when_candidate_oos_sharpe_not_positive() {
+    let d = apply_gate(&vr(-1.0, 5, 4.0), &vr(0.0, 20, 5.0)); // baseline very negative; candidate 0 (not >0)
+    assert!(!d.apply);
+    assert!(d.gate_reasons.iter().any(|r| r.contains("positive")));
+}
+
+#[test]
+fn gate_rejects_when_too_few_oos_trades() {
+    let d = apply_gate(&vr(-1.0, 5, 4.0), &vr(2.0, 10, 5.0)); // 10 < 15
+    assert!(!d.apply);
+    assert!(d.gate_reasons.iter().any(|r| r.contains("trade") || r.contains("15")));
+}
+
+#[test]
+fn gate_rejects_when_drawdown_exceeds_tolerance() {
+    // baseline dd 4%, candidate dd 12% → 12 > 4+5=9
+    let d = apply_gate(&vr(-1.0, 30, 4.0), &vr(2.0, 30, 12.0));
+    assert!(!d.apply);
+    assert!(d.gate_reasons.iter().any(|r| r.contains("drawdown") || r.contains("DD")));
 }
