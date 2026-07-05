@@ -53,6 +53,7 @@ async fn main() -> anyhow::Result<()> {
     let mut engine: Option<EngineKind> = None;
     let mut cfg_path: String = "config/strategy.yaml".into();
     let mut validate = false;
+    let mut sweep = false;
 
     let mut args = std::env::args().skip(1);
     let mut positional_idx = 0;
@@ -73,6 +74,8 @@ async fn main() -> anyhow::Result<()> {
                 .ok_or_else(|| anyhow::anyhow!("--config requires a value"))?;
         } else if a == "--validate" {
             validate = true;
+        } else if a == "--sweep" {
+            sweep = true;
         } else if a.starts_with("--") {
             return Err(anyhow::anyhow!("unknown flag: {}", a));
         } else {
@@ -163,7 +166,26 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // ---- Run + report ----
-    if validate {
+    if sweep {
+        let rep =
+            trading_engine_core::backtest::sweep::run_sweep(kind, &rc, bars, 1.0 / 3.0, bar_hours)
+                .await?;
+        let cand_sharpe = rep.candidate.as_ref().map(|c| c.oos.sharpe).unwrap_or(0.0);
+        println!(
+            "sweep engine={:?} decision={} best={} baseline_oos_sharpe={:.2} candidate_oos_sharpe={:.2} reasons={:?}",
+            kind,
+            if rep.decision.apply { "APPLY" } else { "KEEP" },
+            rep.best_label.as_deref().unwrap_or("none"),
+            rep.baseline.oos.sharpe,
+            cand_sharpe,
+            rep.decision.gate_reasons,
+        );
+        trading_engine_core::backtest::report::write_sweep_report(
+            std::path::Path::new("backtest/results/replay"),
+            &pair,
+            &rep,
+        )?;
+    } else if validate {
         use trading_engine_core::backtest::validation::run_validation;
         let rep = run_validation(kind, &rc, bars, 1.0 / 3.0, bar_hours).await?;
         println!(
