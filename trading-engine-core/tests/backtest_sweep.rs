@@ -144,3 +144,28 @@ fn gate_rejects_nan_sharpe_candidate_instead_of_slipping() {
     assert!(!d.apply, "NaN-Sharpe candidate must NOT slip the gate");
     assert!(!d.gate_reasons.is_empty(), "NaN-Sharpe must produce a gate reason");
 }
+
+// ── Phase 4 Task 3: write_sweep_report (JSON artifact + APPLY/KEEP markdown) ─
+
+use trading_engine_core::backtest::report::write_sweep_report;
+use trading_engine_core::backtest::sweep::SweepResult;
+use tempfile::TempDir;
+
+#[test]
+fn sweep_report_markdown_has_decision_reasons_and_gaps() {
+    let baseline = vr(0.5, 20, 4.0);
+    let candidate = vr(0.7, 20, 5.0); // does NOT beat by 0.3 margin → KEEP
+    let rep = SweepResult {
+        engine: EngineKind::Trend, baseline, best_label: Some("ema_fast=20,rr=2.0".into()),
+        candidate: Some(candidate),
+        decision: ApplyDecision { apply: false, gate_reasons: vec!["beat current: candidate OOS Sharpe 0.70 ≤ baseline 0.50 + 0.3".into()] },
+    };
+    let tmp = TempDir::new().unwrap();
+    write_sweep_report(tmp.path(), "ETHUSDT", &rep).unwrap();
+    let md = std::fs::read_to_string(tmp.path().join("ETHUSDT_trend_sweep.md")).unwrap();
+    assert!(md.contains("KEEP") || md.contains("Apply") || md.contains("apply"));
+    assert!(md.contains("beat current") || md.contains("margin"));     // the reason
+    assert!(md.contains("ema_fast=20,rr=2.0"));                        // the candidate label
+    assert!(md.contains("fidelity") || md.contains("regime"));         // gap stamps
+    assert!(tmp.path().join("ETHUSDT_trend_sweep.json").exists());
+}

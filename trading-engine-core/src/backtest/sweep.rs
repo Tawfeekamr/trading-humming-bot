@@ -182,15 +182,12 @@ pub fn apply_gate(baseline: &ValidationReport, candidate: &ValidationReport) -> 
 /// are `None` when no IS candidate cleared the ≥5-trade floor (in which case
 /// `decision.apply == false` with the "no IS candidate" reason).
 ///
-/// NOTE: the brief specified `#[derive(..., Serialize)]`. `EngineKind`
-/// (in `replay.rs`) is not `Serialize` and the Phase-4 global constraint
-/// forbids touching `replay.rs`. Rather than impl `Serialize` for `EngineKind`
-/// out of scope, `SweepResult` is `Debug + Clone` only. `ApplyDecision` (no
-/// `EngineKind`) keeps `Serialize`. Task 3, when it owns the JSON artifact,
-/// can either add `Serialize` to `EngineKind` in scope or write a manual
-/// serializer that emits `engine.budget_key()`. The gate's safety does not
-/// depend on serialization.
-#[derive(Debug, Clone)]
+/// `Serialize` (Task 3) so `write_sweep_report` can emit the full result as
+/// the JSON artifact Phase 5's auto-apply consumes. `EngineKind` derives
+/// `Serialize` (replay.rs) — its default representation is the variant name
+/// (e.g. `"Trend"`); `budget_key()` is used for the artifact filename, not
+/// the JSON body.
+#[derive(Debug, Clone, Serialize)]
 pub struct SweepResult {
     pub engine: EngineKind,
     pub baseline: ValidationReport,

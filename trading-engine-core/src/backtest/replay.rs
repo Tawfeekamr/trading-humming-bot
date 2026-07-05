@@ -31,6 +31,8 @@
 //! Market order from `on_fill` (which would same-bar fill and could cascade).
 use std::collections::HashMap;
 
+use serde::Serialize;
+
 use crate::capital::CapitalManager;
 use crate::config::GridConfig;
 use crate::connector::types::OrderBook;
@@ -45,7 +47,7 @@ use super::portfolio::{Portfolio, Trade};
 
 /// Which production engine to drive in the replay loop. Grid is Phase-1;
 /// Trend added in Task 3; Swing added in Task 4; MeanReversion added in Task 5.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum EngineKind {
     Grid,
     Trend,

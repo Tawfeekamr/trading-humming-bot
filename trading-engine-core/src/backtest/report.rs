@@ -11,6 +11,7 @@ use anyhow::Result;
 use serde::Serialize;
 
 use super::replay::{EngineKind, RunResult};
+use super::sweep::SweepResult;
 use super::validation::ValidationReport;
 
 #[derive(Debug, Clone, Serialize)]
@@ -164,5 +165,82 @@ pub fn write_validation_report(
         flag
     );
     std::fs::write(dir.join(format!("{}_{}_validation.md", symbol, kind.budget_key())), md)?;
+    Ok(())
+}
+
+/// Write the Phase-4 sweep artifacts:
+/// - `<dir>/<SYMBOL>_<engine>_sweep.json` — pretty-printed `SweepResult` (the
+///   structured artifact Phase 5's auto-apply consumes: baseline + best_label +
+///   candidate `ValidationReport`s + the gate decision + reasons).
+/// - `<dir>/<SYMBOL>_<engine>_sweep.md` — human-readable baseline-vs-candidate
+///   OOS table, the APPLY/KEEP decision, the gate reasons (or "all passed"), and
+///   the fidelity-gap stamps that apply to every metric in the table.
+///
+/// `SweepResult.engine`'s default `Serialize` form is the variant name (e.g.
+/// `"Trend"`); the artifact filename uses `budget_key()` (e.g. `trend`) to match
+/// the live budget keys and the validation artifacts. Creates `dir` if missing.
+pub fn write_sweep_report(dir: &Path, symbol: &str, rep: &SweepResult) -> Result<()> {
+    std::fs::create_dir_all(dir)?;
+    let json = serde_json::to_string_pretty(rep)?;
+    std::fs::write(
+        dir.join(format!("{}_{}_sweep.json", symbol, rep.engine.budget_key())),
+        json,
+    )?;
+
+    let decision_str = if rep.decision.apply {
+        "**APPLY**"
+    } else {
+        "**KEEP**"
+    };
+    let cand_block = match (&rep.best_label, &rep.candidate) {
+        (Some(label), Some(c)) => format!(
+            "| Candidate ({}) | {:.2}% | {:.2} | {:.2}% | {:.0}% | OOS Sharpe {:.2}, {} trades |\n",
+            label,
+            c.oos.total_return_pct,
+            c.oos.sharpe,
+            c.oos.max_drawdown_pct,
+            c.oos.win_rate_pct,
+            c.oos.sharpe,
+            c.oos.total_trades,
+        ),
+        _ => String::from("| No candidate (none had ≥5 IS trades) | — | — | — | — | — |\n"),
+    };
+    let reasons = if rep.decision.gate_reasons.is_empty() {
+        "_(all 5 gate checks passed)_".to_string()
+    } else {
+        rep.decision
+            .gate_reasons
+            .iter()
+            .map(|r| format!("- {}", r))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let md = format!(
+        "# Sweep: {} {} (IS-tune → OOS-gate)\n\n\
+         Decision: {}\n\n\
+         | Config | Return | Sharpe | MaxDD | Win | Notes |\n\
+         |---|---|---|---|---|---|\n\
+         | Baseline (live) | {:.2}% | {:.2} | {:.2}% | {:.0}% | current deployed config |\n\
+         {}\n\n\
+         ## Gate reasons\n{}\n\n\
+         ## Fidelity gaps\n\
+         - regime=None (grid/trend ML gate off — optimistic).\n\
+         - perp-as-spot-proxy + flat funding (trend-short MTM approximate).\n\
+         - MR not swept (tick-resolution; separate tick-replay backtest).\n\
+         - trade_journal OnceLock caches across sweep runs — no metric impact (Metrics come from in-memory P&L, not the DB).\n",
+        symbol,
+        rep.engine.budget_key(),
+        decision_str,
+        rep.baseline.oos.total_return_pct,
+        rep.baseline.oos.sharpe,
+        rep.baseline.oos.max_drawdown_pct,
+        rep.baseline.oos.win_rate_pct,
+        cand_block,
+        reasons,
+    );
+    std::fs::write(
+        dir.join(format!("{}_{}_sweep.md", symbol, rep.engine.budget_key())),
+        md,
+    )?;
     Ok(())
 }
