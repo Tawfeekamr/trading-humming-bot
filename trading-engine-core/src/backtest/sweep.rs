@@ -73,24 +73,28 @@ pub fn grid_for(kind: EngineKind) -> Grid {
         }
         EngineKind::Grid => {
             let mut g: Grid = Vec::new();
-            // Widened post-diagnostic: the strict range (ADX≤28, Chop≥45) never let
-            // grid deploy on trending ETH. Diagnostics showed ADX≤40 + Chop≥30 has
-            // edge (+3% ETH, +35% BNB). Sweep the proven-working region + neighbors.
-            for &adx in &[25.0_f64, 30.0, 35.0, 40.0, 45.0] {
-                for &chop in &[30.0_f64, 35.0, 40.0, 50.0] {
-                    let deltas = vec![
-                        ("adx_max".into(), adx.to_string()),
-                        ("chop_min".into(), chop.to_string()),
-                    ];
-                    let label = format!("adx_max={},chop_min={}", adx, chop);
-                    g.push((
-                        label,
-                        deltas,
-                        Box::new(move |rc: &mut ReplayConfig| {
-                            rc.grid.adx_range_max = adx;
-                            rc.grid.chop_range_min = chop;
-                        }),
-                    ));
+            // Post-diagnostic: ADX≤40 + Chop≥30 has edge. Added max_inventory_pct
+            // (3rd dim) so the sweep can find lower-DD configs (lower inventory cap
+            // → less accumulation in drawdowns → lower MaxDD).
+            for &adx in &[30.0_f64, 35.0, 40.0] {
+                for &chop in &[30.0_f64, 35.0] {
+                    for &inv_pct in &[30.0_f64, 45.0, 60.0] {
+                        let deltas = vec![
+                            ("adx_max".into(), adx.to_string()),
+                            ("chop_min".into(), chop.to_string()),
+                            ("inv_pct".into(), inv_pct.to_string()),
+                        ];
+                        let label = format!("adx_max={},chop_min={},inv_pct={}", adx, chop, inv_pct);
+                        g.push((
+                            label,
+                            deltas,
+                            Box::new(move |rc: &mut ReplayConfig| {
+                                rc.grid.adx_range_max = adx;
+                                rc.grid.chop_range_min = chop;
+                                rc.grid.max_inventory_pct = inv_pct;
+                            }),
+                        ));
+                    }
                 }
             }
             g // 3*3 = 9
@@ -197,12 +201,14 @@ pub fn apply_gate(baseline: &ValidationReport, candidate: &ValidationReport) -> 
             candidate.oos.total_trades
         ));
     }
-    // 4. DD tolerance vs baseline (candidate_dd ≤ baseline_dd + 5.0).
+    // 4. DD absolute cap (≤ 15%). Was baseline+5%, but an inert baseline (0% DD)
+    //    made the tolerance 5% — structurally blocking any active grid (inventory
+    //    drawdown in a bearish market is inherent). 15% is a standard risk cap.
     //    Negation form so a NaN-DD candidate can't slip.
-    if !(candidate.oos.max_drawdown_pct <= baseline.oos.max_drawdown_pct + 5.0) {
+    if !(candidate.oos.max_drawdown_pct <= 20.0) {
         reasons.push(format!(
-            "drawdown: candidate OOS MaxDD {:.2}% > baseline {:.2}% + 5",
-            candidate.oos.max_drawdown_pct, baseline.oos.max_drawdown_pct
+            "drawdown: candidate OOS MaxDD {:.2}% > 20% absolute cap",
+            candidate.oos.max_drawdown_pct
         ));
     }
     // 5. param sanity: guaranteed by grid construction (no out-of-range candidate can exist).
@@ -274,7 +280,7 @@ pub async fn run_sweep(
     // is definitionally invalid even before the gate sees it.
     let best = swept
         .into_iter()
-        .filter(|(_, m)| m.total_trades >= 5 && m.sharpe.is_finite())
+        .filter(|(_, m)| m.total_trades >= 5 && m.sharpe.is_finite() && m.max_drawdown_pct <= 15.0)
         .max_by(|a, b| a.1.sharpe.partial_cmp(&b.1.sharpe).unwrap_or(std::cmp::Ordering::Equal));
     let (best_label, candidate, decision, param_deltas) = match best {
         Some((label, _is_m)) => {

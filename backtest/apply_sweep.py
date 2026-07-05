@@ -24,6 +24,7 @@ PARAM_MAP = {
     ("trend", "rr"):       "trend.rr_ratio",
     ("grid",  "adx_max"):  "grid.adx_range_max",
     ("grid",  "chop_min"): "grid.chop_range_min",
+    ("grid",  "inv_pct"):  "grid.max_inventory_pct",
     ("swing", "min_score"):"swing.min_score",
     ("swing", "adx_entry"):"swing.adx_range_entry",
 }

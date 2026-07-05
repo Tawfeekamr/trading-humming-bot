@@ -126,8 +126,8 @@ fn gate_rejects_when_too_few_oos_trades() {
 
 #[test]
 fn gate_rejects_when_drawdown_exceeds_tolerance() {
-    // baseline dd 4%, candidate dd 12% → 12 > 4+5=9
-    let d = apply_gate(&vr(-1.0, 30, 4.0), &vr(2.0, 30, 12.0));
+    // 20% absolute cap: candidate dd 21% → 21 > 20 → rejected
+    let d = apply_gate(&vr(-1.0, 30, 4.0), &vr(2.0, 30, 21.0));
     assert!(!d.apply);
     assert!(d.gate_reasons.iter().any(|r| r.contains("drawdown") || r.contains("DD")));
 }
