@@ -125,9 +125,11 @@ async fn test_stop_loss_triggers_exit() {
     assert!(strategy.position().is_none(), "Position should be cleared after stop loss exit");
 }
 
-/// Test 2: TP1 partial exit
+/// Test 2: Breakeven promotion at +1R (replaces old TP1 test — no more TPs)
+/// The new exit design promotes stop_loss to entry when price reaches +1R,
+/// instead of closing 33% at a TP level. Position stays open (let winners run).
 #[tokio::test]
-async fn test_tp1_partial_exit() {
+async fn test_breakeven_promotion_at_1r() {
     let config = default_trend_config();
     let telegram = trading_engine_core::notifications::TelegramBot::new("", "");
     let mut strategy = TrendStrategy::new("BTCUSDT", &config, telegram);
@@ -135,80 +137,60 @@ async fn test_tp1_partial_exit() {
     enter_position(&mut strategy, 50000.0, 0.1).await;
 
     let sl = strategy.calculate_stop_loss(50000.0, OrderSide::Buy);
-    let tp_levels = TrendPosition::calculate_tp_levels(50000.0, sl, config.risk_reward_ratio, 0.10, OrderSide::Buy);
+    let risk = 50000.0 - sl; // entry - stop = per-unit risk
 
-    // Tick at TP1 price
+    // Tick at +1R (the breakeven threshold)
     let mut bars = Vec::new();
-    let ctx = make_tick(tp_levels[0].price, &mut bars);
+    let ctx = make_tick(50000.0 + risk, &mut bars);
     let orders = strategy.on_tick(&ctx).await.unwrap();
 
-    let tp1_sell = orders.iter().find(|o| o.side == OrderSide::Sell);
-    assert!(tp1_sell.is_some(), "Expected TP1 sell order, got {:?}", orders);
+    // No sell order at +1R (the new design lets winners run — no TP to close)
+    let sells: Vec<_> = orders.iter().filter(|o| o.side == OrderSide::Sell).collect();
+    assert!(sells.is_empty(), "No sell at +1R (no TPs): got {:?}", sells);
 
-    // TP1 closes 33% of remaining
-    let expected_qty = 0.1 * 0.33;
+    // Position remains open with stop promoted to breakeven (≈ entry)
+    let pos = strategy.position().expect("position stays open at +1R");
     assert!(
-        (tp1_sell.unwrap().quantity - expected_qty).abs() < 0.01,
-        "TP1 should close ~33%, expected {}, got {}",
-        expected_qty,
-        tp1_sell.unwrap().quantity
+        (pos.stop_loss - 50000.0).abs() < 50.0,
+        "stop promoted to ≈ entry (50000): got {}",
+        pos.stop_loss
     );
-
-    // Position should still exist (partial exit)
-    assert!(strategy.position().is_some(), "Position should remain after TP1 partial exit");
 }
 
-/// Test 3: All TP levels fill — position closed
-/// With tight ATR (gentle warmup), TP levels are close together.
-/// TP2 and TP3 may trigger in the same tick or an exit signal may fire.
-/// The key invariant: after ticking through all TP prices, the position is fully closed.
+/// Test 3: Trailing exit closes full position (replaces old all-TPs test)
+/// Push price up (ratchet trail above entry), then reverse below trail → exit.
 #[tokio::test]
-async fn test_all_tp_levels_close_position() {
+async fn test_trailing_exit_closes_full_position() {
     let config = default_trend_config();
     let telegram = trading_engine_core::notifications::TelegramBot::new("", "");
     let mut strategy = TrendStrategy::new("BTCUSDT", &config, telegram);
     warmup(&mut strategy, 50000.0);
     enter_position(&mut strategy, 50000.0, 0.1).await;
 
-    let sl = strategy.calculate_stop_loss(50000.0, OrderSide::Buy);
-    let tp_levels = TrendPosition::calculate_tp_levels(50000.0, sl, config.risk_reward_ratio, 0.10, OrderSide::Buy);
-
-    // Tick through all TP levels — some may fire together in one tick
     let mut bars = Vec::new();
-    let mut total_sell_qty = 0.0;
-    for tp in &tp_levels {
-        let ctx = make_tick(tp.price, &mut bars);
-        let orders = strategy.on_tick(&ctx).await.unwrap();
-        for o in &orders {
-            if o.side == OrderSide::Sell {
-                total_sell_qty += o.quantity;
-            }
-        }
-        // If position is already closed, no need to continue
-        if strategy.position().is_none() {
-            break;
-        }
-    }
 
-    // Position should be fully closed
+    // 1) Push price UP — ratchets the trailing stop above entry.
+    let _ = strategy.on_tick(&make_tick(52000.0, &mut bars)).await.unwrap();
+    assert!(strategy.position().is_some(), "no exit on up move");
+
+    let trail = strategy.position().unwrap().trailing_stop.expect("trail set after up move");
+    assert!(trail > 50000.0, "trail ratcheted above entry: got {}", trail);
+
+    // 2) Reverse price DOWN well below the trail → trailing exit fires.
+    let orders = strategy.on_tick(&make_tick(49000.0, &mut bars)).await.unwrap();
+    assert!(strategy.position().is_none(), "position closed on reversal");
+
+    let sell = orders.iter().find(|o| o.side == OrderSide::Sell && o.reduce_only);
+    assert!(sell.is_some(), "reduce-only sell exit order produced: {:?}", orders);
     assert!(
-        strategy.position().is_none(),
-        "Position should be fully closed after all TP levels, but still has {:?}",
-        strategy.position().map(|p| p.remaining_qty)
+        (sell.unwrap().quantity - 0.1).abs() < 0.001,
+        "full remaining qty exited"
     );
 
-    // Total sold should approximately equal the original quantity
-    assert!(
-        (total_sell_qty - 0.1).abs() < 0.005,
-        "Total sell quantity ({}) should approximate entry quantity (0.1)",
-        total_sell_qty
-    );
-
-    // Verify no more exit orders on subsequent tick (position is gone)
-    let ctx_after = make_tick(tp_levels[2].price + 100.0, &mut bars);
-    let orders_after = strategy.on_tick(&ctx_after).await.unwrap();
+    // 3) No more exit orders on subsequent tick (position is gone).
+    let orders_after = strategy.on_tick(&make_tick(49000.0, &mut bars)).await.unwrap();
     let exit_orders: Vec<_> = orders_after.iter().filter(|o| o.side == OrderSide::Sell).collect();
-    assert!(exit_orders.is_empty(), "No sell orders expected after position closed, got {:?}", exit_orders);
+    assert!(exit_orders.is_empty(), "no sells after close: {:?}", exit_orders);
 }
 
 /// Test 4: Trailing stop (Chandelier Exit)
