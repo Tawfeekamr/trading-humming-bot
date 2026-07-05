@@ -218,11 +218,12 @@ def _get_equity(rust_url: str) -> float:
     """Fetch the real account equity from ``GET /api/v1/capital``.
 
     Returns the ``total_equity`` field (USDT + Σ(base × mid), portfolio MTM).
-    Falls back to 10,000 if the field is missing — but does NOT swallow HTTP
-    errors: a dead engine should propagate so the caller can see it.
+    Raises ``KeyError`` if the field is missing (schema drift / wrong endpoint)
+    so the falsification experiment can't silently feed equity=10000 — and
+    ``requests.HTTPError`` on a dead engine (``raise_for_status``).
     """
     import requests
 
     r = requests.get(f"{rust_url}/api/v1/capital", timeout=5)
     r.raise_for_status()
-    return float(r.json().get("total_equity", 10_000.0))
+    return float(r.json()["total_equity"])

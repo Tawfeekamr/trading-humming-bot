@@ -168,3 +168,55 @@ def test_build_observation_matches_env_at_reset():
     env_obs = env._build_obs()
 
     np.testing.assert_allclose(live_obs, env_obs, atol=1e-10)
+
+
+# --- I1: _get_equity must raise on schema drift (no silent 10k fallback) ---
+
+
+def test_get_equity_raises_keyerror_when_total_equity_missing(monkeypatch):
+    """A missing ``total_equity`` key must propagate ``KeyError``, not silently
+    fall back to 10,000 — a fabricated equity would corrupt the falsification
+    experiment's reward signal and hide a dead/wrong endpoint.
+    """
+    import requests
+
+    from src.rl import live_router
+
+    class _FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            # Schema drift: endpoint responded 200 but dropped total_equity.
+            return {"usdt_balance": 5000.0}
+
+    def _fake_get(*args, **kwargs):
+        return _FakeResponse()
+
+    monkeypatch.setattr(requests, "get", _fake_get)
+
+    with pytest.raises(KeyError):
+        live_router._get_equity("http://localhost:9999")
+
+
+def test_get_equity_propagates_http_error(monkeypatch):
+    """HTTP errors must still propagate via raise_for_status (unchanged)."""
+    import requests
+
+    from src.rl import live_router
+
+    class _FakeResponse:
+        def raise_for_status(self):
+            raise requests.HTTPError("503 service unavailable")
+
+        def json(self):
+            return {"total_equity": 9000.0}
+
+    def _fake_get(*args, **kwargs):
+        return _FakeResponse()
+
+    monkeypatch.setattr(requests, "get", _fake_get)
+
+    with pytest.raises(requests.HTTPError):
+        live_router._get_equity("http://localhost:9999")
+
