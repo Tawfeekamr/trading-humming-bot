@@ -101,6 +101,25 @@ def test_count_round_trips_grid_only_is_invisible():
 
 
 # ---------------------------------------------------------------------------
+# _time_in_market — fraction of bars a strategy was deployed (engine != flat).
+# Discloses exposure so PPO/RF Sharpes (which span flat, zero-return bars) are
+# interpretable next to B&H's always-invested Sharpe.
+# ---------------------------------------------------------------------------
+def test_time_in_market_counts_non_flat_engines():
+    from src.rl.evaluate import _time_in_market
+
+    assert _time_in_market(["flat", "trend", "trend", "flat", "grid"]) == 0.6
+
+
+def test_time_in_market_edge_cases():
+    from src.rl.evaluate import _time_in_market
+
+    assert _time_in_market([]) == 0.0
+    assert _time_in_market(["flat", "flat"]) == 0.0
+    assert _time_in_market(["trend"]) == 1.0
+
+
+# ---------------------------------------------------------------------------
 # _check_oos_boundary — refuse / warn if the PPO model was trained on data
 # overlapping the OOS window.
 # ---------------------------------------------------------------------------

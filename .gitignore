@@ -19,8 +19,10 @@ trading-engine-core/data/
 backtest/data_cache/
 backtest/results/
 models/*.pkl
+models/rl/*.log
 logs/
 reports/
+tb/
 
 # IDE
 .idea/

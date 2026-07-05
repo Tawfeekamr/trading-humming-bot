@@ -1,0 +1,19 @@
+{
+  "pair": "ETHUSDT",
+  "model_path": "models/rl/ppo_ETHUSDT_2026-07-05_clean-oos-24m.zip",
+  "git_sha": "b3d8c42e14e22134d8b7cb284a120fcab7cb1cf3",
+  "data_hash": "d2600dbb04c4f877",
+  "data_start": "2024-06-10 00:00:00+00:00",
+  "data_end": "2026-05-31 23:00:00+00:00",
+  "n_bars": 17304,
+  "timesteps": 1000000,
+  "hyperparams": {
+    "learning_rate": 0.0003,
+    "n_steps": 2048,
+    "batch_size": 64,
+    "gamma": 0.99,
+    "lambda_dd": 0.5
+  },
+  "seed": 42,
+  "trained_at": "2026-07-05"
+}

@@ -36,6 +36,25 @@ if TYPE_CHECKING:
     from src.rl.router import PPORouter, SupervisedRegimeRouter
 
 
+_CAVEATS = """
+## Methodology Notes & Caveats
+
+- **PPO train/OOS boundary**: verified via the model's provenance sidecar
+  (`data_end` < OOS start). This benchmark is genuinely out-of-sample for PPO.
+- **RF baseline**: `regime_*.pkl` carries no provenance, so its train/OOS
+  boundary is NOT verified here — it may overlap the OOS start by a few days.
+  Close this by retraining from a reproducible trainer.
+- **Sharpe**: computed over each strategy's full per-bar return stream
+  (including flat / zero-return bars). See **Time in Market** to interpret the
+  PPO/RF Sharpe relative to always-invested B&H — a strategy that holds cash
+  legitimately has a different (compressed) return stream, not a bug.
+- **Win Rate**: closed round-trips, trend / swing engines only. The grid
+  engine has no `in_position` flag, so grid inventory cycles are not counted.
+- **Scope**: single pair, single OOS window. For a thesis-grade claim, extend
+  via multi-pair + walk-forward.
+"""
+
+
 def _diebold_mariano_test(
     returns_a: np.ndarray, returns_b: np.ndarray, max_lag: int = 5
 ) -> tuple[float, float]:
@@ -120,6 +139,22 @@ def _count_round_trips(
             wins += 1
 
     return trades, wins
+
+
+def _time_in_market(engine_flags: list[str]) -> float:
+    """Fraction of bars the strategy was deployed (engine != "flat").
+
+    Discloses capital exposure so the PPO/RF Sharpe ratios — which span the
+    flat, zero-return bars when the agent holds cash — are interpretable next
+    to Buy & Hold's always-invested Sharpe. A strategy that parks in cash most
+    of the time legitimately has a different (typically compressed) return
+    stream; the exposure number lets the reader see that directly rather than
+    game the Sharpe by computing it only over invested bars.
+    """
+    if not engine_flags:
+        return 0.0
+    deployed = sum(1 for e in engine_flags if e != "flat")
+    return deployed / len(engine_flags)
 
 
 def _load_provenance(ppo_model_path: str) -> dict | None:
@@ -207,6 +242,7 @@ def _run_model(env: TradingEnv, router) -> dict:
     step_returns = []
 
     in_position_flags: list[bool] = []
+    engine_flags: list[str] = []
 
     done = False
     while not done:
@@ -220,6 +256,7 @@ def _run_model(env: TradingEnv, router) -> dict:
         )
         equity_curve.append(info["equity"])
         in_position_flags.append(bool(info.get("in_position", False)))
+        engine_flags.append(str(info.get("engine", "flat")))
 
         done = term or trunc
 
@@ -245,6 +282,7 @@ def _run_model(env: TradingEnv, router) -> dict:
     )
 
     win_rate = wins / trades if trades > 0 else 0.0
+    time_in_market = _time_in_market(engine_flags)
 
     return {
         "returns_array": returns,
@@ -253,6 +291,7 @@ def _run_model(env: TradingEnv, router) -> dict:
         "Max Drawdown": f"{max_dd * 100:.2f}%",
         "Sharpe Ratio": f"{sharpe:.2f}",
         "Win Rate": f"{win_rate * 100:.2f}%",
+        "Time in Market": f"{time_in_market * 100:.1f}%",
         "Final Equity": f"${eq_array[-1]:.2f}",
     }
 
@@ -358,6 +397,7 @@ def main():
 | **Max Drawdown** | {bh_dd*100:.2f}% | {rf_results["Max Drawdown"]} | {ppo_results["Max Drawdown"]} |
 | **Sharpe Ratio** | {bh_sharpe:.2f} | {rf_results["Sharpe Ratio"]} | {ppo_results["Sharpe Ratio"]} |
 | **Win Rate** | N/A | {rf_results["Win Rate"]} | {ppo_results["Win Rate"]} |
+| **Time in Market** | 100.0% | {rf_results["Time in Market"]} | {ppo_results["Time in Market"]} |
 | **Final Equity** | ${bh_eq[-1]:.2f} | {rf_results["Final Equity"]} | {ppo_results["Final Equity"]} |
 
 ## Diebold-Mariano Test (PPO vs Supervised)
@@ -375,6 +415,8 @@ def main():
             report += "The Supervised Baseline **significantly outperforms** the PPO Agent (p < 0.05)."
     else:
         report += "There is **no statistically significant difference** in performance between the models."
+
+    report += _CAVEATS
 
     print("\n" + report)
 
