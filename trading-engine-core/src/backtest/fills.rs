@@ -58,10 +58,10 @@ impl FillSim {
             let req = ro.req; // take ownership so subsequent &mut self calls are legal
             let crossed = match (&req.order_type, req.side) {
                 (OrderTypeReq::Limit, OrderSide::Buy) | (OrderTypeReq::LimitMaker, OrderSide::Buy) => {
-                    req.price.map_or(false, |p| bar.low <= p)
+                    req.price.is_some_and(|p| bar.low <= p)
                 }
                 (OrderTypeReq::Limit, OrderSide::Sell) | (OrderTypeReq::LimitMaker, OrderSide::Sell) => {
-                    req.price.map_or(false, |p| bar.high >= p)
+                    req.price.is_some_and(|p| bar.high >= p)
                 }
                 (OrderTypeReq::StopMarket { stop_price }, OrderSide::Sell) => {
                     bar.low <= *stop_price            // long-position stop

@@ -365,7 +365,7 @@ pub async fn run_loop(
         debug_assert!(reactive.is_empty(), "on_fill returned a Market order — same-bar cascade not supported");
 
         // 2. Build context and run the engine for this bar.
-        let ctx = build_ctx_from(symbol_of(strategy), bar, &bars[..i], &capital, /*replay*/ i < warmup_bars);
+        let ctx = build_ctx_from(symbol_of(strategy), bar, &bars[..i], capital, /*replay*/ i < warmup_bars);
         let new_orders = strategy.on_tick(&ctx).await?;
 
         // 3. Submit. Market fills now (at bar.close ± slippage); limit/stop rest.

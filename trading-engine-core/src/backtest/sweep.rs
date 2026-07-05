@@ -166,6 +166,9 @@ pub struct ApplyDecision {
 ///      candidate can exist); no runtime check.
 /// `apply` is true ONLY when `gate_reasons` is empty (all checks pass) — this
 /// invariant is the single source of truth for "should live ship this candidate".
+#[allow(clippy::neg_cmp_op_on_partial_ord)] // negation form is INTENTIONAL — it's the
+// NaN-safety mechanism (NaN > x == false → !false == true → reason pushed). Switching to
+// partial_cmp would risk re-opening the gate-slip loophole fixed in Phase 4. See checks 1/2/4.
 pub fn apply_gate(baseline: &ValidationReport, candidate: &ValidationReport) -> ApplyDecision {
     let mut reasons: Vec<String> = Vec::new();
     // 1. Beat current by margin 0.3 (strict > — equal is NOT enough).

@@ -236,7 +236,7 @@ async fn sweep_result_carries_best_arm_param_deltas() {
         let grid = grid_for(trading_engine_core::backtest::replay::EngineKind::Trend);
         let arms: Vec<_> = grid.into_iter().map(|(_, d, _)| d).collect();
         assert!(
-            arms.iter().any(|a| *a == res.param_deltas),
+            arms.contains(&res.param_deltas),
             "param_deltas must equal a declared grid arm"
         );
     }

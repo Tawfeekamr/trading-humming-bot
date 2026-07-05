@@ -67,7 +67,7 @@ async fn grid_arms_and_trades_on_a_ranging_series() {
     let bars = sawtooth_bars();
     let res = run_grid_on_bars(&cfg(), bars).await.expect("replay must complete");
     // Phase 1 weak assertion: loop completed and produced an equity curve.
-    assert!(res.equity_curve.len() > 0, "equity curve should be non-empty");
+    assert!(!res.equity_curve.is_empty(), "equity curve should be non-empty");
 }
 
 /// Critical-fix regression: replayed grid SELLs must NOT land in the production
