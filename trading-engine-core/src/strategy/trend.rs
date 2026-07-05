@@ -1005,10 +1005,16 @@ mod tests {
     }
 
     fn warmed_strategy(trade_shorts: bool) -> TrendStrategy {
+        // Unique pair per call → unique state file → no parallel-test collision on
+        // data/<pair>_trend_position.json (writers via on_tick→save_position and
+        // readers via new()→load_position otherwise race on a shared TESTPAIR file).
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let pair = format!("WARMED-{}-USDT", SEQ.fetch_add(1, Ordering::Relaxed));
         let mut config = base_test_config();
         config.trade_shorts = trade_shorts;
         let tg = crate::notifications::TelegramBot::new("", "");
-        let mut s = TrendStrategy::new("TESTPAIR-USDT", &config, tg);
+        let mut s = TrendStrategy::new(&pair, &config, tg);
         for i in 0..260 {
             let p = 100.0 + (i as f64 * 0.01); // gentle drift, keeps ATR modest
             s.update_indicators(&Bar::new(p - 0.5, p + 0.5, p - 0.25, p, 100.0, 0));
@@ -1183,11 +1189,15 @@ mod tests {
     /// (We're testing the *replay* gate, not the entry conditions — so make
     /// entry deterministic.) Proves replay suppresses an entry live would take.
     fn uptrend_strategy() -> TrendStrategy {
+        // Unique pair per call → unique state file (see warmed_strategy rationale).
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let pair = format!("UP-{}-USDT", SEQ.fetch_add(1, Ordering::Relaxed));
         let mut config = base_test_config();
         config.entry_score_threshold = 1;
         config.adx_gate_threshold = 0.1; // effectively disable ADX gate for the test
         let tg = crate::notifications::TelegramBot::new("", "");
-        let mut s = TrendStrategy::new("TESTPAIR-USDT", &config, tg);
+        let mut s = TrendStrategy::new(&pair, &config, tg);
         for i in 0..260 {
             let p = 100.0 * 1.005_f64.powi(i as i32); // smooth compounding uptrend
             s.update_indicators(&Bar::new(p * 0.999, p * 1.001, p * 0.9985, p, 100.0, 0));
@@ -1327,7 +1337,7 @@ mod tests {
         }
         let state_json = v.to_string();
 
-        let path = std::path::PathBuf::from("data/TESTPAIR_USDT_trend_position.json");
+        let path = std::path::PathBuf::from("data/RESTORED_USDT_trend_position.json");
         std::fs::create_dir_all("data").ok();
         std::fs::write(&path, state_json).unwrap();
 
@@ -1339,7 +1349,7 @@ mod tests {
         };
         let tg = crate::notifications::TelegramBot::new("", "");
         // new() calls load_position, which must back-fill last_funding_time.
-        let mut s = TrendStrategy::new("TESTPAIR-USDT", &config, tg)
+        let mut s = TrendStrategy::new("RESTORED-USDT", &config, tg)
             .with_perp(std::sync::Arc::new(FakePerp { mark: 100.0, funding: 0.0001 }));
         let _ = std::fs::remove_file(&path); // clean up the temp state file
 
