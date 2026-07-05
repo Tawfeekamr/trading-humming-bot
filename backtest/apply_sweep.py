@@ -21,7 +21,7 @@ from pathlib import Path
 # (engine, param_name) -> dotted YAML path in config/strategy.yaml
 PARAM_MAP = {
     ("trend", "ema_fast"): "trend.ema_fast",
-    ("trend", "rr"):       "trend.risk_reward_ratio",
+    ("trend", "rr"):       "trend.rr_ratio",
     ("grid",  "adx_max"):  "grid.adx_range_max",
     ("grid",  "chop_min"): "grid.chop_range_min",
     ("swing", "min_score"):"swing.min_score",

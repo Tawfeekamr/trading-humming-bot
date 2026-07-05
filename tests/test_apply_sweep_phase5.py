@@ -5,7 +5,7 @@ STRATEGY_YAML = """\
 trend:
   enabled: true
   ema_fast: 30            # was 12
-  risk_reward_ratio: 2.0  # RR
+  rr_ratio: 2.0  # RR
 grid:
   adx_range_max: 25.0     # gate
   chop_range_min: 50.0
@@ -30,7 +30,7 @@ def test_apply_writes_only_apply_true_engines_comment_preserved():
         # only trend changed
         assert {(c["engine"], c["param"]) for c in changes} == {("trend","ema_fast"), ("trend","rr")}
         new = cfg.read_text()
-        assert "ema_fast: 20" in new and "risk_reward_ratio: 1.5" in new
+        assert "ema_fast: 20" in new and "rr_ratio: 1.5" in new
         # grid unchanged
         assert "adx_range_max: 25.0" in new
         # comments preserved
