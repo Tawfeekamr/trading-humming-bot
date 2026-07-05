@@ -131,3 +131,16 @@ fn gate_rejects_when_drawdown_exceeds_tolerance() {
     assert!(!d.apply);
     assert!(d.gate_reasons.iter().any(|r| r.contains("drawdown") || r.contains("DD")));
 }
+
+#[test]
+fn gate_rejects_nan_sharpe_candidate_instead_of_slipping() {
+    // candidate oos sharpe = NaN (degenerate), 20 trades (>=15), dd 5% (within tolerance).
+    // Under the old direct-comparison code, NaN comparisons are all false → no reason → APPLY (BUG).
+    // Under the negation fix, !(NaN > 0.5+0.3) == !false == true → reason pushed → KEEP.
+    let baseline = vr(0.5, 20, 4.0);
+    let mut cand = vr(0.5, 20, 5.0);
+    cand.oos.sharpe = f64::NAN;
+    let d = apply_gate(&baseline, &cand);
+    assert!(!d.apply, "NaN-Sharpe candidate must NOT slip the gate");
+    assert!(!d.gate_reasons.is_empty(), "NaN-Sharpe must produce a gate reason");
+}

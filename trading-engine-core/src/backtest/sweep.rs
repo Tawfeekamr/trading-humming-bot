@@ -141,20 +141,22 @@ pub struct ApplyDecision {
 pub fn apply_gate(baseline: &ValidationReport, candidate: &ValidationReport) -> ApplyDecision {
     let mut reasons: Vec<String> = Vec::new();
     // 1. Beat current by margin 0.3 (strict > — equal is NOT enough).
-    if candidate.oos.sharpe <= baseline.oos.sharpe + 0.3 {
+    //    Negation form so a NaN-Sharpe candidate can't slip: NaN > x is false,
+    //    so !(NaN > x) is true → reason pushed.
+    if !(candidate.oos.sharpe > baseline.oos.sharpe + 0.3) {
         reasons.push(format!(
             "beat current: candidate OOS Sharpe {:.2} ≤ baseline {:.2} + 0.3",
             candidate.oos.sharpe, baseline.oos.sharpe
         ));
     }
-    // 2. Positive OOS (strict > — 0.0 is NOT positive).
-    if candidate.oos.sharpe <= 0.0 {
+    // 2. Positive OOS (strict > — 0.0 is NOT positive). Negation form for NaN-safety.
+    if !(candidate.oos.sharpe > 0.0) {
         reasons.push(format!(
             "positive: candidate OOS Sharpe {:.2} not > 0",
             candidate.oos.sharpe
         ));
     }
-    // 3. Enough trades (≥ 15; strict-less-than fails).
+    // 3. Enough trades (≥ 15; strict-less-than fails). usize can't be NaN.
     if candidate.oos.total_trades < 15 {
         reasons.push(format!(
             "trades: candidate OOS trades {} < 15",
@@ -162,7 +164,8 @@ pub fn apply_gate(baseline: &ValidationReport, candidate: &ValidationReport) -> 
         ));
     }
     // 4. DD tolerance vs baseline (candidate_dd ≤ baseline_dd + 5.0).
-    if candidate.oos.max_drawdown_pct > baseline.oos.max_drawdown_pct + 5.0 {
+    //    Negation form so a NaN-DD candidate can't slip.
+    if !(candidate.oos.max_drawdown_pct <= baseline.oos.max_drawdown_pct + 5.0) {
         reasons.push(format!(
             "drawdown: candidate OOS MaxDD {:.2}% > baseline {:.2}% + 5",
             candidate.oos.max_drawdown_pct, baseline.oos.max_drawdown_pct
@@ -228,9 +231,12 @@ pub async fn run_sweep(
     let (is_b, _oos_b) = crate::backtest::validation::split_is_oos(&bars, oos_frac);
     let swept = sweep_is(kind, rc, &is_b, bar_hours).await?;
     // IS-best by Sharpe with ≥5 IS trades (reject 1-lucky-trade flukes); else None.
+    // NaN-Sharpe entries are also excluded — `max_by` would otherwise pick them
+    // arbitrarily (partial_cmp(NaN, _) → None → Equal), and a NaN-Sharpe IS-best
+    // is definitionally invalid even before the gate sees it.
     let best = swept
         .into_iter()
-        .filter(|(_, m)| m.total_trades >= 5)
+        .filter(|(_, m)| m.total_trades >= 5 && m.sharpe.is_finite())
         .max_by(|a, b| a.1.sharpe.partial_cmp(&b.1.sharpe).unwrap_or(std::cmp::Ordering::Equal));
     let (best_label, candidate, decision) = match best {
         Some((label, _is_m)) => {
