@@ -54,12 +54,20 @@ pub struct SwingStrategy {
     cancel_queue: Vec<String>,
     /// Resting LIMIT_MAKER entry (maker-entry mode only). None in default Market mode.
     resting_entry: Option<PendingMakerEntry>,
-    /// Unified entry-suppression flag — set by `set_paused(true)` (C1) and by
+    /// Entry-suppression flag — set by `set_paused(true)` (C1) and by
     /// `force_flat()` (C2). Stops NEW entries but lets exits/order-management
     /// (chandelier/opposite-band/time-stop + resting TP/stop) keep running so a
     /// paused engine can still unwind. Cleared by `set_paused(false)` from
     /// `tick_strategies` when this engine becomes the active routing target.
     entries_suppressed: bool,
+    /// Force-close trigger — set ONLY by `force_flat()` (C2). When true, the
+    /// next on_tick overrides exit_reason with "ForceFlat" (close at market)
+    /// if no reactive exit already fired. `set_paused(true)` does NOT set this:
+    /// a routing-layer pause suppresses new entries but lets open positions be
+    /// managed (trailing ratchet + reactive exits). Splitting the two flags
+    /// fixes the regression where `set_paused(true)` force-closed open
+    /// positions on every engine switch.
+    force_close_pending: bool,
 }
 
 fn parse_tf_ms(tf: &str) -> i64 {
@@ -158,6 +166,7 @@ impl SwingStrategy {
             cancel_queue: Vec::new(),
             resting_entry: None,
             entries_suppressed: false,
+            force_close_pending: false,
         }
     }
 
@@ -286,18 +295,27 @@ impl Strategy for SwingStrategy {
     fn deployed_capital(&self) -> f64 { self.position.as_ref().map_or(0.0, |p| p.remaining_qty * p.entry_price) }
     fn current_capital(&self) -> f64 { self.config.capital + self.realized_pnl }
 
-    /// C1: suppress new entries while exits/resting-order management keep
-    /// running. The flag is the same one `force_flat` sets.
+    /// C1: suppress NEW entries while exits/resting-order management keep
+    /// running. Sets `entries_suppressed` ONLY — does NOT set
+    /// `force_close_pending`, so an open position is NOT closed by a
+    /// routing-layer pause (reactive exits + trailing ratchet still run).
+    /// Resume clears both flags so a stale `force_close_pending` from a prior
+    /// `force_flat` doesn't linger into the next active window.
     fn set_paused(&mut self, paused: bool) {
         self.entries_suppressed = paused;
+        if !paused {
+            self.force_close_pending = false;
+        }
     }
 
-    /// C2: cancel any resting maker entry, then suppress new entries. The close
-    /// of an open position happens on the next on_tick via the ForceFlat exit
-    /// path (mirrors the strategy's reactive exit: cancel_resting + Market sell
-    /// reduce-only, resolved after the pos borrow ends).
+    /// C2: cancel any resting maker entry, then suppress new entries AND arm
+    /// the force-close. The close of an open position happens on the next
+    /// on_tick via the ForceFlat exit path (mirrors the strategy's reactive
+    /// exit: cancel_resting + Market sell reduce-only, resolved after the pos
+    /// borrow ends).
     fn force_flat(&mut self) {
         self.entries_suppressed = true;
+        self.force_close_pending = true;
         // A resting LIMIT_MAKER buy that hasn't filled would open a new position
         // if left alive — cancel it so the flat state is real, not aspirational.
         if let Some(re) = self.resting_entry.take() {
@@ -396,7 +414,10 @@ impl Strategy for SwingStrategy {
 
             // C2: routing forced flat — close at market if no reactive exit already
             // fired this tick. cancel_resting + Market sell emitted below.
-            if exit_reason.is_none() && self.entries_suppressed {
+            // NOTE: gated on `force_close_pending`, NOT `entries_suppressed` — a
+            // plain `set_paused(true)` leaves reactive exits + trailing ratchet
+            // in charge and does NOT override them with a ForceFlat close.
+            if exit_reason.is_none() && self.force_close_pending {
                 exit_reason = Some("ForceFlat");
             }
 
@@ -918,5 +939,54 @@ mod tests {
         assert!(close.is_some(), "force_flat must emit a Market reduce-only close");
         assert_eq!(close.unwrap().side, OrderSide::Sell, "closing a long sells");
         assert!((close.unwrap().quantity - 1.0).abs() < 1e-9, "closes full remaining qty");
+    }
+
+    /// REGRESSION (re-review fix2): set_paused(true) must NOT force-close an
+    /// open swing position. Reactive exits (TimeStop / OppositeBand /
+    /// ChandelierStop) and the trailing ratchet run regardless; the ForceFlat
+    /// override must fire ONLY when `force_close_pending` is true (i.e. after
+    /// force_flat()). Bug: the ForceFlat override was gated on
+    /// `entries_suppressed`, so set_paused(true) overrode reactive exits and
+    /// closed the position on the next tick. Fix: gate on force_close_pending.
+    #[tokio::test]
+    async fn set_paused_does_not_force_close_open_position() {
+        let mut s = SwingStrategy::new("BTCUSDT", &cfg(), TelegramBot::new("", ""));
+        // Inject an open profitable long the way on_fill would.
+        s.position = Some(SwingPosition {
+            side: OrderSide::Buy, entry_price: 50_000.0, stop_loss: 48_500.0,
+            quantity: 1.0, remaining_qty: 1.0, highest_since_entry: 50_000.0,
+            entry_time: 60 * 300_000, midline_scaled_out: false,
+        });
+        let realized_before = s.realized_pnl;
+
+        s.set_paused(true);
+        assert!(s.entries_suppressed, "paused suppresses entries");
+        assert!(!s.force_close_pending, "set_paused does NOT arm force-close");
+
+        // Bars with highs (55_000) above the mid (51_000) so OppositeBand does
+        // NOT fire; entry_time == ctx.timestamp so bars_in_trade=0 (< 48), no
+        // TimeStop; wide ATR keeps chandelier_stop well below mid.
+        let bars: Vec<Bar> = (0..60).map(|i| Bar::new(49_000.0, 55_000.0, 48_800.0, 50_000.0, 10.0, i * 300_000)).collect();
+        let ctx = TickContext {
+            order_book: crate::connector::types::OrderBook {
+                symbol: "BTCUSDT".into(), bids: vec![(50_999.0, 1.0)], asks: vec![(51_001.0, 1.0)], timestamp: 60 * 300_000,
+            },
+            recent_bars: bars, balances: std::collections::HashMap::new(), open_orders: Vec::new(),
+            regime: None, regime_confidence: 0.0, timestamp: 60 * 300_000, capital: None, replay: false,
+        };
+        let orders = s.on_tick(&ctx).await.unwrap();
+
+        assert!(s.position.is_some(), "paused must NOT close the open position (regression)");
+        assert_eq!(s.realized_pnl, realized_before,
+            "no P&L booked on a paused-non-flat tick: got {}",
+            s.realized_pnl - realized_before);
+        let pos = s.position.as_ref().unwrap();
+        assert!((pos.highest_since_entry - 51_000.0).abs() < 1e-9,
+            "trailing ratchet ran (highest_since_entry updated to mid): got {}",
+            pos.highest_since_entry);
+        assert!(!orders.iter().any(|o| o.reduce_only && matches!(o.order_type, OrderTypeReq::Market)),
+            "no Market reduce-only close while paused-not-flattened");
+        assert!(s.entries_suppressed, "still paused");
+        assert!(!s.force_close_pending, "force-close still not armed");
     }
 }

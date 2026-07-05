@@ -132,12 +132,20 @@ pub struct TrendStrategy {
     /// triggered / exited against the perpetual mark instead of the spot mid.
     /// Longs and no-position ticks always use the spot mid.
     perp: Option<Arc<dyn PerpPriceSource>>,
-    /// Unified entry-suppression flag — set by `set_paused(true)` (C1) and by
+    /// Entry-suppression flag — set by `set_paused(true)` (C1) and by
     /// `force_flat()` (C2). Stops NEW entries but lets exits/order-management
     /// (TP/SL/trailing/funding) keep running so a paused engine can still
     /// unwind. Cleared by `set_paused(false)` from `tick_strategies` when this
     /// engine becomes the active routing target on a non-flat decision.
     entries_suppressed: bool,
+    /// Force-close trigger — set ONLY by `force_flat()` (C2). When true, the
+    /// next on_tick closes any open position at market (gap-safe reduce-only)
+    /// before funding/trailing/TP run. `set_paused(true)` does NOT set this:
+    /// a routing-layer pause suppresses new entries but lets open positions be
+    /// managed (trailing ratchet, breakeven, TP ladder, funding accrual).
+    /// Splitting the two flags fixes the regression where `set_paused(true)`
+    /// force-closed open positions on every engine switch.
+    force_close_pending: bool,
 }
 
 impl TrendStrategy {
@@ -192,6 +200,7 @@ impl TrendStrategy {
             telegram,
             perp: None,
             entries_suppressed: false,
+            force_close_pending: false,
         };
         me.load_position();
         me
@@ -435,18 +444,28 @@ impl Strategy for TrendStrategy {
     fn realized_pnl(&self) -> f64 { self.realized_pnl }
     fn deployed_capital(&self) -> f64 { self.position.as_ref().map_or(0.0, |p| p.remaining_qty * p.entry_price) }
 
-    /// C1: suppress new entries while exits/management keep running. The flag is
-    /// the same one `force_flat` sets, so resume is a single `set_paused(false)`.
+    /// C1: suppress NEW entries while open-position management (trailing,
+    /// breakeven, TP ladder, funding) keeps running. Sets `entries_suppressed`
+    /// ONLY — does NOT set `force_close_pending`, so an open position is NOT
+    /// closed by a routing-layer pause. Resume (`set_paused(false)`) clears
+    /// both flags so a stale `force_close_pending` from a prior `force_flat`
+    /// doesn't linger into the next active window.
     fn set_paused(&mut self, paused: bool) {
         self.entries_suppressed = paused;
+        if !paused {
+            self.force_close_pending = false;
+        }
     }
 
     /// C2: close any open position at the current mid (Market, reduce-only),
     /// cancel nothing (trend places no resting orders — exits are reactive),
-    /// and suppress new entries until the next non-flat routing decision.
+    /// and suppress new entries until the next non-flat routing decision. Sets
+    /// BOTH `entries_suppressed` (block new entries) AND `force_close_pending`
+    /// (close the open position on the next on_tick).
     /// Mirrors the in-tick exit path: optimistic state clear + journal + notify.
     fn force_flat(&mut self) {
         self.entries_suppressed = true;
+        self.force_close_pending = true;
         // No reactive cancel: trend emits Market exits in-tick with no cid the
         // engine tracks; there is no resting order book to cancel here.
     }
@@ -504,7 +523,10 @@ impl Strategy for TrendStrategy {
         // the flag), so we won't reopen on this or subsequent ticks until the
         // engine clears entries_suppressed via set_paused(false). Mirrors the
         // in-tick exit path: optimistic state clear + journal + notify + Market.
-        if self.entries_suppressed {
+        // NOTE: gated on `force_close_pending`, NOT `entries_suppressed` — a
+        // plain `set_paused(true)` suppresses new entries but lets the full
+        // management path (funding, breakeven, trailing, TP ladder) run below.
+        if self.force_close_pending {
             if let Some(pos) = self.position.take() {
                 let side = pos.side;
                 let entry = pos.entry_price;
@@ -1596,5 +1618,52 @@ mod tests {
         let last = 100.0 * 1.005_f64.powi(259);
         let orders2 = run_tick(&mut s, tick_at(last));
         assert!(orders2.iter().all(|o| o.reduce_only), "no new entry while suppressed");
+    }
+
+    /// REGRESSION (re-review fix2): set_paused(true) must NOT close an open
+    /// position — it suppresses NEW entries only. The full management path
+    /// (funding, breakeven promotion, trailing ratchet, TP ladder) must keep
+    /// running so a paused engine can let winners run / cut losers via its own
+    /// exits. Bug: the unified `entries_suppressed` flag was the force-close
+    /// gate, so set_paused(true) closed the position at market on the next tick.
+    /// Fix: split into entries_suppressed (entry gate) + force_close_pending
+    /// (close gate); set_paused sets only the former.
+    #[test]
+    fn set_paused_does_not_force_close_open_position() {
+        let mut s = warmed_strategy(false);
+        let long_stop = s.calculate_stop_loss(100.0, OrderSide::Buy); // < 100
+        let risk = 100.0 - long_stop; // = 2·ATR
+        s.position = Some(TrendPosition {
+            side: OrderSide::Buy, entry_price: 100.0, stop_loss: long_stop,
+            quantity: 2.0, remaining_qty: 2.0, trailing_stop: None,
+            highest_since_entry: 100.0, lowest_since_entry: 100.0, tp_levels: vec![],
+            entry_time: 1_700_000_000_000, restored: false, last_funding_time: 0,
+        });
+        let realized_before = s.realized_pnl;
+
+        s.set_paused(true);
+        assert!(s.entries_suppressed, "paused suppresses entries");
+        assert!(!s.force_close_pending, "set_paused does NOT arm force-close");
+
+        // Tick at +1R (entry + risk). Bug would force-close here, booking +4·ATR
+        // P&L and returning before management. Fix: breakeven promotion fires,
+        // trailing stop initializes, position stays open.
+        let ctx = tick_at(100.0 + risk);
+        let orders = run_tick(&mut s, ctx);
+
+        assert!(s.position.is_some(), "paused must NOT close the open position (regression)");
+        assert_eq!(s.realized_pnl, realized_before,
+            "no P&L booked on a paused-non-flat tick: got {}",
+            s.realized_pnl - realized_before);
+        let pos = s.position.as_ref().expect("position still open");
+        assert!(pos.trailing_stop.is_some(),
+            "trailing-stop management ran while paused (paused-but-managing)");
+        assert!((pos.stop_loss - pos.entry_price).abs() < 1e-9,
+            "breakeven promotion fired at +1R: stop={}, entry={}",
+            pos.stop_loss, pos.entry_price);
+        // No Market reduce-only close, no new entry.
+        assert!(!orders.iter().any(|o| o.reduce_only && matches!(o.order_type, OrderTypeReq::Market)),
+            "no Market reduce-only close while paused-not-flattened");
+        assert!(orders.iter().all(|o| o.reduce_only), "no new (non-reduce_only) entry while paused");
     }
 }
