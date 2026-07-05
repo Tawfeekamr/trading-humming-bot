@@ -554,19 +554,83 @@ impl Strategy for TrendStrategy {
             if current_price > pos.highest_since_entry { pos.highest_since_entry = current_price; }
             if current_price < pos.lowest_since_entry { pos.lowest_since_entry = current_price; }
 
-            // Stop-loss
-            if stop_hit(pos.side, current_price, pos.stop_loss) {
+            // ── Breakeven + trailing stop (merged: let winners run) ──────────
+            // Replaces the old separate hard-stop + trailing-stop checks.
+            // Flow: initial stop (-2·ATR) → promote to breakeven (entry) at +1R
+            // → trail ratchets tighter as the trend extends. The effective stop
+            // is the TIGHTER of {stop_loss, trailing_stop}. One check, one exit.
+            //
+            // 1. Breakeven promotion: once price reaches +1R, move stop_loss to
+            //    entry. This eliminates downside risk after the trade proves
+            //    itself (+1R = entry+risk). Fires at most once — after stop_loss
+            //    == entry, `not_yet_promoted` is false and it never re-fires.
+            let risk = match pos.side {
+                OrderSide::Buy => (pos.entry_price - pos.stop_loss).max(0.0),
+                OrderSide::Sell => (pos.stop_loss - pos.entry_price).max(0.0),
+            };
+            if risk > 0.0 {
+                let reached_1r = match pos.side {
+                    OrderSide::Buy => current_price >= pos.entry_price + risk,
+                    OrderSide::Sell => current_price <= pos.entry_price - risk,
+                };
+                if reached_1r {
+                    let not_yet_promoted = match pos.side {
+                        OrderSide::Buy => pos.stop_loss < pos.entry_price,
+                        OrderSide::Sell => pos.stop_loss > pos.entry_price,
+                    };
+                    if not_yet_promoted {
+                        pos.stop_loss = pos.entry_price;
+                    }
+                }
+            }
+
+            // 2. Update trailing stop (Chandelier Exit from highest/lowest).
+            let atr_mult = if self.config.atr_trailing_mult > 0.0 { self.config.atr_trailing_mult } else { 3.0 };
+            let atr_val = self.atr.value();
+            let new_trail = match pos.side {
+                OrderSide::Buy => pos.highest_since_entry - atr_mult * atr_val,
+                OrderSide::Sell => pos.lowest_since_entry + atr_mult * atr_val,
+            };
+            pos.trailing_stop = Some(match pos.trailing_stop {
+                Some(prev) => match pos.side {
+                    OrderSide::Buy => new_trail.max(prev),    // ratchet up for longs
+                    OrderSide::Sell => new_trail.min(prev),   // ratchet down for shorts
+                },
+                None => new_trail,
+            });
+
+            // 3. Effective stop = the TIGHTER of stop_loss and trailing_stop.
+            //    Before +1R: stop_loss (initial -2·ATR) is tighter than the trail
+            //    (which starts wider). After +1R: stop_loss = entry (breakeven);
+            //    trail ratchets above entry as the trend extends → trail becomes
+            //    tighter. One exit point.
+            let effective_stop = match pos.trailing_stop {
+                Some(ts) => match pos.side {
+                    OrderSide::Buy => pos.stop_loss.max(ts),   // higher = tighter for longs
+                    OrderSide::Sell => pos.stop_loss.min(ts),   // lower = tighter for shorts
+                },
+                None => pos.stop_loss,
+            };
+
+            // 4. Check the effective stop — full remaining qty, Market (gap-safe).
+            let hit = match pos.side {
+                OrderSide::Buy => current_price <= effective_stop,
+                OrderSide::Sell => current_price >= effective_stop,
+            };
+            if hit {
                 let side = pos.side;
                 let entry = pos.entry_price;
                 let qty = pos.remaining_qty;
                 let pnl = trade_pnl(side, entry, current_price, qty);
+                let is_breakeven = (effective_stop - pos.entry_price).abs() < 1e-9;
+                let reason = if is_breakeven { "breakeven_stop" } else { "trailing_stop" };
                 self.realized_pnl += pnl;
                 self.position = None;
                 self.pending_entry = None;
                 if let Some((s, ep, sl, tp3, et)) = snap {
-                    self.log_close(s, ep, current_price, qty, pnl, sl, tp3, "stop_loss", ctx.timestamp, et);
+                    self.log_close(s, ep, current_price, qty, pnl, sl, tp3, reason, ctx.timestamp, et);
                 }
-                self.notify_exit(current_price, pnl, "stop_loss");
+                self.notify_exit(current_price, pnl, reason);
                 orders.push(OrderRequest {
                     symbol: self.pair.clone(), side: close_side(side), reduce_only: true,
                     order_type: OrderTypeReq::Market, price: None,
@@ -609,50 +673,6 @@ impl Strategy for TrendStrategy {
                 self.notify_exit(current_price, *pnl, reason);
             }
             if self.position.is_none() { return Ok(orders); }
-
-            // ATR trailing stop (Chandelier Exit)
-            if let Some(pos) = &mut self.position {
-                let atr_mult = if self.config.atr_trailing_mult > 0.0 { self.config.atr_trailing_mult } else { 3.0 };
-                let atr_val = self.atr.value();
-                let new_trail = match pos.side {
-                    OrderSide::Buy => pos.highest_since_entry - atr_mult * atr_val,
-                    OrderSide::Sell => pos.lowest_since_entry + atr_mult * atr_val,
-                };
-                pos.trailing_stop = Some(match pos.trailing_stop {
-                    Some(prev) => match pos.side {
-                        OrderSide::Buy => new_trail.max(prev),
-                        OrderSide::Sell => new_trail.min(prev),
-                    },
-                    None => new_trail,
-                });
-                if let Some(trail) = pos.trailing_stop {
-                    let hit = match pos.side {
-                        OrderSide::Buy => current_price <= trail,
-                        OrderSide::Sell => current_price >= trail,
-                    };
-                    if hit {
-                        let side = pos.side;
-                        let entry = pos.entry_price;
-                        let qty = pos.remaining_qty;
-                        let pnl = trade_pnl(side, entry, current_price, qty);
-                        self.realized_pnl += pnl;
-                        self.position = None;
-                        self.pending_entry = None;
-                        if let Some((s, ep, sl, tp3, et)) = snap {
-                            self.log_close(s, ep, current_price, qty, pnl, sl, tp3, "trailing_stop", ctx.timestamp, et);
-                        }
-                        self.notify_exit(current_price, pnl, "trailing_stop");
-                        let (ot, price_opt) = exit_order_req(perp_attached, side, current_price);
-                        orders.push(OrderRequest {
-                            symbol: self.pair.clone(), side: close_side(side), reduce_only: true,
-                            order_type: ot, price: price_opt,
-                            quantity: qty, time_in_force: Some(TimeInForceReq::Gtc), client_order_id: None,
-                        });
-                        self.save_position();
-                        return Ok(orders);
-                    }
-                }
-            }
 
             // Direction flip / ADX exit
             if let Some(pos) = &self.position {
@@ -738,7 +758,11 @@ impl Strategy for TrendStrategy {
         // remaining quantity — exit paths already booked PnL at detection time.
         if let Some(side) = self.pending_entry.take() {
             let stop_loss = self.calculate_stop_loss(fill.price, side);
-            let tp_levels = TrendPosition::calculate_tp_levels(fill.price, stop_loss, self.config.risk_reward_ratio, 0.10, side);
+            // No fixed TPs — let winners run via breakeven promotion + Chandelier
+            // trail (exit redesign). calculate_tp_levels is retained for the
+            // restore-reconciliation path below (old state files with TPs) and
+            // optional far-TPs in the future.
+            let tp_levels = Vec::new();
             self.position = Some(TrendPosition {
                 side, entry_price: fill.price, stop_loss,
                 quantity: fill.quantity, remaining_qty: fill.quantity,
@@ -858,6 +882,13 @@ fn trade_pnl(side: OrderSide, entry_price: f64, exit_price: f64, qty: f64) -> f6
 
 /// Has the hard stop been touched? Long stops below entry (price falls into it);
 /// short stops above entry (price rises into it).
+///
+/// After the exit redesign, the merged breakeven+trail block inlines this check
+/// (it needs `effective_stop = max(stop, trail)` for longs, not just stop), so
+/// `stop_hit` is no longer called from `on_tick`. Retained for the unit test
+/// `stop_and_tp_hit_conditions_are_side_aware` and as documentation of the
+/// direction-aware comparison convention shared with `tp_hit` below.
+#[cfg(test)]
 fn stop_hit(side: OrderSide, price: f64, stop: f64) -> bool {
     match side { OrderSide::Buy => price <= stop, OrderSide::Sell => price >= stop }
 }
@@ -1055,16 +1086,16 @@ mod tests {
     #[test]
     fn short_position_stops_out_with_buy_order_and_negative_pnl() {
         let mut s = warmed_strategy(true);
-        let short_stop = s.calculate_stop_loss(100.0, OrderSide::Sell); // > 100, e.g. ~106
-        let tps = TrendPosition::calculate_tp_levels(100.0, short_stop, 2.0, 0.10, OrderSide::Sell);
+        let short_stop = s.calculate_stop_loss(100.0, OrderSide::Sell); // > 100, e.g. ~102
+        // No TPs in the new exit design — initial stop is the only exit before +1R.
         s.position = Some(TrendPosition {
             side: OrderSide::Sell, entry_price: 100.0, stop_loss: short_stop,
             quantity: 2.0, remaining_qty: 2.0, trailing_stop: None,
-            highest_since_entry: 100.0, lowest_since_entry: 100.0, tp_levels: tps,
+            highest_since_entry: 100.0, lowest_since_entry: 100.0, tp_levels: vec![],
             entry_time: 1_700_000_000_000, restored: false, last_funding_time: 0,
         });
         let realized_before = s.realized_pnl;
-        // Price rises ABOVE the short stop → stop_hit(Sell) true.
+        // Price rises ABOVE the short stop → effective_stop hit ( Sell: price>=stop).
         let ctx = tick_at(short_stop + 5.0);
         let orders = run_tick(&mut s, ctx);
         assert!(s.position.is_none(), "stop must close the short");
@@ -1072,26 +1103,123 @@ mod tests {
         assert_eq!(orders.len(), 1, "exactly one stop-loss exit order");
         assert_eq!(orders[0].side, OrderSide::Buy, "closing a short BUYS to cover (got {:?})", orders[0].side);
         assert!(orders[0].reduce_only, "exit must be reduce_only");
+        assert_eq!(orders[0].order_type, OrderTypeReq::Market, "gap-safe Market exit");
     }
 
     #[test]
-    fn short_position_takes_profit_with_buy_order_and_positive_pnl() {
+    fn short_position_promotes_to_breakeven_at_1r() {
+        // Exit redesign: with no TPs, a SHORT that reaches +1R no longer fires a
+        // partial TP1 — instead the merged exit block promotes stop_loss to
+        // entry (breakeven) and the position stays open to let the trail run.
         let mut s = warmed_strategy(true);
-        let short_stop = s.calculate_stop_loss(100.0, OrderSide::Sell);
-        let tps = TrendPosition::calculate_tp_levels(100.0, short_stop, 2.0, 0.10, OrderSide::Sell);
-        let tp1 = tps[0].price; // capture before moving tps into the position
+        let short_stop = s.calculate_stop_loss(100.0, OrderSide::Sell); // > 100
+        let risk = short_stop - 100.0;
         s.position = Some(TrendPosition {
             side: OrderSide::Sell, entry_price: 100.0, stop_loss: short_stop,
             quantity: 2.0, remaining_qty: 2.0, trailing_stop: None,
-            highest_since_entry: 100.0, lowest_since_entry: 100.0, tp_levels: tps,
+            highest_since_entry: 100.0, lowest_since_entry: 100.0, tp_levels: vec![],
             entry_time: 1_700_000_000_000, restored: false, last_funding_time: 0,
         });
-        let realized_before = s.realized_pnl;
-        // Price falls to TP1 (below entry) → tp_hit(Sell) true → profit.
-        let ctx = tick_at(tp1);
+        // Price falls to +1R (entry − risk) → breakeven promotion fires; no exit.
+        let ctx = tick_at(100.0 - risk);
+        let _ = run_tick(&mut s, ctx);
+        let pos = s.position.as_ref().expect("position stays open at +1R (no TPs to fire)");
+        assert!((pos.stop_loss - pos.entry_price).abs() < 1e-9,
+            "SHORT +1R: stop_loss must be promoted to breakeven (entry): got stop={}",
+            pos.stop_loss);
+        assert!(pos.trailing_stop.is_some(), "trail initialized after +1R");
+    }
+
+    // ── Exit-redesign tests (let winners run: breakeven @ +1R + Chandelier trail) ──
+
+    #[test]
+    fn breakeven_promoted_when_position_reaches_1r() {
+        // LONG: entry 100, stop entry−2·ATR. Push price to entry+risk → promote.
+        let mut s = warmed_strategy(false);
+        let long_stop = s.calculate_stop_loss(100.0, OrderSide::Buy);
+        let risk = 100.0 - long_stop;
+        s.position = Some(TrendPosition {
+            side: OrderSide::Buy, entry_price: 100.0, stop_loss: long_stop,
+            quantity: 1.0, remaining_qty: 1.0, trailing_stop: None,
+            highest_since_entry: 100.0, lowest_since_entry: 100.0, tp_levels: vec![],
+            entry_time: 1_700_000_000_000, restored: false, last_funding_time: 0,
+        });
+        let ctx = tick_at(100.0 + risk);
+        let _ = run_tick(&mut s, ctx);
+        let pos = s.position.as_ref().expect("position stays open at +1R (no TPs)");
+        assert!((pos.stop_loss - pos.entry_price).abs() < 1e-9,
+            "LONG +1R: stop_loss promoted to breakeven (entry): got stop={}", pos.stop_loss);
+    }
+
+    #[test]
+    fn breakeven_not_promoted_before_1r() {
+        // LONG: push price to +0.5R (half of the +1R threshold) → no promotion.
+        let mut s = warmed_strategy(false);
+        let long_stop = s.calculate_stop_loss(100.0, OrderSide::Buy);
+        let risk = 100.0 - long_stop;
+        s.position = Some(TrendPosition {
+            side: OrderSide::Buy, entry_price: 100.0, stop_loss: long_stop,
+            quantity: 1.0, remaining_qty: 1.0, trailing_stop: None,
+            highest_since_entry: 100.0, lowest_since_entry: 100.0, tp_levels: vec![],
+            entry_time: 1_700_000_000_000, restored: false, last_funding_time: 0,
+        });
+        let ctx = tick_at(100.0 + risk * 0.5);
+        let _ = run_tick(&mut s, ctx);
+        let pos = s.position.as_ref().expect("position stays open before +1R");
+        assert!((pos.stop_loss - long_stop).abs() < 1e-9,
+            "stop_loss unchanged before +1R: got {} expected {}", pos.stop_loss, long_stop);
+    }
+
+    #[test]
+    fn trailing_stop_exits_full_quantity() {
+        // LONG: push price up (ratchet trail), then reverse below trail → exit
+        // fires on the FULL remaining qty (no partial-TP ladder ahead of it).
+        let mut s = warmed_strategy(false);
+        let long_stop = s.calculate_stop_loss(100.0, OrderSide::Buy);
+        s.position = Some(TrendPosition {
+            side: OrderSide::Buy, entry_price: 100.0, stop_loss: long_stop,
+            quantity: 2.0, remaining_qty: 2.0, trailing_stop: None,
+            highest_since_entry: 100.0, lowest_since_entry: 100.0, tp_levels: vec![],
+            entry_time: 1_700_000_000_000, restored: false, last_funding_time: 0,
+        });
+        // 1) Up move ratchets the trail above entry; no exit (price > trail).
+        let _ = run_tick(&mut s, tick_at(110.0));
+        assert!(s.position.is_some(), "no exit on the up move");
+        let trail_after_up = s.position.as_ref().unwrap()
+            .trailing_stop.expect("trail set after up move");
+        assert!(trail_after_up > 100.0,
+            "trail ratcheted above entry after up move: got {}", trail_after_up);
+        // 2) Reverse below the trail → trailing-stop exit fires, full quantity.
+        let orders = run_tick(&mut s, tick_at(trail_after_up - 1.0));
+        assert!(s.position.is_none(), "trailing stop closed the position");
+        assert_eq!(orders.len(), 1, "exactly one exit order");
+        assert!((orders[0].quantity - 2.0).abs() < 1e-9,
+            "full remaining quantity exited (no partial TP ahead of trail): got {}",
+            orders[0].quantity);
+        assert_eq!(orders[0].side, OrderSide::Sell, "long close sells");
+        assert!(orders[0].reduce_only, "exit is reduce_only");
+    }
+
+    #[test]
+    fn stop_loss_exits_before_breakeven() {
+        // LONG: price drops to the initial stop (before any +1R move) → merged
+        // block fires with effective_stop = stop_loss (the tighter one pre-trail).
+        let mut s = warmed_strategy(false);
+        let long_stop = s.calculate_stop_loss(100.0, OrderSide::Buy);
+        s.position = Some(TrendPosition {
+            side: OrderSide::Buy, entry_price: 100.0, stop_loss: long_stop,
+            quantity: 2.0, remaining_qty: 2.0, trailing_stop: None,
+            highest_since_entry: 100.0, lowest_since_entry: 100.0, tp_levels: vec![],
+            entry_time: 1_700_000_000_000, restored: false, last_funding_time: 0,
+        });
+        let ctx = tick_at(long_stop);
         let orders = run_tick(&mut s, ctx);
-        assert!(s.realized_pnl > realized_before, "short TP must be a profit: {}", s.realized_pnl);
-        assert!(orders.iter().all(|o| o.side == OrderSide::Buy), "TP exits buy to cover");
+        assert!(s.position.is_none(), "initial stop must close the position");
+        assert_eq!(orders.len(), 1, "exactly one exit order");
+        assert_eq!(orders[0].side, OrderSide::Sell, "long close sells");
+        assert!(orders[0].reduce_only, "exit is reduce_only");
+        assert_eq!(orders[0].order_type, OrderTypeReq::Market, "gap-safe Market exit");
+        assert!((orders[0].quantity - 2.0).abs() < 1e-9, "full quantity exited");
     }
 
     // ── helpers for the on_tick flow tests above ──
@@ -1212,55 +1340,63 @@ mod tests {
             "short must be marked at perp 50, not spot 100: {}", st.details);
     }
 
-    /// Finding 1 regression: a SHORT exit whose TP level is hit at the perp mark
-    /// (perp BELOW spot) must push a Market order, not a Limit at the perp price.
-    /// A Limit at the perp price would misfire against the paper fill engine,
-    /// which gates Buy-to-cover on `spot_mid <= limit_price` (false when perp<spot).
+    /// Exit-redesign regression: a SHORT trailing/breakeven exit whose
+    /// effective_stop is hit at the perp mark (perp ABOVE the trail) must push
+    /// a Market order, not a Limit at the perp price. A Limit at the perp price
+    /// would misfire against the paper fill engine, which gates Buy-to-cover on
+    /// `spot_mid <= limit_price` (false when perp > spot). The merged exit block
+    /// hardcodes Market for this reason.
     #[test]
-    fn short_tp_exit_with_perp_is_market_not_limit() {
+    fn short_trailing_exit_with_perp_is_market_not_limit() {
         use crate::connector::perp_price::FakePerp;
-        // Spot via tick_at(100). Perp mark 50 — divergent, BELOW spot.
+        // Spot via tick_at(100). Perp mark 95 — divergent, ABOVE the trail.
         let mut s = warmed_strategy(true)
-            .with_perp(std::sync::Arc::new(FakePerp { mark: 50.0, funding: 0.0 }));
-        // TP1 below entry 100 so tp_hit(Sell, perp=50) is true at the perp mark.
-        let tps = TrendPosition::calculate_tp_levels(100.0, 110.0, 2.0, 0.10, OrderSide::Sell);
+            .with_perp(std::sync::Arc::new(FakePerp { mark: 95.0, funding: 0.0 }));
+        // SHORT already at breakeven (stop_loss == entry), trail ratcheted to 93
+        // after price earlier visited 90 (captured by lowest_since_entry). With
+        // perp mark 95 >= trail 93, the trailing stop fires.
         s.position = Some(TrendPosition {
-            side: OrderSide::Sell, entry_price: 100.0, stop_loss: 110.0,
-            quantity: 2.0, remaining_qty: 2.0, trailing_stop: None,
-            highest_since_entry: 100.0, lowest_since_entry: 100.0, tp_levels: tps,
+            side: OrderSide::Sell, entry_price: 100.0, stop_loss: 100.0, // breakeven
+            quantity: 2.0, remaining_qty: 2.0, trailing_stop: Some(93.0),
+            highest_since_entry: 100.0, lowest_since_entry: 90.0, tp_levels: vec![],
             entry_time: 1_700_000_000_000, restored: false, last_funding_time: 1_700_000_001_000,
         });
         let orders = run_tick(&mut s, tick_at(100.0));
-        // At least one TP exit order pushed; assert it is Market, not Limit.
+        // current_price = 95 (perp override for SHORT).
+        // trail = lowest(90) + 3·ATR(≈1) = 93. prev=93 → stays 93.
+        // effective_stop = min(stop=100, trail=93) = 93. hit(Sell): 95>=93 → TRUE.
         assert!(orders.iter().any(|o| o.reduce_only && o.side == OrderSide::Buy),
             "expected a buy-to-cover exit order: {:?}", orders);
         for o in &orders {
             if o.reduce_only && o.side == OrderSide::Buy {
                 assert_eq!(o.order_type, OrderTypeReq::Market,
-                    "SHORT exit must be Market (fills at spot+taker), not Limit at perp: {:?}", o.order_type);
+                    "SHORT trailing exit must be Market (gap-safe), not Limit at perp: {:?}", o.order_type);
                 assert!(o.price.is_none(), "Market exit carries no price: {:?}", o.price);
             }
         }
     }
 
-    /// Finding 1 control: a LONG TP exit (no perp attached) stays Limit at the
-    /// spot mid — longs must be unchanged by the short-only fix.
+    /// Exit-redesign control: a LONG stop / trailing exit (no perp attached)
+    /// now also uses Market (gap-safe) under the merged exit block. The old
+    /// design used Limit-at-spot for longs; the redesign unifies on Market so
+    /// trailing stops can't miss on a fast reversal.
     #[test]
-    fn long_tp_exit_without_perp_still_limit() {
+    fn long_stop_exit_without_perp_is_market_not_limit() {
         let mut s = warmed_strategy(false); // no perp, longs only
         let long_stop = s.calculate_stop_loss(100.0, OrderSide::Buy); // < 100
-        let tps = TrendPosition::calculate_tp_levels(100.0, long_stop, 2.0, 0.10, OrderSide::Buy);
-        let tp3 = tps[2].price; // above entry
         s.position = Some(TrendPosition {
             side: OrderSide::Buy, entry_price: 100.0, stop_loss: long_stop,
             quantity: 2.0, remaining_qty: 2.0, trailing_stop: None,
-            highest_since_entry: 100.0, lowest_since_entry: 100.0, tp_levels: tps,
+            highest_since_entry: 100.0, lowest_since_entry: 100.0, tp_levels: vec![],
             entry_time: 1_700_000_000_000, restored: false, last_funding_time: 1_700_000_001_000,
         });
-        let orders = run_tick(&mut s, tick_at(tp3));
+        // Price drops below the initial stop → merged block fires a Market exit.
+        let ctx = tick_at(long_stop - 1.0);
+        let orders = run_tick(&mut s, ctx);
         assert!(orders.iter().any(|o| o.reduce_only && o.side == OrderSide::Sell
-            && o.order_type == OrderTypeReq::Limit),
-            "long TP exit must remain Limit at spot: {:?}", orders);
+            && o.order_type == OrderTypeReq::Market
+            && o.price.is_none()),
+            "long stop exit must be Market (gap-safe) under the merged block: {:?}", orders);
     }
 
     /// Finding 2 regression: a position restored from disk with last_funding_time: 0
@@ -1290,7 +1426,11 @@ mod tests {
         }
         let state_json = v.to_string();
 
-        let path = std::path::PathBuf::from("data/TESTPAIR_USDT_trend_position.json");
+        // Use a dedicated pair name so parallel sibling tests using warmed_strategy
+        // (which save_position() into data/TESTPAIR_USDT_trend_position.json on
+        // every run_tick) can't race this test's write→load window. The position
+        // file path is derived from pair, so a unique pair = a unique file.
+        let path = std::path::PathBuf::from("data/TESTRESTOR_USDT_trend_position.json");
         std::fs::create_dir_all("data").ok();
         std::fs::write(&path, state_json).unwrap();
 
@@ -1302,7 +1442,7 @@ mod tests {
         };
         let tg = crate::notifications::TelegramBot::new("", "");
         // new() calls load_position, which must back-fill last_funding_time.
-        let mut s = TrendStrategy::new("TESTPAIR-USDT", &config, tg)
+        let mut s = TrendStrategy::new("TESTRESTOR-USDT", &config, tg)
             .with_perp(std::sync::Arc::new(FakePerp { mark: 100.0, funding: 0.0001 }));
         let _ = std::fs::remove_file(&path); // clean up the temp state file
 
