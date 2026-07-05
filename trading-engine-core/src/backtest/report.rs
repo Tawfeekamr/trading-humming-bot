@@ -13,7 +13,7 @@ use serde::Serialize;
 use super::replay::{EngineKind, RunResult};
 use super::validation::ValidationReport;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Metrics {
     pub total_return_pct: f64,
     pub sharpe: f64,

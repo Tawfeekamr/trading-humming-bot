@@ -75,7 +75,11 @@ impl EngineKind {
 /// bar interval in hours (used for Sharpe annualization downstream). Per-
 /// engine configs: `grid` (Phase 1) + `trend`/`perp_bars`/`funding_rate`
 /// (Task 3) + `swing` (Task 4). MR fields append in Task 5.
-#[derive(Debug)]
+/// `Clone` so Phase 4's `sweep_is` can clone `rc` per grid point, apply the
+/// override, and run that variant on the IS slice without mutating the caller's
+/// template. All fields are already `Clone` (configs, `Bar`, `EngineKind`,
+/// primitives) — this derive is a capability addition, not a logic change.
+#[derive(Debug, Clone)]
 pub struct ReplayConfig {
     pub symbol: String,
     pub init_cash: f64,

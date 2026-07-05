@@ -19,10 +19,9 @@ pub fn split_is_oos(bars: &[Bar], oos_frac: f64) -> (Vec<Bar>, Vec<Bar>) {
 }
 
 /// Per-slice metrics + the IS→OOS Sharpe-gap overfit flag. `Serialize` for
-/// Task 3's JSON artifact. (`Clone` omitted: `Metrics` isn't `Clone` and the
-/// global constraint forbids changing `report.rs`. Add `Clone` to both when
-/// Task 3 / a later refactor permits it — the test does not require it.)
-#[derive(Debug, Serialize)]
+/// Task 3's JSON artifact. `Clone` so Phase 4's `SweepResult` (Task 2) can
+/// hold a `ValidationReport` alongside its IS-best `Metrics`.
+#[derive(Debug, Clone, Serialize)]
 pub struct ValidationReport {
     /// Full-sample metrics (re-run end-to-end on the entire bar stream).
     pub full: Metrics,
