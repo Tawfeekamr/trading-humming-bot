@@ -1,9 +1,27 @@
-# RL Multi-Pair + Walk-Forward OOS Harness — Design (DRAFT)
+# RL Multi-Pair + Walk-Forward OOS Harness — Design
 
-**Status: DRAFT — pending user approval.** Written 2026-07-05 while the user was
-AFK. The single-pair/single-window benchmark (`reports/rl_benchmark.md`) is
-valid but statistically thin (DM p=0.061). This spec covers the dissertation-
-grade harness. **Do not implement until reviewed.**
+**Status: harness IMPLEMENTED (minimal) + smoke-validated.** The pure helpers
+(`walk_forward_slices`, `pool_returns`, `aggregate_dm`) and the orchestrator
+(`run_walk_forward` / `main`) live in `src/rl/walk_forward.py`, unit-tested in
+`tests/test_rl_walk_forward.py` (7 tests). Validated end-to-end on a 2-slice /
+3k-step ETH smoke (plumbing proven; numbers meaningless at that step count).
+
+**The full sweep is NOT run** — it's a one-command follow-up awaiting your
+sign-off on the open questions below (pair count, window sizes, RF option).
+
+> ⚠️ **RF labeling gap confirmed (blocks option A).** `src/data/label_generation.py`
+> does not exist, `generate_regime_labels` is defined nowhere in the repo, and
+> `backtest/ml_walk_forward.py` is broken scratch code (imports two missing
+> modules + uses dummy data). The committed `regime_*.pkl` files were trained
+> by code that was never committed. Closing this needs a regime-labeling
+> **methodology decision** (what makes a bar ranging/trending/danger) — not a
+> code fix. See "RF baseline parity" below.
+
+---
+
+*Original draft (kept for context): written 2026-07-05 while the user was AFK.
+The single-pair/single-window benchmark (`reports/rl_benchmark.md`) is valid
+but statistically thin. This spec covers the dissertation-grade harness.*
 
 ## Problem
 
