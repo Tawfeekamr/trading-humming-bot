@@ -221,8 +221,14 @@ impl Engine {
                 }
             }
             // PPO size signal: scale the active engine's capital grant ceiling
-            // (0.5 / 1.0 / 1.5). Paused engines don't request capital, so we only
-            // push the mult for the active engine.
+            // (0.5 / 1.0 / 1.5). Defense-in-depth (I2): clear every OTHER
+            // engine's mult to 0.0 first so a paused engine whose on_tick still
+            // runs (e.g. managing exits) can't draw capital it shouldn't have.
+            for s in self.strategies.iter() {
+                if s.name() != r.active_engine {
+                    self.capital.set_size_mult(s.name(), 0.0);
+                }
+            }
             self.capital.set_size_mult(&r.active_engine, r.size_mult);
         }
 

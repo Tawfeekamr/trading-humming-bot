@@ -322,4 +322,28 @@ mod tests {
         assert!((m.request_capital("grid", 500.0) - 0.0).abs() < 1e-6,
             "negative size_mult must clamp to 0 ⇒ zero grant");
     }
+
+    /// I2: clearing a non-active engine's size_mult to 0 must zero its capital
+    /// grant, so a paused engine whose on_tick still runs (managing exits) can't
+    /// draw capital. Defense-in-depth alongside set_paused.
+    #[test]
+    fn size_mult_zero_clears_capital_grant_for_non_active_engine() {
+        let mut budgets = BTreeMap::new();
+        budgets.insert("trend".to_string(), 1_000.0);
+        budgets.insert("grid".to_string(), 1_000.0);
+        let mut m = CapitalManager::new(20.0).with_budgets(budgets);
+        m.sync_equity(10_000.0, 10_000.0); // free = 8000, both budgets = 1000
+
+        // Active engine keeps its mult; non-active is cleared to 0 (I2).
+        m.set_size_mult("trend", 1.5);
+        m.set_size_mult("grid", 0.0);
+
+        // trend (active): 1.5 × 1000 budget = 1500 cap; ask 1000 → granted 1000.
+        assert!((m.request_capital("trend", 1_000.0) - 1_000.0).abs() < 1e-6,
+            "active engine draws capital normally");
+
+        // grid (non-active): 0 × 1000 budget = 0 cap; ask anything → granted 0.
+        assert!((m.request_capital("grid", 500.0) - 0.0).abs() < 1e-6,
+            "non-active engine with cleared size_mult draws ZERO capital");
+    }
 }
