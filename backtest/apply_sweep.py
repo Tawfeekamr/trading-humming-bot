@@ -1,164 +1,91 @@
-"""
-Apply Sweep Recommendations to Live Config
-Reads sweep JSON results, picks best params by delta Sharpe, updates strategy.yaml.
+"""Apply gated sweep results to live config (Phase 5).
 
-Usage: cat results/*.json | python apply_sweep.py config/strategy.yaml
-Outputs: list of changes made (or "no changes" if live params are optimal)
-"""
+Reads *_sweep.json (the Phase-4 SweepResult schema, now with param_deltas) from a
+results dir. For each engine where decision.apply == true, writes each param_deltas
+value to config/strategy.yaml via PARAM_MAP (comment-preserving line edit). Skips
+KEEP engines and MR (no PARAM_MAP entries). --dry-run reports the manifest without
+writing.
 
-import sys
-import json
+Usage: python backtest/apply_sweep.py <results_dir> <config_path> [--dry-run]
+"""
+import argparse, json, sys
 from pathlib import Path
 
-# Mapping: sweep param name → YAML path in strategy.yaml
+# (engine, param_name) -> dotted YAML path in config/strategy.yaml
 PARAM_MAP = {
-    # Grid params (from grid.recommendations)
-    "bb_period": "indicators.bollinger.period",
-    "rsi_oversold": "indicators.rsi.oversold",
-    "rsi_overbought": "indicators.rsi.overbought",
-    "atr_multiplier": "indicators.atr.spacing_multiplier",
-    # Trend params (from trend.recommendations)
-    "trend_ema_fast": "trend.ema_fast",
-    "trend_ema_slow": "trend.ema_slow",
-    "trend_rsi_min": "trend.rsi_min",
-    "trend_rsi_max": "trend.rsi_max",
+    ("trend", "ema_fast"): "trend.ema_fast",
+    ("trend", "rr"):       "trend.risk_reward_ratio",
+    ("grid",  "adx_max"):  "grid.adx_range_max",
+    ("grid",  "chop_min"): "grid.chop_range_min",
+    ("swing", "min_score"):"swing.min_score",
+    ("swing", "adx_entry"):"swing.adx_range_entry",
 }
 
+def _set_yaml_value(text: str, dotted_key: str, value: str) -> str:
+    """Comment-preserving line edit. dotted_key e.g. 'trend.ema_fast' -> find the
+    line 'ema_fast:' at the section depth of 'trend.' and set its value, keeping
+    any trailing '  # comment'."""
+    keys = dotted_key.split(".")
+    leaf = keys[-1]
+    depth = (len(keys) - 1) * 2  # YAML 2-space indent per section
+    lines = text.split("\n")
+    for i, line in enumerate(lines):
+        stripped = line.lstrip()
+        indent = len(line) - len(stripped)
+        if indent == depth and stripped.startswith(f"{leaf}:"):
+            comment = ""
+            if "#" in stripped:
+                # keep the '#' — split drops it; restore so '# comment' survives
+                comment = "  #" + stripped.split("#", 1)[1].rstrip()
+            lines[i] = f"{' '*depth}{leaf}: {value}{comment}"
+            break
+    return "\n".join(lines)
 
-def parse_sweep_results(raw_json: str) -> list[dict]:
-    """Parse concatenated JSON objects from sweep output."""
-    results = []
-    # Split on }{ boundary for concatenated JSON
-    chunks = raw_json.strip().split("}{")
-    for i, chunk in enumerate(chunks):
-        if i > 0:
-            chunk = "{" + chunk
-        if i < len(chunks) - 1:
-            chunk = chunk + "}"
+def _value_for(yaml_text: str, dotted_key: str) -> str:
+    keys = dotted_key.split("."); leaf = keys[-1]; depth = (len(keys)-1)*2
+    for line in yaml_text.split("\n"):
+        s = line.lstrip()
+        if len(line)-len(s) == depth and s.startswith(f"{leaf}:"):
+            v = s[len(leaf)+1:].split("#",1)[0].strip()
+            return v
+    return ""
+
+def apply(results_dir: str, config_path: str, dry_run: bool = True) -> list:
+    changes = []
+    text = Path(config_path).read_text()
+    for jf in sorted(Path(results_dir).glob("*_sweep.json")):
         try:
-            results.append(json.loads(chunk))
-        except json.JSONDecodeError:
+            rep = json.loads(jf.read_text())
+        except Exception as e:
+            print(f"warn: skip {jf.name}: {e}"); continue
+        engine = rep.get("engine"); decision = rep.get("decision", {})
+        if not decision.get("apply"):
+            print(f"{engine}: KEEP ({decision.get('gate_reasons', [])}) — skipping")
             continue
-    return results
-
-
-def collect_recommendations(sweep_results: list[dict]) -> dict:
-    """
-    Collect all suggestions across pairs and strategies.
-    For each param, keep the one with the highest delta_sharpe.
-    """
-    # param_name → {value, delta_sharpe, pair, strategy}
-    best = {}
-
-    for result in sweep_results:
-        pair = result.get("pair", "UNKNOWN")
-
-        # Grid recommendations
-        grid_recs = result.get("grid", {}).get("recommendations", {})
-        for param, info in grid_recs.items():
-            if info.get("suggest_change", False):
-                delta = abs(info.get("delta_sharpe", 0))
-                key = f"grid_{param}" if not param.startswith("grid_") else param
-                if key not in best or delta > best[key]["delta_sharpe"]:
-                    best[key] = {
-                        "yaml_path": PARAM_MAP.get(param, None),
-                        "value": info["best"],
-                        "delta_sharpe": delta,
-                        "pair": pair,
-                        "strategy": "grid",
-                    }
-
-        # Trend recommendations
-        trend_recs = result.get("trend", {}).get("recommendations", {})
-        for param, info in trend_recs.items():
-            if info.get("suggest_change", False):
-                delta = abs(info.get("delta_sharpe", 0))
-                key = f"trend_{param}" if not param.startswith("trend_") else param
-                if key not in best or delta > best[key]["delta_sharpe"]:
-                    best[key] = {
-                        "yaml_path": PARAM_MAP.get(key, None),
-                        "value": info["best"],
-                        "delta_sharpe": delta,
-                        "pair": pair,
-                        "strategy": "trend",
-                    }
-
-    return best
-
-
-def update_yaml(yaml_path: str, changes: dict) -> bool:
-    """Update strategy.yaml with the recommended changes. Returns True if any changes made."""
-    content = Path(yaml_path).read_text()
-    original = content
-    lines = content.split("\n")
-
-    for param_key, info in changes.items():
-        yaml_key = info.get("yaml_path")
-        if not yaml_key:
-            continue
-
-        value = info["value"]
-        # Convert float to int if it's a whole number
-        if isinstance(value, float) and value == int(value):
-            value = int(value)
-
-        keys = yaml_key.split(".")
-        key_name = keys[-1]
-
-        # Find the line with this key in the right section
-        # Simple approach: find the key in the right indent level
-        section_depth = len(keys) - 1  # 0=top, 1=nested, 2=double-nested
-
-        for i, line in enumerate(lines):
-            stripped = line.lstrip()
-            indent = len(line) - len(stripped)
-            expected_indent = section_depth * 2  # YAML uses 2-space indent
-
-            if indent != expected_indent:
+        for param, value in rep.get("param_deltas", []):
+            yaml_path = PARAM_MAP.get((engine, param))
+            if not yaml_path:
+                print(f"warn: {engine}.{param} not in PARAM_MAP — skipping (MR?)")
                 continue
-
-            if stripped.startswith(f"{key_name}:"):
-                # Update the value
-                comment = ""
-                if "#" in stripped:
-                    comment = "  # " + stripped.split("#", 1)[1].strip()
-                lines[i] = f"{' ' * expected_indent}{key_name}: {value}{comment}"
-                print(f"  {yaml_path}: {key_name} → {value} (from {info['pair']} {info['strategy']}, Δ Sharpe +{info['delta_sharpe']:.2f})")
-                break
-
-    new_content = "\n".join(lines)
-    if new_content != original:
-        Path(yaml_path).write_text(new_content)
-        return True
-    return False
-
+            old = _value_for(text, yaml_path)
+            if old == value:
+                continue
+            changes.append({"engine": engine, "param": param, "yaml_path": yaml_path, "from": old, "to": value})
+            text = _set_yaml_value(text, yaml_path, value)
+    if changes and not dry_run:
+        Path(config_path).write_text(text)
+        print(f"APPLIED {len(changes)} change(s) to {config_path}")
+    elif changes and dry_run:
+        print(f"DRY-RUN: would apply {len(changes)} change(s) (no file written)")
+    else:
+        print("no gated changes to apply")
+    return changes
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: cat results/*.json | python apply_sweep.py config/strategy.yaml")
-        sys.exit(1)
-
-    yaml_path = sys.argv[1]
-
-    # Read sweep JSON from stdin
-    raw = sys.stdin.read()
-    if not raw.strip():
-        print("No sweep data provided")
-        sys.exit(0)
-
-    results = parse_sweep_results(raw)
-    print(f"Parsed {len(results)} sweep results")
-
-    recommendations = collect_recommendations(results)
-
-    if not recommendations:
-        print("No param changes recommended — live config is optimal")
-        sys.exit(0)
-
-    print(f"\nApplying {len(recommendations)} param changes:")
-    changed = update_yaml(yaml_path, recommendations)
-
-    if changed:
-        print(f"\n✅ Updated {yaml_path}")
-    else:
-        print("\n⚠️ No changes written (keys not found in YAML)")
+    ap = argparse.ArgumentParser()
+    ap.add_argument("results_dir"); ap.add_argument("config_path")
+    ap.add_argument("--dry-run", action="store_true")
+    a = ap.parse_args()
+    changes = apply(a.results_dir, a.config_path, dry_run=a.dry_run)
+    print(json.dumps(changes, indent=2))
+    sys.exit(0)
