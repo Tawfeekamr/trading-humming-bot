@@ -69,6 +69,10 @@ pub trait Strategy: Send {
 
     /// Pause or resume the strategy
     fn set_paused(&mut self, _paused: bool) {}
+    /// Close all open positions in this strategy and suppress new entries
+    /// until the next non-flat routing decision. Default no-op so strategies
+    /// that don't hold inventory compile unchanged.
+    fn force_flat(&mut self) {}
     /// Client-order-ids (as the strategy set them, pre-owner-tag) of resting
     /// orders this strategy wants cancelled on the next engine cycle. Default
     /// empty — strategies that don't place resting orders never cancel.
@@ -83,4 +87,53 @@ pub trait Strategy: Send {
     /// Real capital currently deployed in this strategy's open positions (cost
     /// basis). Used by the CapitalManager for per-strategy visibility. Default 0.
     fn deployed_capital(&self) -> f64 { 0.0 }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Minimal Strategy impl for unit-testing default trait behavior. Similar
+    /// in shape to the `EchoLimit` mock in `tests/backtest_replay.rs` but
+    /// trimmed to just the required methods.
+    #[derive(Default)]
+    struct NullStrategy;
+
+    #[async_trait]
+    impl Strategy for NullStrategy {
+        fn name(&self) -> &str { "null" }
+        fn trading_pair(&self) -> &str { "TESTUSDT" }
+
+        async fn on_tick(&mut self, _ctx: &TickContext) -> Result<Vec<OrderRequest>> {
+            Ok(vec![])
+        }
+        async fn on_fill(&mut self, _fill: &Fill) -> Result<Vec<OrderRequest>> {
+            Ok(vec![])
+        }
+        async fn on_start(&mut self) -> Result<Vec<OrderRequest>> {
+            Ok(vec![])
+        }
+        async fn on_stop(&mut self) -> Result<()> {
+            Ok(())
+        }
+
+        fn status(&self) -> StrategyStatus {
+            StrategyStatus {
+                name: "null".into(),
+                pair: "TESTUSDT".into(),
+                state: "idle".into(),
+                pnl: 0.0,
+                open_orders: 0,
+                details: String::new(),
+            }
+        }
+    }
+
+    #[test]
+    fn test_force_flat_default_is_no_op() {
+        let mut s = NullStrategy::default();
+        // Default impl must compile without an override and must not panic.
+        s.force_flat();
+        assert!(true);
+    }
 }
