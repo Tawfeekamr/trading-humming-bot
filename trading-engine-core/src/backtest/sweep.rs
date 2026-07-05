@@ -73,8 +73,11 @@ pub fn grid_for(kind: EngineKind) -> Grid {
         }
         EngineKind::Grid => {
             let mut g: Grid = Vec::new();
-            for &adx in &[22.0_f64, 25.0, 28.0] {
-                for &chop in &[45.0_f64, 50.0, 55.0] {
+            // Widened post-diagnostic: the strict range (ADX≤28, Chop≥45) never let
+            // grid deploy on trending ETH. Diagnostics showed ADX≤40 + Chop≥30 has
+            // edge (+3% ETH, +35% BNB). Sweep the proven-working region + neighbors.
+            for &adx in &[25.0_f64, 30.0, 35.0, 40.0, 45.0] {
+                for &chop in &[30.0_f64, 35.0, 40.0, 50.0] {
                     let deltas = vec![
                         ("adx_max".into(), adx.to_string()),
                         ("chop_min".into(), chop.to_string()),
