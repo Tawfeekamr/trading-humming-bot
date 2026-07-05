@@ -26,21 +26,28 @@ falsification test, not a rubber stamp. "Go live after the experiment" means
 
 ## Architecture decisions (with rationale)
 
-### D1 — Run a **separate paper Rust instance**, don't touch the live one
+### D1 — Single Rust instance, flipped to paper for the experiment (option B)
 
-Paper mode is per-Rust-instance (one `Connector` shared by all strategies —
-blocker #2). Per-strategy paper gating doesn't exist. So the clean, zero-risk
-layout is **two Rust engines**:
+Paper mode is per-Rust-instance — `exchange.testnet` is one flag for the whole
+`Engine` (blocker #2). We run the experiment on the **same instance**, with
+`exchange.testnet: true` + PPO routing. **Live trading halts for the experiment
+window** — the accepted trade-off of option B (vs. running a second instance to
+keep live up). One config, one EC2 host, nothing extra to run.
 
-| Instance | `exchange.testnet` | Routing | Capital |
-|---|---|---|---|
-| **Live (unchanged)** | false | current RF-regime (status quo) | real/paper per its current config |
-| **PPO paper (new)** | **true** | PPO, via the gate below | **synthetic fills only** |
+Lifecycle:
+- **Before:** snapshot the current live config (`exchange.testnet: false`,
+  RF-regime routing) so the change is revertible.
+- **Experiment:** flip to `testnet: true`, enable PPO routing. The
+  `PaperTradeConnector` fills synthetically against **real** Binance market data
+  — it cannot reach real capital by construction.
+- **After (if PPO passes):** promote PPO (ONNX, D2) + flip `testnet: false` → live.
+- **After (if PPO fails):** revert config → live with the prior RF-regime routing.
 
-The paper instance ingests the **same real market data** (Binance WS) as live
-but fills synthetically via `PaperTradeConnector`. It cannot reach real capital
-by construction. Compare PPO-routed paper P&L against the live instance's
-un-routed P&L on identical market conditions.
+Baseline comparison (promotion criterion #3) without a second instance: run the
+paper instance **un-routed (RF-regime) for a baseline period**, then **PPO-routed
+for the test period**, and compare. Caveat: different market periods — cross-check
+against the offline walk-forward backtest, which already estimates the RF-regime
+baseline on the toy engines.
 
 ### D2 — Push decisions Python → Rust (paper phase); ONNX-in-Rust (live phase)
 
@@ -136,7 +143,9 @@ a human decision, not automatic.
 ## Scope (Phase 1 — the paper experiment)
 
 - **One pair: ETHUSDT** (most data; clean 24m model already trained).
-- **Paper instance only.** Live instance untouched.
+- **Single Rust instance, flipped to paper** (`exchange.testnet: true`). **Live
+  trading is paused for the experiment window** (option B); config is
+  snapshot/revertible.
 - **PPO model**: `models/rl/ppo_ETHUSDT_2026-07-05_clean-oos-24m.zip`.
 - Realistic slippage/fees; ≥4-week run; fidelity test first.
 
@@ -149,9 +158,8 @@ a human decision, not automatic.
 
 ## Open questions for you
 
-1. **Two-instance OK?** Running a second Rust engine (paper, port 3031) alongside
-   live — is that acceptable on the EC2 host, or do you want per-strategy paper
-   gating in one instance (more Rust surgery)?
+1. **Layout: RESOLVED → option B** (single instance flipped to paper; live
+   paused during the experiment). Cost: live trading downtime for the window.
 2. **Paper realism values** — confirm slippage/fee bps to model (propose 8 bps
    slippage, real Binance maker/taker).
 3. **Promotion bar** — agree the 6 criteria above are the gate, especially #3
