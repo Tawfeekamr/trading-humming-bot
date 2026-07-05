@@ -168,26 +168,43 @@ def run_walk_forward(
         return {"pair": pair, "slices": 0}
 
     print(f"[{pair}] {len(slices)} walk-forward slices")
-    ppo_returns, rf_returns, per_slice = [], [], []
+    ppo_returns, rf_returns, per_slice, failed = [], [], [], []
     for i, (ts, te, vs, ve) in enumerate(slices):
-        train_end_date = df.index[te].date() if hasattr(df.index[te], "date") else df.index[te]
-        model_path = f"models/rl/_wf_{pair}_slice{i}.zip"
-        _train_slice_subprocess(pair, train_end_date, train_bars, timesteps, model_path)
-        test_df = df.iloc[max(0, vs - warmup):ve]
-        ppo_ret, rf_ret, ppo_sum, rf_sum = _evaluate_slice(test_df, model_path, rf_model)
-        ppo_returns.append(np.asarray(ppo_ret, dtype=np.float64))
-        rf_returns.append(np.asarray(rf_ret, dtype=np.float64))
-        per_slice.append({"slice": i, "ppo": ppo_sum, "rf": rf_sum})
-        print(
-            f"  slice {i}: PPO {ppo_sum['Total Return']} | RF {rf_sum['Total Return']}",
-            flush=True,
-        )
+        try:
+            train_end_date = (
+                df.index[te].date() if hasattr(df.index[te], "date") else df.index[te]
+            )
+            model_path = f"models/rl/_wf_{pair}_slice{i}.zip"
+            _train_slice_subprocess(
+                pair, train_end_date, train_bars, timesteps, model_path
+            )
+            test_df = df.iloc[max(0, vs - warmup):ve]
+            ppo_ret, rf_ret, ppo_sum, rf_sum = _evaluate_slice(
+                test_df, model_path, rf_model
+            )
+            ppo_returns.append(np.asarray(ppo_ret, dtype=np.float64))
+            rf_returns.append(np.asarray(rf_ret, dtype=np.float64))
+            per_slice.append({"slice": i, "ppo": ppo_sum, "rf": rf_sum})
+            print(
+                f"  slice {i}: PPO {ppo_sum['Total Return']} | "
+                f"RF {rf_sum['Total Return']}",
+                flush=True,
+            )
+        except Exception as e:  # noqa: BLE001 - isolate slice failures
+            failed.append(i)
+            print(f"  slice {i}: FAILED ({e}); skipping", flush=True)
 
     stat, p, n = aggregate_dm(ppo_returns, rf_returns)
-    print(f"[{pair}] pooled DM (PPO vs RF): stat={stat:.3f} p={p:.4f} n={n}")
+    print(
+        f"[{pair}] pooled DM (PPO vs RF): stat={stat:.3f} p={p:.4f} n={n} "
+        f"({len(failed)} slices failed)",
+        flush=True,
+    )
     return {
         "pair": pair,
         "slices": len(slices),
+        "ok": len(per_slice),
+        "failed": failed,
         "per_slice": per_slice,
         "dm_stat": stat,
         "dm_p": p,
