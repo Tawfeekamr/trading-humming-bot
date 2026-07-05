@@ -88,6 +88,11 @@ pub struct GridStrategy {
     state_dir: String,
     last_base_balance: f64,
     last_quote_balance: f64,
+    /// C2: Market sell emitted by `force_flat()` to flatten inventory. Since
+    /// `force_flat` returns `()`, the order is stashed here and drained at the
+    /// top of the next `on_tick` (which runs immediately after, in the same
+    /// engine cycle). `None` when no flat-close is pending.
+    force_flat_close: Option<OrderRequest>,
 }
 
 #[derive(Debug, Clone)]
@@ -139,6 +144,7 @@ impl GridStrategy {
             state_dir: state_dir.to_string(),
             last_base_balance: 0.0,
             last_quote_balance: 0.0,
+            force_flat_close: None,
         };
         me.load_state();
         me
@@ -521,6 +527,13 @@ impl Strategy for GridStrategy {
         // Track bar availability for diagnostics (before any early return)
         self.diag_bars_count = ctx.recent_bars.len();
 
+        // C2: drain a pending force_flat Market sell BEFORE the Paused-state early
+        // return — otherwise the inventory-close order would never reach the
+        // engine. force_flat() stashed this after flipping state to Paused.
+        if let Some(close_req) = self.force_flat_close.take() {
+            return Ok(vec![close_req]);
+        }
+
         // Cache balances for mark-to-market display in status().
         let (base, quote) = if let Some(pos) = self.pair.find('-') {
             (&self.pair[..pos], &self.pair[pos + 1..])
@@ -867,6 +880,46 @@ impl Strategy for GridStrategy {
 
     fn set_paused(&mut self, paused: bool) {
         self.set_paused(paused);
+    }
+
+    /// C2: close inventory + clear the ladder + suppress new entries.
+    /// 1. Queue ALL resting grid orders (buy + sell levels) for engine cancel.
+    /// 2. Emit a Market SELL (reduce-only) for the full inventory qty at the
+    ///    last seen mid — the on_fill Sell path realizes P&L against avg cost,
+    ///    same as a normal grid SELL.
+    /// 3. Set state = Paused so on_tick doesn't re-place the ladder while flat.
+    /// `diag_price` is the last mid seen in on_tick; using it (not a fresh book
+    /// query) keeps force_flat synchronous and side-effect-free.
+    fn force_flat(&mut self) {
+        // 1. Cancel every resting order (keys are the un-tagged cids the engine
+        //    prefixed with "owner:N#").
+        let cids: Vec<String> = self.orders.keys().cloned().collect();
+        for cid in cids {
+            self.cancel_queue.push(cid);
+        }
+        self.orders.clear();
+        // 2. Flatten inventory at market — cid keeps the "grid_<pair>_sell_<n>"
+        //    shape so on_fill's guard + level-cooldown extraction both work.
+        //    Guard: only stash if no close is already pending. force_flat() is
+        //    called every tick while flat=true; without this guard, a slow paper
+        //    fill would let the next tick stash a SECOND sell for inventory the
+        //    first hasn't cleared yet → duplicate reduce-only sells.
+        if self.inventory_qty > 1e-12 && self.diag_price > 0.0 && self.force_flat_close.is_none() {
+            let cid = format!("grid_{}_sell_flat", self.pair);
+            self.force_flat_close = Some(OrderRequest {
+                symbol: self.pair.replace("-", ""),
+                side: OrderSide::Sell,
+                order_type: OrderTypeReq::Market,
+                price: None,
+                quantity: self.inventory_qty,
+                time_in_force: Some(TimeInForceReq::Gtc),
+                client_order_id: Some(cid),
+                reduce_only: true,
+            });
+        }
+        // 3. Suppress new ladder placement until the routing layer reactivates.
+        self.state = GridState::Paused;
+        self.pause_reason = "routing force_flat".into();
     }
 
     fn current_capital(&self) -> f64 {
@@ -1230,5 +1283,60 @@ mod tests {
     fn sell_message_shows_realized_pnl() {
         let m = grid_sell_message("DOGE-USDT", "sell_0", 0.09, 9.79, 9.79);
         assert!(m.contains("SELL") && m.contains("DOGE-USDT") && m.contains("realized"));
+    }
+
+    // ── C2: force_flat (routing layer go-flat) ──
+
+    /// force_flat must: (1) queue all resting orders for cancel, (2) clear the
+    /// orders map, (3) stash a Market sell for the inventory, (4) flip state to
+    /// Paused so on_tick won't re-place the ladder. The close order is drained
+    /// on the next on_tick (before the Paused early-return).
+    #[tokio::test]
+    async fn force_flat_queues_cancels_and_emits_inventory_close() {
+        let mut grid = make_grid();
+        // Simulate two resting orders + accumulated inventory.
+        grid.orders.insert("grid_BTC-USDT_buy_0".into(), GridOrder { order_id: "grid_BTC-USDT_buy_0".into() });
+        grid.orders.insert("grid_BTC-USDT_sell_0".into(), GridOrder { order_id: "grid_BTC-USDT_sell_0".into() });
+        grid.inventory_qty = 2.0;
+        grid.inventory_cost = 200.0;
+        grid.diag_price = 105.0; // last seen mid — force_flat prices the market sell off this
+        grid.state = GridState::Active;
+
+        grid.force_flat();
+
+        // (1) + (2): resting orders cleared from map, both cids queued for cancel.
+        assert!(grid.orders.is_empty(), "orders map cleared");
+        let cancels = grid.pending_cancels();
+        assert_eq!(cancels.len(), 2, "both resting orders queued for cancel");
+        assert!(cancels.contains(&"grid_BTC-USDT_buy_0".to_string()));
+        assert!(cancels.contains(&"grid_BTC-USDT_sell_0".to_string()));
+
+        // (3): Market sell stashed for the inventory.
+        let close = grid.force_flat_close.as_ref().expect("inventory close stashed");
+        assert!(matches!(close.order_type, OrderTypeReq::Market));
+        assert_eq!(close.side, OrderSide::Sell);
+        assert!(close.reduce_only);
+        assert!((close.quantity - 2.0).abs() < 1e-9, "closes full inventory qty");
+        assert!(close.client_order_id.as_deref().unwrap_or("").starts_with("grid_"),
+            "cid keeps grid_ prefix so on_fill recognizes it: {:?}", close.client_order_id);
+
+        // (4): state flipped to Paused.
+        assert_eq!(grid.state, GridState::Paused);
+    }
+
+    /// If inventory is zero, force_flat skips stashing a close (nothing to sell)
+    /// but still cancels resting orders + pauses.
+    #[tokio::test]
+    async fn force_flat_with_no_inventory_skips_close_order() {
+        let mut grid = make_grid();
+        grid.orders.insert("grid_BTC-USDT_buy_0".into(), GridOrder { order_id: "grid_BTC-USDT_buy_0".into() });
+        grid.inventory_qty = 0.0;
+        grid.diag_price = 100.0;
+        grid.state = GridState::Active;
+
+        grid.force_flat();
+        assert!(grid.force_flat_close.is_none(), "no close order when inventory is 0");
+        assert_eq!(grid.pending_cancels().len(), 1, "resting order still cancelled");
+        assert_eq!(grid.state, GridState::Paused);
     }
 }

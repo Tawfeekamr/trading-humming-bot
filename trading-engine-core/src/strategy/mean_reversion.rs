@@ -75,6 +75,12 @@ pub struct MeanReversionStrategy {
     /// (same phantom-trade class as the trend replay bug). MR must not trade
     /// during the replay; it re-trades historical bars as if live.
     startup_time_ms: i64,
+    /// Unified entry-suppression flag — set by `set_paused(true)` (C1) and by
+    /// `force_flat()` (C2). Stops NEW flush entries but lets the active TP/SL
+    /// exit logic keep running so a paused engine can still unwind. Cleared by
+    /// `set_paused(false)` from `tick_strategies` when this engine becomes the
+    /// active routing target on a non-flat decision.
+    entries_suppressed: bool,
 }
 
 /// Persisted MR summary state (cumulative P&L across restarts).
@@ -101,6 +107,7 @@ impl MeanReversionStrategy {
             entry_time: 0,
             last_exit_time: 0,
             startup_time_ms: chrono::Utc::now().timestamp_millis(),
+            entries_suppressed: false,
         };
         me.load_state();
         me
@@ -189,8 +196,34 @@ impl Strategy for MeanReversionStrategy {
 
         let regime_safe = !self.config.regime_gate || ctx.regime != Some(MarketRegime::Trending);
 
+        // C2: routing layer forced flat — close any open position at market
+        // immediately. Entries are also suppressed, so we won't reopen. Mirrors
+        // the strategy's TP/SL exit path (Market sell reduce-only + journal).
+        if self.in_position && self.entries_suppressed {
+            let pnl = (mid - self.entry_price) * self.position_qty;
+            self.realized_pnl += pnl;
+            self.trades += 1;
+            if pnl > 0.0 { self.wins += 1; }
+            warn!("[{}] MR force_flat @ {} | PnL: ${:+.2}", self.pair, mid, pnl);
+            self.in_position = false;
+            self.last_exit_time = now;
+            self.save_state();
+            crate::strategy::trade_journal::log_unified(
+                "mr", &self.pair, Some("BUY"), Some(self.entry_price), Some(mid),
+                Some(self.position_qty), pnl, Some("ForceFlat"),
+                Some((now - self.entry_time) / 60_000),
+            );
+            orders.push(OrderRequest {
+                symbol: self.pair.replace("-", ""), side: OrderSide::Sell,
+                order_type: OrderTypeReq::Market, price: None, quantity: self.position_qty,
+                time_in_force: None, client_order_id: Some(format!("mr_flat_{}", now)),
+                reduce_only: true,
+            });
+            return Ok(orders);
+        }
+
         // 2. Core Logic
-        if !self.in_position && regime_safe && self.tick_history.len() > 10 {
+        if !self.in_position && regime_safe && self.tick_history.len() > 10 && !self.entries_suppressed {
             // 60s cooldown after exit — prevents churn loop where the same flush
             // signal triggers immediate re-entry (buy → exit → buy → exit → ...).
             if now - self.last_exit_time < 60_000 {
@@ -378,4 +411,92 @@ impl Strategy for MeanReversionStrategy {
 
     fn realized_pnl(&self) -> f64 { self.realized_pnl }
     fn deployed_capital(&self) -> f64 { if self.in_position { self.position_qty * self.entry_price } else { 0.0 } }
+
+    /// C1: suppress new flush entries while the TP/SL exit logic keeps running.
+    /// The flag is the same one `force_flat` sets.
+    fn set_paused(&mut self, paused: bool) {
+        self.entries_suppressed = paused;
+    }
+
+    /// C2: MR places no resting orders (exits are reactive in on_tick), so the
+    /// close happens on the next on_tick via the ForceFlat branch. Just flip the
+    /// suppression flag here.
+    fn force_flat(&mut self) {
+        self.entries_suppressed = true;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::MeanReversionConfig;
+    use crate::connector::types::{OrderBook, OrderRequest};
+
+    fn mr_cfg() -> MeanReversionConfig {
+        let mut c = MeanReversionConfig::default();
+        c.enabled = true;
+        c
+    }
+
+    fn tick_at(price: f64, ts: i64) -> TickContext {
+        TickContext {
+            order_book: OrderBook {
+                symbol: "BTC-USDT".to_string(),
+                bids: vec![(price - 1.0, 10.0)],
+                asks: vec![(price + 1.0, 10.0)],
+                timestamp: ts,
+            },
+            recent_bars: Vec::new(),
+            balances: std::collections::HashMap::new(),
+            open_orders: Vec::new(),
+            regime: None,
+            regime_confidence: 0.0,
+            timestamp: ts,
+            capital: None,
+            replay: false,
+        }
+    }
+
+    fn run_tick(s: &mut MeanReversionStrategy, ctx: TickContext) -> Vec<OrderRequest> {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(s.on_tick(&ctx)).unwrap()
+    }
+
+    /// C1: set_paused toggles the unified entries_suppressed flag.
+    #[test]
+    fn set_paused_toggles_entries_suppressed() {
+        let mut s = MeanReversionStrategy::new("BTC-USDT", &mr_cfg(), TelegramBot::new("", ""));
+        assert!(!s.entries_suppressed);
+        s.set_paused(true);
+        assert!(s.entries_suppressed);
+        s.set_paused(false);
+        assert!(!s.entries_suppressed);
+    }
+
+    /// C2: force_flat on an open position emits a Market reduce-only sell,
+    /// books P&L, clears the position, and suppresses re-entry.
+    #[test]
+    fn force_flat_closes_open_position_and_suppresses_reentry() {
+        let mut s = MeanReversionStrategy::new("BTC-USDT", &mr_cfg(), TelegramBot::new("", ""));
+        s.set_position_for_test(100.0, 1.0); // entry 100, qty 1
+        let realized_before = s.realized_pnl;
+
+        s.force_flat();
+        assert!(s.entries_suppressed);
+
+        // Tick at 105 (above entry) → close realizes +5 (long).
+        let now = chrono::Utc::now().timestamp_millis();
+        let orders = run_tick(&mut s, tick_at(105.0, now));
+        assert!(!s.in_position, "position cleared by force_flat");
+        assert!((s.realized_pnl - realized_before - 5.0).abs() < 1e-9,
+            "force_flat booked +5 P&L: got {}", s.realized_pnl - realized_before);
+        assert_eq!(orders.len(), 1, "one Market close order");
+        assert_eq!(orders[0].side, OrderSide::Sell);
+        assert!(orders[0].reduce_only);
+        assert_eq!(orders[0].order_type, OrderTypeReq::Market);
+
+        // A flush at the same tick can't easily be re-triggered without history,
+        // but verify the suppression flag persists so on_tick's entry gate blocks.
+        assert!(s.entries_suppressed, "still suppressed after the close");
+    }
 }
