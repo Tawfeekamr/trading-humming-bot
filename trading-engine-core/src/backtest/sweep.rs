@@ -21,11 +21,24 @@ use crate::backtest::validation::{run_validation, ValidationReport};
 use crate::models::bar::Bar;
 use serde::Serialize;
 
-/// One grid point: `(label, apply_override)`. The closure takes a mutable
-/// `ReplayConfig` and mutates only the fields this point varies (leaving
-/// everything else at the caller's template values). `FnOnce` + `Send` so the
-/// (future) parallel sweep can move owns into the closure.
-pub type Grid = Vec<(String, Box<dyn FnOnce(&mut ReplayConfig) + Send>)>;
+/// One grid point: `(label, param_deltas, apply_override)`.
+///
+/// - `label`: human-readable param values joined as `k=v,k=v` (used in the
+///   sweep markdown + JSON for diagnostics; Phase-5 Python does NOT parse it).
+/// - `param_deltas`: structured `[(key, value_string), ...]` carrying the same
+///   param values as the label/closure. This is the contract Phase-5
+///   `apply_sweep.py` consumes — it reads `param_deltas` directly rather than
+///   parsing the label string. The closure remains the apply source of truth;
+///   `param_deltas` is metadata shipped alongside for the JSON consumer.
+/// - `apply_override`: closure taking a mutable `ReplayConfig` and mutating
+///   only the fields this point varies (leaving everything else at the
+///   caller's template values). `FnOnce` + `Send` so the (future) parallel
+///   sweep can move owns into the closure.
+pub type Grid = Vec<(
+    String,
+    Vec<(String, String)>,
+    Box<dyn FnOnce(&mut ReplayConfig) + Send>,
+)>;
 
 /// Per-engine conservative grid (≤12 points). Grid loosens the gate for inert
 /// engines (grid/swing) and varies entry/RR for trend.
@@ -41,9 +54,14 @@ pub fn grid_for(kind: EngineKind) -> Grid {
             let mut g: Grid = Vec::new();
             for &ema_fast in &[20u32, 30] {
                 for &rr in &[1.5_f64, 2.0, 2.5] {
+                    let deltas = vec![
+                        ("ema_fast".into(), ema_fast.to_string()),
+                        ("rr".into(), rr.to_string()),
+                    ];
                     let label = format!("ema_fast={},rr={}", ema_fast, rr);
                     g.push((
                         label,
+                        deltas,
                         Box::new(move |rc: &mut ReplayConfig| {
                             rc.trend.ema_fast = ema_fast;
                             rc.trend.risk_reward_ratio = rr;
@@ -57,9 +75,14 @@ pub fn grid_for(kind: EngineKind) -> Grid {
             let mut g: Grid = Vec::new();
             for &adx in &[22.0_f64, 25.0, 28.0] {
                 for &chop in &[45.0_f64, 50.0, 55.0] {
+                    let deltas = vec![
+                        ("adx_max".into(), adx.to_string()),
+                        ("chop_min".into(), chop.to_string()),
+                    ];
                     let label = format!("adx_max={},chop_min={}", adx, chop);
                     g.push((
                         label,
+                        deltas,
                         Box::new(move |rc: &mut ReplayConfig| {
                             rc.grid.adx_range_max = adx;
                             rc.grid.chop_range_min = chop;
@@ -73,9 +96,14 @@ pub fn grid_for(kind: EngineKind) -> Grid {
             let mut g: Grid = Vec::new();
             for &min_score in &[2usize, 3] {
                 for &adx_entry in &[22.0_f64, 25.0, 28.0] {
+                    let deltas = vec![
+                        ("min_score".into(), min_score.to_string()),
+                        ("adx_entry".into(), adx_entry.to_string()),
+                    ];
                     let label = format!("min_score={},adx_entry={}", min_score, adx_entry);
                     g.push((
                         label,
+                        deltas,
                         Box::new(move |rc: &mut ReplayConfig| {
                             if let Some(s) = rc.swing.as_mut() {
                                 s.min_score = min_score;
@@ -106,7 +134,7 @@ pub async fn sweep_is(
     bar_hours: f64,
 ) -> anyhow::Result<Vec<(String, Metrics)>> {
     let mut out = Vec::new();
-    for (label, apply) in grid_for(kind) {
+    for (label, _deltas, apply) in grid_for(kind) {
         let mut point_rc = rc.clone();
         apply(&mut point_rc);
         point_rc.engine = kind;
@@ -184,9 +212,9 @@ pub fn apply_gate(baseline: &ValidationReport, candidate: &ValidationReport) -> 
 ///
 /// `Serialize` (Task 3) so `write_sweep_report` can emit the full result as
 /// the JSON artifact Phase 5's auto-apply consumes. `EngineKind` derives
-/// `Serialize` (replay.rs) — its default representation is the variant name
-/// (e.g. `"Trend"`); `budget_key()` is used for the artifact filename, not
-/// the JSON body.
+/// `Serialize` with `#[serde(rename_all = "snake_case")]` (replay.rs) — its
+/// JSON form is `"trend"` / `"grid"` / `"swing"` / `"mean_reversion"`,
+/// matching `budget_key()` (used for the artifact filename).
 #[derive(Debug, Clone, Serialize)]
 pub struct SweepResult {
     pub engine: EngineKind,
@@ -194,6 +222,13 @@ pub struct SweepResult {
     pub best_label: Option<String>,
     pub candidate: Option<ValidationReport>,
     pub decision: ApplyDecision,
+    /// Structured `[(key, value_string), ...]` for the IS-best arm — the
+    /// contract Phase-5 `apply_sweep.py` consumes (it reads param values from
+    /// here, NOT by parsing `best_label`). Empty when there's no candidate
+    /// (the no-IS-candidate branch). The closure in `grid_for` remains the
+    /// apply source of truth at sweep time — `param_deltas` is metadata
+    /// mirrored alongside it for the JSON consumer.
+    pub param_deltas: Vec<(String, String)>,
 }
 
 /// Full sweep + apply-gate for one engine. Flow:
@@ -235,17 +270,23 @@ pub async fn run_sweep(
         .into_iter()
         .filter(|(_, m)| m.total_trades >= 5 && m.sharpe.is_finite())
         .max_by(|a, b| a.1.sharpe.partial_cmp(&b.1.sharpe).unwrap_or(std::cmp::Ordering::Equal));
-    let (best_label, candidate, decision) = match best {
+    let (best_label, candidate, decision, param_deltas) = match best {
         Some((label, _is_m)) => {
             // rebuild the candidate rc by re-applying the labelled override
             let mut cand_rc = rc.clone();
-            if let Some((_, apply)) = grid_for(kind).into_iter().find(|(l, _)| *l == label) {
+            // find the grid arm by label to recover BOTH the closure (to apply)
+            // AND its `param_deltas` mirror (to ship in the JSON contract).
+            let mut arm_deltas: Vec<(String, String)> = Vec::new();
+            if let Some((_, deltas, apply)) =
+                grid_for(kind).into_iter().find(|(l, _, _)| *l == label)
+            {
                 apply(&mut cand_rc);
+                arm_deltas = deltas;
             }
             cand_rc.engine = kind;
             let candidate = run_validation(kind, &cand_rc, bars.clone(), oos_frac, bar_hours).await?;
             let decision = apply_gate(&baseline, &candidate);
-            (Some(label), Some(candidate), decision)
+            (Some(label), Some(candidate), decision, arm_deltas)
         }
         None => (
             None,
@@ -254,6 +295,7 @@ pub async fn run_sweep(
                 apply: false,
                 gate_reasons: vec!["no IS candidate with ≥5 trades".into()],
             },
+            Vec::new(),
         ),
     };
     Ok(SweepResult {
@@ -262,5 +304,6 @@ pub async fn run_sweep(
         best_label,
         candidate,
         decision,
+        param_deltas,
     })
 }

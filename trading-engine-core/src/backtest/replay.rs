@@ -48,6 +48,7 @@ use super::portfolio::{Portfolio, Trade};
 /// Which production engine to drive in the replay loop. Grid is Phase-1;
 /// Trend added in Task 3; Swing added in Task 4; MeanReversion added in Task 5.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum EngineKind {
     Grid,
     Trend,

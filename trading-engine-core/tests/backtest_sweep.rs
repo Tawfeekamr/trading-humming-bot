@@ -53,7 +53,7 @@ fn trend_grid_yields_typed_overrides() {
         "trend grid must stay small (4-12): got {}",
         g.len()
     );
-    assert!(g.iter().all(|(l, _)| !l.is_empty()), "every grid point needs a label");
+    assert!(g.iter().all(|(l, _, _)| !l.is_empty()), "every grid point needs a label");
 }
 
 #[tokio::test]
@@ -159,6 +159,7 @@ fn sweep_report_markdown_has_decision_reasons_and_gaps() {
         engine: EngineKind::Trend, baseline, best_label: Some("ema_fast=20,rr=2.0".into()),
         candidate: Some(candidate),
         decision: ApplyDecision { apply: false, gate_reasons: vec!["beat current: candidate OOS Sharpe 0.70 ≤ baseline 0.50 + 0.3".into()] },
+        param_deltas: vec![("ema_fast".into(), "20".into()), ("rr".into(), "2.0".into())],
     };
     let tmp = TempDir::new().unwrap();
     write_sweep_report(tmp.path(), "ETHUSDT", &rep).unwrap();
@@ -168,4 +169,75 @@ fn sweep_report_markdown_has_decision_reasons_and_gaps() {
     assert!(md.contains("ema_fast=20,rr=2.0"));                        // the candidate label
     assert!(md.contains("fidelity") || md.contains("regime"));         // gap stamps
     assert!(tmp.path().join("ETHUSDT_trend_sweep.json").exists());
+}
+
+// ── Phase 5 Task 1: param_deltas contract on Grid + SweepResult ─────────────
+// Phase 5's Python `apply_sweep.py` reads structured param values from
+// `param_deltas` instead of parsing the human-readable `best_label`. The grid
+// closure is still the apply source of truth — `param_deltas` is metadata
+// shipped alongside it for the JSON consumer.
+
+#[test]
+fn grid_yields_structured_param_deltas_matching_labels() {
+    let g = grid_for(trading_engine_core::backtest::replay::EngineKind::Trend);
+    // every grid point carries non-empty param_deltas
+    assert!(g.iter().all(|(_, d, _)| !d.is_empty()));
+    // the deltas' values reconstruct the label (e.g. deltas
+    // [("ema_fast","20"),("rr","2.0")] → label "ema_fast=20,rr=2.0")
+    for (label, deltas, _) in &g {
+        let reconstructed: String = deltas
+            .iter()
+            .map(|(k, v)| format!("{}={}", k, v))
+            .collect::<Vec<_>>()
+            .join(",");
+        assert_eq!(
+            label, &reconstructed,
+            "label must match param_deltas (Phase-5 Python parses neither — \
+             it reads param_deltas directly; the label is for humans)"
+        );
+    }
+}
+
+#[tokio::test]
+async fn sweep_result_carries_best_arm_param_deltas() {
+    // run a tiny sweep where trend's IS-best is well-defined, then assert
+    // param_deltas is non-empty and matches one of the grid's arms.
+    let rc = rc();
+    let bars: Vec<trading_engine_core::models::bar::Bar> = (0..300)
+        .map(|i| {
+            let p = 100.0 + ((i % 8) as f64 / 2.0);
+            trading_engine_core::models::bar::Bar::new(
+                p,
+                p + 1.0,
+                p - 1.0,
+                p,
+                10.0,
+                (i as i64) * 3_600_000,
+            )
+        })
+        .collect();
+    let res = trading_engine_core::backtest::sweep::run_sweep(
+        trading_engine_core::backtest::replay::EngineKind::Trend,
+        &rc,
+        bars,
+        1.0 / 3.0,
+        1.0,
+    )
+    .await
+    .unwrap();
+    // param_deltas is non-empty iff there was an IS candidate with ≥5 trades;
+    // on this sawtooth trend trades, so assert non-empty + that it's one of the
+    // declared grid arms.
+    if res.best_label.is_some() {
+        assert!(
+            !res.param_deltas.is_empty(),
+            "param_deltas must be populated when there's a best arm"
+        );
+        let grid = grid_for(trading_engine_core::backtest::replay::EngineKind::Trend);
+        let arms: Vec<_> = grid.into_iter().map(|(_, d, _)| d).collect();
+        assert!(
+            arms.iter().any(|a| *a == res.param_deltas),
+            "param_deltas must equal a declared grid arm"
+        );
+    }
 }
