@@ -5,6 +5,7 @@ use serde::Deserialize;
 
 use crate::connector::types::*;
 use crate::strategy::regime_cache::RegimeUpdate;
+use crate::strategy::routing_cache::RoutingUpdate;
 use super::server::AppState;
 
 // ── Query parameter structs ──────────────────────────────────────────
@@ -200,6 +201,22 @@ pub async fn update_regime(
     Json(serde_json::json!({ "updated": count }))
 }
 
+// ── Routing update (pushed by Python PPO router) ──────────────────────
+//
+// Mirrors update_regime but for the single PPO routing decision
+// {active_engine, size_mult, flat}. Python POSTs this each tick; Rust
+// reads it from RoutingCache inside the engine tick loop (Task 6).
+
+pub async fn update_routing(
+    State(state): State<AppState>,
+    Json(u): Json<RoutingUpdate>,
+) -> Json<serde_json::Value> {
+    state.routing_cache.update(u).await;
+    // RoutingCache::update already calls persist() internally.
+    tracing::info!("Routing updated via API");
+    Json(serde_json::json!({ "updated": true }))
+}
+
 // ── Tests ────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -218,6 +235,7 @@ mod tests {
 
     use crate::api::server::{AppState, create_router};
     use crate::strategy::regime_cache::RegimeCache;
+    use crate::strategy::routing_cache::RoutingCache;
     use crate::capital::CapitalManager;
 
     fn test_app() -> Router {
@@ -225,7 +243,8 @@ mod tests {
         balances.insert("USDT".to_string(), 10000.0);
         let connector = Arc::new(PaperTradeConnector::new(balances)) as Arc<dyn Connector>;
         let regime_cache = RegimeCache::new("data/regime_cache.json", 180_000); // 3min TTL = 3×60s poll
-        create_router(AppState::new(connector, BarCache::new(), StrategyStatusCache::new(), regime_cache, CapitalManager::new(20.0)))
+        let routing_cache = RoutingCache::new("data/routing_cache.json", 0); // no TTL for tests
+        create_router(AppState::new(connector, BarCache::new(), StrategyStatusCache::new(), regime_cache, routing_cache, CapitalManager::new(20.0)))
     }
 
     #[tokio::test]
@@ -303,5 +322,42 @@ mod tests {
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_routing_handler_updates_cache() {
+        // Build a routing cache we can inspect after the POST. RoutingCache is
+        // Clone (internal Arc), so the AppState copy shares state with our handle.
+        let routing_cache = RoutingCache::new("/tmp/test_routing_handler.json", 0);
+        let mut balances = HashMap::new();
+        balances.insert("USDT".to_string(), 10000.0);
+        let connector = Arc::new(PaperTradeConnector::new(balances)) as Arc<dyn Connector>;
+        let app = create_router(AppState::new(
+            connector,
+            BarCache::new(),
+            StrategyStatusCache::new(),
+            RegimeCache::new("data/regime_cache.json", 180_000),
+            routing_cache.clone(),
+            CapitalManager::new(20.0),
+        ));
+
+        let payload = serde_json::json!({
+            "active_engine": "swing",
+            "size_mult": 1.0,
+            "flat": false
+        });
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/routing")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_string(&payload).unwrap()))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let entry = routing_cache.get().await.unwrap();
+        assert_eq!(entry.active_engine, "swing");
+        assert_eq!(entry.size_mult, 1.0);
+        assert!(!entry.flat);
     }
 }
