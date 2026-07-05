@@ -53,19 +53,10 @@ from src.rl.features import FEATURE_COLS, compute_features
 
 # --- Action decoding -------------------------------------------------------
 
-# Maps action int -> (engine_name, size_multiplier). GO_FLAT carries no size.
-ACTION_TO_ENGINE_SIZE: list[tuple[str, float]] = [
-    ("grid", 0.5),
-    ("grid", 1.0),
-    ("grid", 1.5),
-    ("trend", 0.5),
-    ("trend", 1.0),
-    ("trend", 1.5),
-    ("swing", 0.5),
-    ("swing", 1.0),
-    ("swing", 1.5),
-    ("flat", 0.0),  # action 9 = GO_FLAT
-]
+# Single source of truth lives in src.rl.action_map (pure module, no heavy
+# deps) so the live router can import it without pulling gymnasium. Re-exported
+# here for backwards compatibility.
+from src.rl.action_map import ACTION_TO_ENGINE_SIZE  # noqa: E402,F401
 
 # Engine names in canonical one-hot order.
 ENGINES: tuple[str, ...] = ("flat", "grid", "trend", "swing")
