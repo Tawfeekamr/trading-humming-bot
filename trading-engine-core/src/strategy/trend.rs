@@ -380,28 +380,45 @@ impl TrendStrategy {
     fn load_position(&mut self) {
         let path = Self::position_file_path(&self.pair);
         if !path.exists() { return; }
-        match fs::read_to_string(&path) {
-            Ok(content) => {
-                match serde_json::from_str::<TrendPositionState>(&content) {
-                    Ok(state) => {
-                        let mut pos = state.position;
-                        pos.restored = true; // reconcile on the first on_tick after load
-                        // Back-fill the funding clock for old state files written
-                        // before last_funding_time existed (serde default 0). A
-                        // literal 0 would make the first post-restart tick pass
-                        // the 8h gate immediately and charge a full interval on
-                        // a position held only minutes. Measure from entry instead.
-                        if pos.last_funding_time == 0 && pos.entry_time > 0 {
-                            pos.last_funding_time = pos.entry_time;
-                        }
-                        self.position = Some(pos);
-                        self.realized_pnl = state.realized_pnl;
-                    }
-                    Err(e) => warn!("Failed to parse trend position for {}: {}", self.pair, e),
-                }
-            }
-            Err(e) => warn!("Failed to read trend position for {}: {}", self.pair, e),
+        // The file EXISTS — if we can't read/parse it, the exchange may hold an
+        // open position we'd lose track of by resuming flat. HALT (panic) rather
+        // than trade blind. We deliberately do NOT rename/delete the file: leaving
+        // it in place keeps the bot DOWN (crash-loop) until an operator reconciles
+        // the exchange position and removes/fixes the state. Renaming would let a
+        // restart resume blind via the missing-file path — the very bug this fixes.
+        let content = match fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(e) => Self::halt_unreadable(&path, &format!("read failed: {e}")),
+        };
+        let state = match serde_json::from_str::<TrendPositionState>(&content) {
+            Ok(s) => s,
+            Err(e) => Self::halt_unreadable(&path, &format!("parse failed: {e}")),
+        };
+        let mut pos = state.position;
+        pos.restored = true; // reconcile on the first on_tick after load
+        // Back-fill the funding clock for old state files written before
+        // last_funding_time existed (serde default 0). A literal 0 would make the
+        // first post-restart tick pass the 8h gate immediately and charge a full
+        // interval on a position held only minutes. Measure from entry instead.
+        if pos.last_funding_time == 0 && pos.entry_time > 0 {
+            pos.last_funding_time = pos.entry_time;
         }
+        self.position = Some(pos);
+        self.realized_pnl = state.realized_pnl;
+    }
+
+    /// Halt the bot: a position-state file that EXISTS but can't be loaded means we
+    /// cannot safely know whether the exchange holds an open trend position. Panic
+    /// here (rather than resuming with `position = None`) prevents unmanaged
+    /// duplicate positions. Never returns.
+    fn halt_unreadable(path: &std::path::Path, reason: &str) -> ! {
+        panic!(
+            "TREND STATE UNREADABLE: {} ({}) — the state file exists but won't load, \
+             so the exchange may hold an open trend position this bot would lose track \
+             of. HALTING (refusing to resume blind). Reconcile the exchange position, \
+             then fix or remove {} and restart.",
+            path.display(), reason, path.display()
+        );
     }
 
     fn notify_exit(&self, exit_price: f64, pnl: f64, reason: &str) {
@@ -998,6 +1015,26 @@ mod tests {
         }
         s.last_bar_count = 260;
         s
+    }
+
+    #[test]
+    #[should_panic(expected = "TREND STATE UNREADABLE")]
+    fn corrupt_position_state_halts_boot_instead_of_resuming_blind() {
+        // Regression for the silent state-load failure: a corrupt-but-present
+        // trend_position.json must PANIC (so the bot stays down until an operator
+        // reconciles the exchange), not silently resume with position = None
+        // (which would leave an open exchange position unmanaged + risk a duplicate).
+        let pair = "CORRUPT-USDT";
+        let path = TrendStrategy::position_file_path(pair);
+        std::fs::create_dir_all("data").ok();
+        // Drop-guard cleanup: runs during the panic unwind so the corrupt file
+        // doesn't leak into data/ and pollute other tests.
+        struct Cleanup(std::path::PathBuf);
+        impl Drop for Cleanup { fn drop(&mut self) { let _ = std::fs::remove_file(&self.0); } }
+        let _cleanup = Cleanup(path.clone());
+        std::fs::write(&path, "{ NOT VALID JSON").unwrap();
+        // new() -> load_position sees the corrupt file and must HALT.
+        let _ = TrendStrategy::new(pair, &base_test_config(), crate::notifications::TelegramBot::new("", ""));
     }
 
     #[test]
