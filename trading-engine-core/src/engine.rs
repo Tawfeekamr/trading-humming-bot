@@ -215,6 +215,10 @@ impl Engine {
                     s.force_flat();
                 }
             }
+            // PPO size signal: scale the active engine's capital grant ceiling
+            // (0.5 / 1.0 / 1.5). Paused engines don't request capital, so we only
+            // push the mult for the active engine.
+            self.capital.set_size_mult(&r.active_engine, r.size_mult);
         }
 
         let mut all_orders = Vec::new();
