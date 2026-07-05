@@ -1,0 +1,95 @@
+name: Rust Replay Backtest + Sweep
+
+# Weekly faithful sweep (grid/trend/swing) behind the OOS gate. Applies winning
+# params to config/strategy.yaml ONLY when decision.apply==true AND not dry-run.
+# A commit to main triggers deploy.yml (live redeploy with new params).
+on:
+  schedule:
+    - cron: '17 4 * * 1'  # weekly Monday ~04:17 UTC (off-round, off-:00)
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry-run (report only, no commit)"
+        type: boolean
+        default: true
+      pairs:
+        description: "Comma-separated pairs"
+        default: "ETHUSDT,BNBUSDT,DOGEUSDT,XRPUSDT"
+      months:
+        description: "Months of history"
+        default: "12"
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build backtest_replay
+        run: cargo build --release --manifest-path trading-engine-core/Cargo.toml --bin backtest_replay
+      - name: Sweep each engine x pair
+        # MR is intentionally NOT swept (disabled 2026-07-02, neg EV; see memory).
+        run: |
+          ENGINES="trend grid swing"
+          for PAIR in $(echo "${{ inputs.pairs || 'ETHUSDT,BNBUSDT,DOGEUSDT,XRPUSDT' }}" | tr ',' ' '); do
+            for ENG in $ENGINES; do
+              echo "=== sweep $PAIR $ENG ==="
+              cargo run --release --manifest-path trading-engine-core/Cargo.toml --bin backtest_replay --quiet -- $PAIR ${{ inputs.months || '12' }} $ENG --sweep || echo "  (sweep failed, continuing)"
+            done
+          done
+      - name: Apply gated changes
+        id: apply
+        # apply_sweep.py is safe-by-default: bare = dry-run. --apply opts IN to
+        # writing config/strategy.yaml; --dry-run is explicit/report-only.
+        #
+        # The script prints per-engine KEEP/APPLY status lines, THEN the JSON
+        # manifest as the trailing block. We capture stdout, surface it in the
+        # GHA log via `cat`, and carve the trailing JSON into apply_manifest.json
+        # so changed-detection can json.load() it cleanly (a bare `| tee` would
+        # capture the status prefix and break json.load).
+        run: |
+          if [ "${{ inputs.dry_run || true }}" = "true" ]; then
+            python backtest/apply_sweep.py backtest/results/replay config/strategy.yaml --dry-run > apply_stdout.txt
+          else
+            python backtest/apply_sweep.py backtest/results/replay config/strategy.yaml --apply > apply_stdout.txt
+          fi
+          cat apply_stdout.txt
+          python -c "t=open('apply_stdout.txt').read(); i=t.rfind('\n['); open('apply_manifest.json','w').write(t[i+1:] if i>=0 else '[]')"
+          N=$(python -c 'import json; print(len(json.load(open("apply_manifest.json"))))')
+          if [ "${{ inputs.dry_run || true }}" != "true" ] && [ "$N" -gt 0 ]; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT
+          fi
+      - name: Commit + push (only if changed and not dry-run)
+        if: steps.apply.outputs.changed == 'true' && inputs.dry_run != true
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add config/strategy.yaml
+          git commit -m "auto(backtest): apply OOS-gated sweep params $(date -u +%F)
+          $(python -c 'import json; [print(f"  {c[\"engine\"]}.{c[\"param\"]}: {c[\"from\"]} -> {c[\"to\"]}") for c in json.load(open("apply_manifest.json"))]')
+          Co-Authored-By: Claude <noreply@anthropic.com>"
+          git push origin main  # → triggers deploy.yml (live redeploy with new params)
+      - name: Telegram per-engine verdict
+        if: always()
+        env: { TG: "${{ secrets.TELEGRAM_BOT_TOKEN }}", CHAT: "${{ secrets.TELEGRAM_CHAT_ID }}" }
+        run: |
+          [ -z "$TG" ] && exit 0
+          MSG="📊 *Rust Replay Sweep* (`${{ inputs.dry_run == false && 'APPLY' || 'dry-run' }}`)%0A"
+          for f in backtest/results/replay/*_sweep.json; do
+            [ -f "$f" ] || continue
+            MSG+="$(python -c "import json; r=json.load(open('$f')); d=r['decision']; print(f\"• {r['engine']}: {'APPLY' if d['apply'] else 'KEEP'} — {', '.join(d['gate_reasons']) or 'all checks pass'}\")")"%0A"
+          done
+          curl -s -X POST "https://api.telegram.org/bot$TG/sendMessage" -d chat_id="$CHAT" -d parse_mode=HTML --data-urlencode "text=$MSG" || true
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-replay-sweep
+          path: |
+            backtest/results/replay/
+            apply_manifest.json
