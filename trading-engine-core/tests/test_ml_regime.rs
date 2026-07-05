@@ -7,8 +7,8 @@ fn test_feature_extraction_produces_correct_size() {
         Bar::new(50000.0, 50100.0, 49900.0, 50050.0, 100.0, i * 60000)
     }).collect();
 
-    let features = trading_engine_core::ml::regime::extract_features(&bars);
-    assert_eq!(features.len(), 8, "Feature vector should have 8 elements");
+    let features = trading_engine_core::ml::features::extract_14_features(&bars);
+    assert_eq!(features.len(), 14, "Feature vector should have 14 elements");
 }
 
 #[test]
@@ -17,8 +17,8 @@ fn test_feature_extraction_returns_empty_for_few_bars() {
         Bar::new(50000.0, 50100.0, 49900.0, 50050.0, 100.0, i * 60000)
     }).collect();
 
-    let features = trading_engine_core::ml::regime::extract_features(&bars);
-    assert!(features.is_empty());
+    let features = trading_engine_core::ml::features::extract_14_features(&bars);
+    assert_eq!(features, vec![0.0; 14]);
 }
 
 #[test]

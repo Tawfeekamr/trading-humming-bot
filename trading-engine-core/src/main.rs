@@ -92,9 +92,16 @@ async fn async_main() -> Result<()> {
     let bar_cache = trading_engine_core::bar_cache::BarCache::new();
     let status_cache = trading_engine_core::strategy::status_cache::StrategyStatusCache::new();
     let regime_cache = trading_engine_core::strategy::regime_cache::RegimeCache::new("data/regime_cache.json", 180_000); // 3min TTL = 3×60s poll
+    // Routing cache: Python PPO router POSTs {active_engine, size_mult, flat} once
+    // per closed 1h bar (config/strategy.yaml `routing.bar_seconds: 3600`).
+    // TTL = 3 × bar_seconds = 10_800_000ms (3h margin) so a single missed push
+    // (e.g. brief network blip) doesn't flip the engine to "no routing decision"
+    // and pause everything. C3 fix: was 180_000 (3min), 20× too short for the
+    // hourly push cadence — every decision went stale before the next arrived.
+    let routing_cache = trading_engine_core::strategy::routing_cache::RoutingCache::new("data/routing_cache.json", 10_800_000);
     let capital = trading_engine_core::capital::CapitalManager::new(config.capital.reserve_limit_pct)
         .with_budgets(config.capital.budgets.clone());
-    let mut engine = trading_engine_core::engine::Engine::new(config, connector.clone(), risk, telegram.clone_for_signal(), bar_cache.clone(), status_cache.clone(), regime_cache.clone(), capital.clone());
+    let mut engine = trading_engine_core::engine::Engine::new(config, connector.clone(), risk, telegram.clone_for_signal(), bar_cache.clone(), status_cache.clone(), regime_cache.clone(), routing_cache.clone(), capital.clone());
 
     // Build the perp mark source ONCE for all pairs when trend opts into it.
     // Cloned as Arc per pair below; a single shared client + cache serves all.
@@ -166,7 +173,7 @@ async fn async_main() -> Result<()> {
         .unwrap_or_else(|_| "3030".to_string())
         .parse()
         .unwrap_or(3030);
-    let app_state = trading_engine_core::api::server::AppState::new(connector, bar_cache, status_cache, regime_cache, capital.clone());
+    let app_state = trading_engine_core::api::server::AppState::new(connector, bar_cache, status_cache, regime_cache, routing_cache, capital.clone());
     let router = trading_engine_core::api::server::create_router(app_state);
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", api_port)).await?;
     info!("API server listening on port {}", api_port);

@@ -13,6 +13,7 @@ use crate::notifications::TelegramBot;
 use crate::strategy::{Strategy, TickContext, MarketRegime};
 use crate::strategy::status_cache::StrategyStatusCache;
 use crate::strategy::regime_cache::RegimeCache;
+use crate::strategy::routing_cache::RoutingCache;
 use crate::models::bar::Bar;
 use crate::bar_cache::BarCache;
 use crate::signal::SignalEngine;
@@ -28,6 +29,10 @@ pub struct Engine {
     order_books: HashMap<String, OrderBook>,
     status_cache: StrategyStatusCache,
     regime_cache: RegimeCache,
+    /// PPO router decision (active engine + size mult + flat). Read each tick
+    /// at the top of `tick_strategies` to pause non-active engines and force
+    /// flat when the router says so. None (or stale) ⇒ route unchanged.
+    routing_cache: RoutingCache,
     capital: CapitalManager,
     /// Throttle for risk-state persistence (see feed_breaker). None = save next tick.
     last_risk_save: Option<Instant>,
@@ -46,6 +51,7 @@ impl Engine {
         bar_cache: BarCache,
         status_cache: StrategyStatusCache,
         regime_cache: RegimeCache,
+        routing_cache: RoutingCache,
         capital: CapitalManager,
     ) -> Self {
         let mut engine = Self {
@@ -59,6 +65,7 @@ impl Engine {
             order_books: HashMap::new(),
             status_cache,
             regime_cache,
+            routing_cache,
             capital,
             last_risk_save: None,
             placed_orders: HashMap::new(),
@@ -141,6 +148,11 @@ impl Engine {
         self.regime_cache.load_from_file().await;
         info!("Regime cache loaded from file");
 
+        // Load routing cache from file (fallback for when the PPO router hasn't
+        // pushed yet — same cold-start shape as the regime cache above).
+        self.routing_cache.load_from_file().await;
+        info!("Routing cache loaded from file");
+
         // Restore circuit-breaker state (peak equity, daily baseline, halt) across restarts.
         let risk_path = std::env::var("RISK_STATE_PATH").unwrap_or_else(|_| "data/risk_state.json".to_string());
         let boot_balances = self.connector.get_balances().await.unwrap_or_default();
@@ -196,6 +208,30 @@ impl Engine {
 
     async fn tick_strategies(&mut self) -> Result<()> {
         self.capital.reset_tick_grants(); // fresh per-tick allocation budget
+
+        // Apply the current PPO routing decision (paper-gate). Read once per
+        // tick; None (no entry yet, or stale per TTL) ⇒ leave strategies as-is
+        // so a cold start or router outage doesn't accidentally pause everything.
+        if let Some(r) = self.routing_cache.get().await {
+            for s in self.strategies.iter_mut() {
+                let is_active = s.name() == r.active_engine;
+                s.set_paused(!is_active);
+                if r.flat {
+                    s.force_flat();
+                }
+            }
+            // PPO size signal: scale the active engine's capital grant ceiling
+            // (0.5 / 1.0 / 1.5). Defense-in-depth (I2): clear every OTHER
+            // engine's mult to 0.0 first so a paused engine whose on_tick still
+            // runs (e.g. managing exits) can't draw capital it shouldn't have.
+            for s in self.strategies.iter() {
+                if s.name() != r.active_engine {
+                    self.capital.set_size_mult(s.name(), 0.0);
+                }
+            }
+            self.capital.set_size_mult(&r.active_engine, r.size_mult);
+        }
+
         let mut all_orders = Vec::new();
         let mut all_cancels: Vec<(usize, String)> = Vec::new();
         for (i, strategy) in self.strategies.iter_mut().enumerate() {
@@ -527,4 +563,270 @@ impl Engine {
         None
     }
 
+}
+
+#[cfg(test)]
+mod tests {
+    //! Engine-level tests for the routing gate (Task 4). These live inside the
+    //! engine module so they can build an `Engine` via struct literal — bypassing
+    //! `Engine::new`'s 9-argument signature — and exercise `tick_strategies`
+    //! directly with a controlled `RoutingCache` and mock strategies.
+
+    use super::*;
+    use async_trait::async_trait;
+    use std::sync::{Arc, Mutex};
+    use crate::strategy::StrategyStatus;
+    use crate::models::order::OrderSide;
+    use crate::connector::types::OrderStatus;
+
+    /// Records `set_paused` / `force_flat` calls so the test can assert on them
+    /// after the strategies have been moved into the Engine.
+    #[derive(Clone, Default)]
+    struct CallLog {
+        paused: Option<bool>,
+        flat_called: bool,
+    }
+
+    /// Minimal Strategy impl for routing-gate tests. Records pause + flat calls
+    /// into a shared `Arc<Mutex<CallLog>>` so the test can read them back, and
+    /// also echoes them through `status()` so the engine's status-cache path
+    /// (exercised at the end of tick_strategies) has something to consume.
+    struct MockStrategy {
+        name: String,
+        pair: String,
+        log: Arc<Mutex<CallLog>>,
+    }
+
+    impl MockStrategy {
+        fn new(name: &str, log: Arc<Mutex<CallLog>>) -> Self {
+            Self {
+                name: name.into(),
+                pair: "TESTUSDT".into(),
+                log,
+            }
+        }
+    }
+
+    #[async_trait]
+    impl Strategy for MockStrategy {
+        fn name(&self) -> &str { &self.name }
+        fn trading_pair(&self) -> &str { &self.pair }
+
+        async fn on_tick(&mut self, _ctx: &TickContext) -> Result<Vec<OrderRequest>> {
+            Ok(vec![])
+        }
+        async fn on_fill(&mut self, _fill: &Fill) -> Result<Vec<OrderRequest>> {
+            Ok(vec![])
+        }
+        async fn on_start(&mut self) -> Result<Vec<OrderRequest>> { Ok(vec![]) }
+        async fn on_stop(&mut self) -> Result<()> { Ok(()) }
+
+        fn set_paused(&mut self, paused: bool) {
+            self.log.lock().unwrap().paused = Some(paused);
+        }
+        fn force_flat(&mut self) {
+            self.log.lock().unwrap().flat_called = true;
+        }
+
+        fn status(&self) -> StrategyStatus {
+            let log = self.log.lock().unwrap();
+            let state = match log.paused {
+                Some(true) => "Paused",
+                Some(false) => "Active",
+                None => "Idle",
+            };
+            StrategyStatus {
+                name: self.name.clone(),
+                pair: self.pair.clone(),
+                state: state.into(),
+                pnl: 0.0,
+                open_orders: 0,
+                details: if log.flat_called { "force_flat called".into() } else { String::new() },
+            }
+        }
+    }
+
+    /// Mock Connector that returns empty results for everything. tick_strategies
+    /// only calls `get_balances` on it; the rest are required by the trait.
+    struct NullConnector;
+    #[async_trait]
+    impl Connector for NullConnector {
+        async fn place_order(&self, _req: &OrderRequest) -> Result<OrderResponse> {
+            Ok(OrderResponse {
+                order_id: String::new(),
+                client_order_id: None,
+                symbol: String::new(),
+                side: OrderSide::Buy,
+                price: 0.0,
+                quantity: 0.0,
+                status: OrderStatus::New,
+            })
+        }
+        async fn cancel_order(&self, _symbol: &str, _order_id: &str) -> Result<()> { Ok(()) }
+        async fn cancel_all_orders(&self, _symbol: &str) -> Result<Vec<CancelResult>> { Ok(vec![]) }
+        async fn get_balances(&self) -> Result<HashMap<String, f64>> { Ok(HashMap::new()) }
+        async fn get_open_orders(&self, _symbol: &str) -> Result<Vec<OpenOrder>> { Ok(vec![]) }
+        async fn get_order_book(&self, _symbol: &str, _limit: u16) -> Result<OrderBook> {
+            Ok(OrderBook { symbol: String::new(), bids: vec![], asks: vec![], timestamp: 0 })
+        }
+        async fn get_klines(&self, _symbol: &str, _interval: &str, _limit: u16)
+            -> Result<Vec<crate::models::bar::Bar>> { Ok(vec![]) }
+    }
+
+    /// Build a minimal Engine via struct literal. tick_strategies touches
+    /// `capital`, `connector`, `order_books`, `regime_cache`, `routing_cache`,
+    /// `status_cache`, and `strategies` — the rest are seeded empty/default.
+    fn minimal_engine(
+        strategies: Vec<Box<dyn Strategy>>,
+        routing_cache: RoutingCache,
+    ) -> Engine {
+        let path = format!(
+            "{}/../config/strategy.yaml",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let config = AppConfig::load(&path).expect("strategy.yaml must load");
+        Engine {
+            config,
+            connector: Arc::new(NullConnector),
+            strategies,
+            risk: RiskManager::new(
+                crate::risk::PositionGuard::new(100.0, 10.0, 10_000.0),
+                crate::risk::CircuitBreaker::new(50.0, 10.0),
+            ),
+            telegram: TelegramBot::new("dummy_token", "dummy_chat"),
+            signal: None,
+            bar_buffers: BarCache::new(),
+            order_books: HashMap::new(),
+            status_cache: StrategyStatusCache::new(),
+            regime_cache: RegimeCache::new("/tmp/test_engine_regime.json", 0),
+            routing_cache,
+            capital: CapitalManager::new(20.0),
+            last_risk_save: None,
+            placed_orders: HashMap::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_routing_pauses_non_active_strategies() {
+        // Two strategies sharing the same pair so both look up the same (empty)
+        // order book entry in tick_strategies. Each writes to its own CallLog.
+        let grid_log = Arc::new(Mutex::new(CallLog::default()));
+        let trend_log = Arc::new(Mutex::new(CallLog::default()));
+
+        let routing = RoutingCache::new("/tmp/test_engine_routing.json", 0);
+        routing.update(crate::strategy::routing_cache::RoutingUpdate {
+            active_engine: "grid".into(),
+            size_mult: 1.0,
+            flat: false,
+        }).await;
+
+        let mut engine = minimal_engine(
+            vec![
+                Box::new(MockStrategy::new("grid", grid_log.clone())),
+                Box::new(MockStrategy::new("trend", trend_log.clone())),
+            ],
+            routing,
+        );
+
+        engine.tick_strategies().await.expect("tick must complete");
+
+        assert_eq!(grid_log.lock().unwrap().paused, Some(false),
+            "active engine (grid) must be unpaused");
+        assert_eq!(trend_log.lock().unwrap().paused, Some(true),
+            "non-active engine (trend) must be paused");
+        // flat=false ⇒ neither should have force_flat called.
+        assert!(!grid_log.lock().unwrap().flat_called);
+        assert!(!trend_log.lock().unwrap().flat_called);
+    }
+
+    #[tokio::test]
+    async fn test_routing_flat_calls_force_flat_on_all_strategies() {
+        let grid_log = Arc::new(Mutex::new(CallLog::default()));
+        let trend_log = Arc::new(Mutex::new(CallLog::default()));
+
+        let routing = RoutingCache::new("/tmp/test_engine_routing_flat.json", 0);
+        routing.update(crate::strategy::routing_cache::RoutingUpdate {
+            active_engine: "grid".into(),
+            size_mult: 1.0,
+            flat: true,
+        }).await;
+
+        let mut engine = minimal_engine(
+            vec![
+                Box::new(MockStrategy::new("grid", grid_log.clone())),
+                Box::new(MockStrategy::new("trend", trend_log.clone())),
+            ],
+            routing,
+        );
+
+        engine.tick_strategies().await.expect("tick must complete");
+
+        // Even the active engine must be force_flat'd when flat=true.
+        assert!(grid_log.lock().unwrap().flat_called,
+            "active engine must still be force_flat'd when flat=true");
+        assert!(trend_log.lock().unwrap().flat_called,
+            "non-active engine must be force_flat'd when flat=true");
+    }
+
+    #[tokio::test]
+    async fn test_no_routing_decision_leaves_strategies_unchanged() {
+        // No routing push ⇒ no set_paused call, no force_flat call. This guards
+        // against the gate accidentally pausing everything when the router is
+        // offline (e.g. on cold start before Python has pushed anything).
+        let grid_log = Arc::new(Mutex::new(CallLog::default()));
+        let trend_log = Arc::new(Mutex::new(CallLog::default()));
+
+        let routing = RoutingCache::new("/tmp/test_engine_routing_empty.json", 0);
+        // Deliberately no update() — cache returns None.
+
+        let mut engine = minimal_engine(
+            vec![
+                Box::new(MockStrategy::new("grid", grid_log.clone())),
+                Box::new(MockStrategy::new("trend", trend_log.clone())),
+            ],
+            routing,
+        );
+
+        engine.tick_strategies().await.expect("tick must complete");
+
+        assert_eq!(grid_log.lock().unwrap().paused, None,
+            "no routing ⇒ set_paused must not be called");
+        assert_eq!(trend_log.lock().unwrap().paused, None);
+        assert!(!grid_log.lock().unwrap().flat_called);
+        assert!(!trend_log.lock().unwrap().flat_called);
+    }
+
+    /// Task 6 boot test: when `data/routing_cache.json` exists at startup, the
+    /// engine's `routing_cache` field must load it (mirrors the regime cache's
+    /// boot load). This proves the file-fallback path works through the Engine
+    /// — the production wire-up is `Engine::run()` calling
+    /// `self.routing_cache.load_from_file().await` right after the regime load.
+    #[tokio::test]
+    async fn test_engine_loads_routing_from_file() {
+        let path = "/tmp/test_engine_routing_boot.json";
+        let entry = crate::strategy::routing_cache::RoutingEntry {
+            active_engine: "trend".into(),
+            size_mult: 1.0,
+            flat: false,
+            timestamp: chrono::Utc::now().timestamp_millis(),
+        };
+        std::fs::write(path, serde_json::to_string_pretty(&entry).unwrap())
+            .expect("write routing_cache.json fixture");
+
+        // Build an Engine whose routing_cache points at the fixture file. The
+        // minimal_engine helper seeds an empty strategy vec — we don't tick.
+        let routing = RoutingCache::new(path, 0);
+        let engine = minimal_engine(vec![], routing);
+
+        // Mirror what Engine::run() does at boot (right after regime_cache load).
+        engine.routing_cache.load_from_file().await;
+
+        let loaded = engine.routing_cache.get().await
+            .expect("routing entry must be loaded from file");
+        assert_eq!(loaded.active_engine, "trend");
+        assert_eq!(loaded.size_mult, 1.0);
+        assert!(!loaded.flat);
+
+        let _ = std::fs::remove_file(path);
+    }
 }

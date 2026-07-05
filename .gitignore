@@ -19,8 +19,12 @@ trading-engine-core/data/
 backtest/data_cache/
 backtest/results/
 models/*.pkl
+models/rl/*.log
+# walk-forward per-slice research checkpoints (regenerable via the sweep)
+models/rl/_wf_*
 logs/
 reports/
+tb/
 
 # IDE
 .idea/

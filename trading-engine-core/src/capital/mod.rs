@@ -57,6 +57,11 @@ pub struct CapitalManager {
     /// (e.g. grid accumulating inventory) from monopolizing the shared pool and
     /// starving the others (which sized to 0). Empty = uncapped (back-compat).
     budgets: BTreeMap<String, f64>,
+    /// Per-strategy size multiplier (default 1.0). The PPO router sets this each
+    /// tick for the active engine (0.5 / 1.0 / 1.5) to scale the per-strategy
+    /// budget ceiling, so a "smaller" routing decision shrinks the grant cap and
+    /// a "larger" one grows it. Absent entry ⇒ 1.0 (back-compat).
+    size_mults: BTreeMap<String, f64>,
     state: Arc<RwLock<CapitalState>>,
 }
 
@@ -65,6 +70,7 @@ impl CapitalManager {
         Self {
             reserve_limit_pct,
             budgets: BTreeMap::new(),
+            size_mults: BTreeMap::new(),
             state: Arc::new(RwLock::new(CapitalState {
                 total_equity: 0.0,
                 usdt_balance: 0.0,
@@ -104,6 +110,14 @@ impl CapitalManager {
         self
     }
 
+    /// Set the per-strategy size multiplier for the active engine. The PPO router
+    /// calls this each tick with `r.size_mult` (0.5 / 1.0 / 1.5); `request_capital`
+    /// then scales the strategy's remaining budget ceiling by this factor. Negative
+    /// values clamp to 0.0 (zero-grant "flat-ish" sizing). Default 1.0 when unset.
+    pub fn set_size_mult(&mut self, name: &str, mult: f64) {
+        self.size_mults.insert(name.to_string(), mult.max(0.0));
+    }
+
     /// Grant up to `desired` USDT to `name` for entry sizing this tick, capped by
     /// free capital not already granted this tick AND by the strategy's remaining
     /// budget (cumulative deployed + this-tick grant). Returns the granted amount
@@ -120,12 +134,17 @@ impl CapitalManager {
             let already_granted: f64 = s.tick_grants.values().sum();
             let available = (free - already_granted).max(0.0);
             // Per-strategy budget ceiling: cumulative deployed + already granted
-            // this tick can't exceed the configured budget.
+            // this tick can't exceed the configured budget. Scaled by the PPO
+            // router's per-strategy `size_mult` (default 1.0) so a 0.5 routing
+            // decision halves the cap and 1.5 grows it. Only strategies with a
+            // budget entry are scaled (uncapped strategies have nothing to scale;
+            // this also avoids INFINITY * 0.0 = NaN).
+            let size_mult = self.size_mults.get(name).copied().unwrap_or(1.0);
             let budget_remaining = match self.budgets.get(name) {
                 Some(b) => {
                     let deployed = s.deployed.get(name).copied().unwrap_or(0.0);
                     let granted_this_tick = s.tick_grants.get(name).copied().unwrap_or(0.0);
-                    (b - deployed - granted_this_tick).max(0.0)
+                    ((b - deployed - granted_this_tick).max(0.0)) * size_mult
                 }
                 None => f64::INFINITY, // no budget entry → uncapped (back-compat)
             };
@@ -265,5 +284,66 @@ mod tests {
         let m = CapitalManager::new(20.0);
         m.sync_equity(10_000.0, 4_000.0); // free = 2000
         assert!((m.request_capital("swing", 2_000.0) - 2_000.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_request_capital_scales_by_size_mult() {
+        // grid budget=1000; size_mult=0.5 ⇒ budget ceiling halves to 500, so a
+        // 1000-desired ask (with 8000 free) is capped at 500 by the scaled budget.
+        let mut budgets = BTreeMap::new();
+        budgets.insert("grid".to_string(), 1_000.0);
+        let mut m = CapitalManager::new(20.0).with_budgets(budgets);
+        m.sync_equity(10_000.0, 10_000.0); // reserve 2000 ⇒ free 8000 (budget is binding)
+        m.set_size_mult("grid", 0.5);
+        let granted = m.request_capital("grid", 1_000.0);
+        assert!((granted - 500.0).abs() < 1e-6,
+            "size_mult=0.5 must halve the budget ceiling: expected 500, got {}", granted);
+    }
+
+    #[test]
+    fn size_mult_default_is_no_op_when_unset() {
+        // No set_size_mult call ⇒ multiplier defaults to 1.0 ⇒ grant unchanged.
+        let mut budgets = BTreeMap::new();
+        budgets.insert("grid".to_string(), 1_000.0);
+        let m = CapitalManager::new(20.0).with_budgets(budgets);
+        m.sync_equity(10_000.0, 10_000.0); // free = 8000
+        // 200 desired, 1000 budget, no mult ⇒ full 200 granted.
+        assert!((m.request_capital("grid", 200.0) - 200.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn size_mult_clamps_negative_to_zero() {
+        // A negative mult is clamped to 0.0 ⇒ zero grant (intentional "flat-ish" sizing).
+        let mut budgets = BTreeMap::new();
+        budgets.insert("grid".to_string(), 1_000.0);
+        let mut m = CapitalManager::new(20.0).with_budgets(budgets);
+        m.sync_equity(10_000.0, 10_000.0);
+        m.set_size_mult("grid", -0.5); // clamped to 0.0 internally
+        assert!((m.request_capital("grid", 500.0) - 0.0).abs() < 1e-6,
+            "negative size_mult must clamp to 0 ⇒ zero grant");
+    }
+
+    /// I2: clearing a non-active engine's size_mult to 0 must zero its capital
+    /// grant, so a paused engine whose on_tick still runs (managing exits) can't
+    /// draw capital. Defense-in-depth alongside set_paused.
+    #[test]
+    fn size_mult_zero_clears_capital_grant_for_non_active_engine() {
+        let mut budgets = BTreeMap::new();
+        budgets.insert("trend".to_string(), 1_000.0);
+        budgets.insert("grid".to_string(), 1_000.0);
+        let mut m = CapitalManager::new(20.0).with_budgets(budgets);
+        m.sync_equity(10_000.0, 10_000.0); // free = 8000, both budgets = 1000
+
+        // Active engine keeps its mult; non-active is cleared to 0 (I2).
+        m.set_size_mult("trend", 1.5);
+        m.set_size_mult("grid", 0.0);
+
+        // trend (active): 1.5 × 1000 budget = 1500 cap; ask 1000 → granted 1000.
+        assert!((m.request_capital("trend", 1_000.0) - 1_000.0).abs() < 1e-6,
+            "active engine draws capital normally");
+
+        // grid (non-active): 0 × 1000 budget = 0 cap; ask anything → granted 0.
+        assert!((m.request_capital("grid", 500.0) - 0.0).abs() < 1e-6,
+            "non-active engine with cleared size_mult draws ZERO capital");
     }
 }
