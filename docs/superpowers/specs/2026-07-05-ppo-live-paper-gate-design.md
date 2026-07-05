@@ -1,9 +1,6 @@
 # PPO → Live Engine Integration (Paper-Gated) — Design
 
-**Status: DRAFT for review. NOT implemented.** Grounded in the live-bot
-architecture map (see bottom). This spec stages PPO toward live trading behind
-a realistic paper gate whose primary job is to **falsify** the sim-to-real
-transfer before any capital is at risk.
+**Status: APPROVED (defaults accepted) — implementation plan next. NOT implemented.** Grounded in the live-bot architecture map (see bottom). This spec stages PPO toward live trading behind a realistic paper gate whose primary job is to **falsify** the sim-to-real transfer before any capital is at risk.
 
 ## Honest framing — what the paper gate is for
 
@@ -156,15 +153,16 @@ a human decision, not automatic.
 - **Phase 2 (only if Phase 1 passes):** ONNX-in-Rust + promotion into the live
   instance behind a conservative size cap. Separate spec.
 
-## Open questions for you
+## Open questions for you — RESOLVED (defaults accepted)
 
-1. **Layout: RESOLVED → option B** (single instance flipped to paper; live
-   paused during the experiment). Cost: live trading downtime for the window.
-2. **Paper realism values** — confirm slippage/fee bps to model (propose 8 bps
-   slippage, real Binance maker/taker).
-3. **Promotion bar** — agree the 6 criteria above are the gate, especially #3
-   (must beat the un-routed paper baseline, not just be positive)?
-4. **Duration** — 4 weeks minimum acceptable, or longer?
+1. **Layout: option B** — single instance flipped to paper; live paused during
+   the experiment. Config revertible.
+2. **Paper realism: 8 bps slippage + real Binance maker/taker fees.**
+3. **Promotion bar: all 6 criteria, esp. #3 — must beat the un-routed paper
+   baseline, not merely be positive.**
+4. **Min duration: 4 weeks** (across varied regimes).
+5. **No-go accepted** — the experiment may conclude "don't go live"; that is a
+   successful outcome.
 5. **Honest prior** — accepting that this may end in a "no-go, don't go live"
    result? (The evidence so far says that's the likely outcome.)
 
