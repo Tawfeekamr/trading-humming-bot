@@ -1,5 +1,5 @@
 import json, os, tempfile, pathlib
-from backtest.apply_sweep import apply, PARAM_MAP
+from backtest.apply_sweep import apply, PARAM_MAP, _cli_dry_run
 
 STRATEGY_YAML = """\
 trend:
@@ -50,3 +50,15 @@ def test_mr_sweep_json_is_skipped():
         _write_sweep(tmp, "mean_reversion", True, [("anything","1")])  # MR has no PARAM_MAP entries
         changes = apply(str(tmp), str(cfg), dry_run=False)
         assert changes == [], "MR must never be applied (no PARAM_MAP entries)"
+
+def test_cli_defaults_to_dry_run_safe():
+    # Regression: bare CLI invocation (no flags) used to WRITE live config
+    # because --dry-run was store_true (opt-in). The default must be dry-run.
+    # Bare invocation (no flags) → dry-run (NO write) — the Critical safety default
+    assert _cli_dry_run(apply_flag=False, dry_run_flag=False) is True
+    # --apply → writes
+    assert _cli_dry_run(apply_flag=True, dry_run_flag=False) is False
+    # --dry-run wins even if --apply also passed (safe)
+    assert _cli_dry_run(apply_flag=True, dry_run_flag=True) is True
+    # explicit --dry-run alone → dry-run
+    assert _cli_dry_run(apply_flag=False, dry_run_flag=True) is True

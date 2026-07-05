@@ -6,7 +6,14 @@ value to config/strategy.yaml via PARAM_MAP (comment-preserving line edit). Skip
 KEEP engines and MR (no PARAM_MAP entries). --dry-run reports the manifest without
 writing.
 
-Usage: python backtest/apply_sweep.py <results_dir> <config_path> [--dry-run]
+SAFE-BY-DEFAULT CLI: a bare invocation writes nothing. Pass --apply to opt IN to
+writing live config; --dry-run (default) is the safe behavior. If both --apply and
+--dry-run are passed, --dry-run wins (safe).
+
+Usage:
+  python backtest/apply_sweep.py <results_dir> <config_path>            # dry-run (default)
+  python backtest/apply_sweep.py <results_dir> <config_path> --apply    # write
+  python backtest/apply_sweep.py <results_dir> <config_path> --dry-run  # explicit dry-run
 """
 import argparse, json, sys
 from pathlib import Path
@@ -81,11 +88,22 @@ def apply(results_dir: str, config_path: str, dry_run: bool = True) -> list:
         print("no gated changes to apply")
     return changes
 
+def _cli_dry_run(apply_flag: bool, dry_run_flag: bool) -> bool:
+    """Safe-by-default: write only when --apply AND not --dry-run.
+
+    Bare invocation (no flags) → True (dry-run). --apply → False (write).
+    If both --apply and --dry-run are passed, --dry-run wins (safe).
+    """
+    return (not apply_flag) or dry_run_flag
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("results_dir"); ap.add_argument("config_path")
-    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--dry-run", action="store_true", help="explicit dry-run (default anyway)")
+    ap.add_argument("--apply", action="store_true", help="opt IN to writing config (default is dry-run)")
     a = ap.parse_args()
-    changes = apply(a.results_dir, a.config_path, dry_run=a.dry_run)
+    # Safe-by-default: write ONLY when --apply is given AND --dry-run is not.
+    dry_run = _cli_dry_run(a.apply, a.dry_run)
+    changes = apply(a.results_dir, a.config_path, dry_run=dry_run)
     print(json.dumps(changes, indent=2))
     sys.exit(0)
