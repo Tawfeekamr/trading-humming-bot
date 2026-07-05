@@ -47,13 +47,21 @@ def _synthetic_df(
     rets = rng.normal(trend_per_bar, vol, size=n_bars)
     close = start_price * np.exp(np.cumsum(rets))
     # Intrabar range: ~0.5% each side, with a little noise.
-    half_range = np.maximum(close * rng.uniform(0.001, 0.01, size=n_bars), 1e-6)
+    half_range = np.maximum(
+        close * rng.uniform(0.001, 0.01, size=n_bars), 1e-6
+    )
     high = close + half_range
     low = np.maximum(close - half_range, close * 0.5)
     open_ = (high + low) / 2
     volume = rng.uniform(100, 1000, size=n_bars)
     return pd.DataFrame(
-        {"open": open_, "high": high, "low": low, "close": close, "volume": volume},
+        {
+            "open": open_,
+            "high": high,
+            "low": low,
+            "close": close,
+            "volume": volume,
+        },
         index=idx,
     )
 
@@ -70,10 +78,10 @@ def small_env() -> TradingEnv:
 
 
 def test_observation_shape(small_env: TradingEnv):
-    """Observation is a 19-dim vector (11 features + 4 one-hot + 4 portfolio)."""
+    """Observation is a 25-dim vector (17 features + 4 one-hot + 4 portfolio)."""
     obs, _ = small_env.reset(seed=42)
     assert isinstance(obs, np.ndarray)
-    assert obs.shape == (19,), f"expected (19,), got {obs.shape}"
+    assert obs.shape == (25,), f"expected (25,), got {obs.shape}"
 
 
 def test_action_space_is_discrete_10(small_env: TradingEnv):
@@ -95,10 +103,12 @@ def test_step_returns_valid_tuple(small_env: TradingEnv):
     """step() returns the Gymnasium 5-tuple with correct types."""
     small_env.reset(seed=42)
     out = small_env.step(0)
-    assert len(out) == 5, "step must return (obs, reward, terminated, truncated, info)"
+    assert (
+        len(out) == 5
+    ), "step must return (obs, reward, terminated, truncated, info)"
     obs, reward, terminated, truncated, info = out
     assert isinstance(obs, np.ndarray)
-    assert obs.shape == (19,)
+    assert obs.shape == (25,)
     assert isinstance(reward, float)
     assert isinstance(terminated, bool)
     assert isinstance(truncated, bool)
@@ -107,20 +117,34 @@ def test_step_returns_valid_tuple(small_env: TradingEnv):
 
 
 def test_observation_engine_one_hot_positions():
-    """The engine one-hot occupies obs[11:15] in canonical ENGINES order."""
+    """The engine one-hot occupies obs[17:21] in canonical ENGINES order."""
     df = _synthetic_df(n_bars=200)
     env = TradingEnv(df, EnvConfig(window_length=30))
     env.reset(seed=0)
 
-    # After reset, current engine is "flat" -> obs[11] = 1, rest 0.
+    # After reset, current engine is "flat" -> obs[17] = 1, rest 0.
     obs, _ = env.reset(seed=0)
-    assert obs[11] == 1.0 and obs[12] == 0.0 and obs[13] == 0.0 and obs[14] == 0.0
+    assert (
+        obs[17] == 1.0 and obs[18] == 0.0 and obs[19] == 0.0 and obs[20] == 0.0
+    )
 
-    # Activate TREND (action 3). After step, one-hot should encode "trend".
-    env.step(3)
-    obs, _, _, _, info = env.step(3)  # another trend step to advance engine state
-    assert info["engine"] == "trend"
-    assert obs[13] == 1.0, f"trend one-hot must be at idx 13; got {obs[11:15]}"
+    # Switch to "grid"
+    obs, _, _, _, _ = env.step(1)  # 1 = GRID 1.0x
+    assert (
+        obs[17] == 0.0 and obs[18] == 1.0 and obs[19] == 0.0 and obs[20] == 0.0
+    )
+
+    # Switch to "trend"
+    obs, _, _, _, _ = env.step(4)  # 4 = TREND 1.0x
+    assert (
+        obs[17] == 0.0 and obs[18] == 0.0 and obs[19] == 1.0 and obs[20] == 0.0
+    )
+
+    # Switch to "swing"
+    obs, _, _, _, _ = env.step(7)  # 7 = SWING 1.0x
+    assert (
+        obs[17] == 0.0 and obs[18] == 0.0 and obs[19] == 0.0 and obs[20] == 1.0
+    )
 
 
 # --- Behavioural tests -----------------------------------------------------
@@ -136,12 +160,16 @@ def test_go_flat_closes_position():
     env.step(3)
     assert env._current_engine == "trend"
     assert env._engine_state.get("in_position") is True
-    assert env._position_value() > 0, "trend should hold a position after entry"
+    assert (
+        env._position_value() > 0
+    ), "trend should hold a position after entry"
 
     # GO_FLAT (action 9) — closes everything.
     obs, reward, term, trunc, info = env.step(9)
     assert info["engine"] == "flat"
-    assert env._position_value() == 0.0, "position must be closed after GO_FLAT"
+    assert (
+        env._position_value() == 0.0
+    ), "position must be closed after GO_FLAT"
     assert env._engine_state == {} or not env._engine_state.get("in_position")
 
 
@@ -156,9 +184,9 @@ def test_reward_positive_on_winning_bar():
 
     # Agent picks GO_FLAT (action 9). Stays flat; market drops.
     obs, reward, term, trunc, info = env.step(9)
-    assert reward > 0, (
-        f"flat-in-downtrend reward must be > 0 (excess over B&H); got {reward}"
-    )
+    assert (
+        reward > 0
+    ), f"flat-in-downtrend reward must be > 0 (excess over B&H); got {reward}"
 
 
 def test_episode_terminates_at_window_end():
@@ -251,9 +279,10 @@ def test_short_frame_does_not_crash():
     df = _synthetic_df(n_bars=70)  # warmup=50, only 20 usable bars
     env = TradingEnv(df, EnvConfig(window_length=4300, warmup_bars=50))
     obs, _ = env.reset(seed=0)
-    assert obs.shape == (19,)
-    # Stepping past the end should truncate cleanly, not raise.
-    truncated = False
+    assert obs.shape == (25,)
+    obs, _, done, trunc, _ = env.step(0)
+    assert obs.shape == (25,)
+
     for _ in range(25):
         obs, r, term, trunc, info = env.step(9)
         if term or trunc:
@@ -262,16 +291,18 @@ def test_short_frame_does_not_crash():
 
 
 def test_position_notional_ratio_observed():
-    """When trend enters, the position-notional-ratio obs (idx 17) is > 0."""
+    """When trend enters, the position-notional-ratio obs (idx 23) is > 0."""
     df = _synthetic_df(n_bars=200, trend_per_bar=0.003)
     env = TradingEnv(df, EnvConfig(window_length=40, max_position_pct=0.25))
     env.reset(seed=0)
     # Action 4 = TREND at 1.0x size -> deploys max_position_pct of equity.
     obs, _, _, _, info = env.step(4)
     assert info["engine"] == "trend"
-    assert obs[17] > 0, f"position_notional_ratio must be > 0 after trend entry; got {obs[17]}"
+    assert (
+        obs[23] > 0
+    ), f"position_notional_ratio must be > 0 after trend entry; got {obs[23]}"
     # At size_mult=1.0 and max_position_pct=0.25, ratio should be ~0.25
     # (modulo the bar's close-vs-entry drift, which is tiny for 1h vol).
-    assert obs[17] == pytest.approx(0.25, abs=0.05), (
-        f"position_notional_ratio at 1.0x size should be ~0.25; got {obs[17]}"
-    )
+    assert obs[23] == pytest.approx(
+        0.25, abs=0.05
+    ), f"position_notional_ratio at 1.0x size should be ~0.25; got {obs[23]}"

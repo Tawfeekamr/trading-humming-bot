@@ -49,11 +49,15 @@ _DEFAULT_TB_LOG = _REPO_ROOT / "tb"
 def _git_sha() -> str:
     """Return the current commit SHA, or 'unknown' if not in a git repo."""
     try:
-        out = subprocess.check_output(
-            ["git", "rev-parse", "HEAD"],
-            cwd=_REPO_ROOT,
-            stderr=subprocess.DEVNULL,
-        ).decode().strip()
+        out = (
+            subprocess.check_output(
+                ["git", "rev-parse", "HEAD"],
+                cwd=_REPO_ROOT,
+                stderr=subprocess.DEVNULL,
+            )
+            .decode()
+            .strip()
+        )
         return out
     except (subprocess.CalledProcessError, FileNotFoundError, OSError):
         return "unknown"
@@ -86,29 +90,73 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         prog="python -m src.rl.agents.ppo_trainer",
         description="Train a PPO agent on TradingEnv (RL execution-routing pipeline).",
     )
-    parser.add_argument("--pair", default="ETHUSDT",
-                        help="Trading pair (default: ETHUSDT).")
-    parser.add_argument("--months", type=int, default=12,
-                        help="Lookback in months of 1h klines to train on (default: 12).")
-    parser.add_argument("--timesteps", type=int, default=500_000,
-                        help="Total PPO training timesteps (default: 500_000).")
-    parser.add_argument("--lambda-dd", type=float, default=0.5,
-                        dest="lambda_dd",
-                        help="Drawdown-step penalty weight in the env reward (default: 0.5).")
-    parser.add_argument("--seed", type=int, default=42,
-                        help="RNG seed for PPO + env.reset (default: 42).")
-    parser.add_argument("--tb-log", default=str(_DEFAULT_TB_LOG),
-                        help="Tensorboard log directory (default: ./tb/).")
-    parser.add_argument("--output", default=None,
-                        help="Model output path. Default: models/rl/ppo_{pair}_{ts}.zip.")
-    parser.add_argument("--learning-rate", type=float, default=3e-4,
-                        help="PPO learning rate (default: 3e-4).")
-    parser.add_argument("--n-steps", type=int, default=2048,
-                        help="Rollout horizon per PPO update, in env steps (default: 2048).")
-    parser.add_argument("--batch-size", type=int, default=64,
-                        help="PPO minibatch size (default: 64).")
-    parser.add_argument("--gamma", type=float, default=0.99,
-                        help="Discount factor (default: 0.99).")
+    parser.add_argument(
+        "--pair", default="ETHUSDT", help="Trading pair (default: ETHUSDT)."
+    )
+    parser.add_argument(
+        "--months",
+        type=int,
+        default=12,
+        help="Lookback in months of 1h klines to train on (default: 12).",
+    )
+    parser.add_argument(
+        "--timesteps",
+        type=int,
+        default=500_000,
+        help="Total PPO training timesteps (default: 500_000).",
+    )
+    parser.add_argument(
+        "--lambda-dd",
+        type=float,
+        default=0.5,
+        dest="lambda_dd",
+        help="Drawdown-step penalty weight in the env reward (default: 0.5).",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="RNG seed for PPO + env.reset (default: 42).",
+    )
+    parser.add_argument(
+        "--tb-log",
+        default=str(_DEFAULT_TB_LOG),
+        help="Tensorboard log directory (default: ./tb/).",
+    )
+    parser.add_argument(
+        "--output",
+        default=None,
+        help="Model output path. Default: models/rl/ppo_{pair}_{ts}.zip.",
+    )
+    parser.add_argument(
+        "--learning-rate",
+        type=float,
+        default=3e-4,
+        help="PPO learning rate (default: 3e-4).",
+    )
+    parser.add_argument(
+        "--n-steps",
+        type=int,
+        default=2048,
+        help="Rollout horizon per PPO update, in env steps (default: 2048).",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=64,
+        help="PPO minibatch size (default: 64).",
+    )
+    parser.add_argument(
+        "--gamma",
+        type=float,
+        default=0.99,
+        help="Discount factor (default: 0.99).",
+    )
+    parser.add_argument(
+        "--train-end",
+        default=None,
+        help="End date for training data (YYYY-MM-DD). Default: today.",
+    )
     return parser.parse_args(argv)
 
 
@@ -135,17 +183,25 @@ def main(argv: list[str] | None = None) -> int:
     from src.rl.env import EnvConfig, TradingEnv
 
     # --- 1. Load data ----------------------------------------------------
-    end = date.today()
+    end = (
+        date.fromisoformat(args.train_end) if args.train_end else date.today()
+    )
     start = end - timedelta(days=30 * args.months)
-    print(f"Loading {args.pair} klines {start} → {end} (~{args.months} months)...")
+    print(
+        f"Loading {args.pair} klines {start} → {end} (~{args.months} months)..."
+    )
     df = load_klines(args.pair, start, end)
     if df.empty:
-        print(f"ERROR: no kline data found for {args.pair} in [{start}, {end}].",
-              file=sys.stderr)
+        print(
+            f"ERROR: no kline data found for {args.pair} in [{start}, {end}].",
+            file=sys.stderr,
+        )
         return 1
-    print(f"Loaded {len(df):,} bars  "
-          f"({df.index[0]} → {df.index[-1]})  "
-          f"data_hash={_data_hash(df)}")
+    print(
+        f"Loaded {len(df):,} bars  "
+        f"({df.index[0]} → {df.index[-1]})  "
+        f"data_hash={_data_hash(df)}"
+    )
 
     # --- 2. Build env ----------------------------------------------------
     # TradingEnv does not take a seed in __init__; seed is applied to env.reset
@@ -182,7 +238,9 @@ def main(argv: list[str] | None = None) -> int:
 
     # --- 4. Save model + provenance sidecar -----------------------------
     timestamp = date.today().isoformat()
-    output = args.output or str(_DEFAULT_OUTPUT_DIR / f"ppo_{args.pair}_{timestamp}.zip")
+    output = args.output or str(
+        _DEFAULT_OUTPUT_DIR / f"ppo_{args.pair}_{timestamp}.zip"
+    )
     out_path = Path(output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     model.save(out_path)

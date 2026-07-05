@@ -23,7 +23,11 @@ from src.rl.data import (
 # Path to the real ETHUSDT 1h cache (populated by the Rust backtest fetcher).
 _ETH_CACHE_DIR = (
     Path(__file__).resolve().parent.parent
-    / "backtest" / "data_cache" / "klines" / "ETHUSDT" / "1h"
+    / "backtest"
+    / "data_cache"
+    / "klines"
+    / "ETHUSDT"
+    / "1h"
 )
 
 
@@ -54,7 +58,9 @@ def test_load_klines_real_cache_shape_and_index():
         if (b - a).days == 1 and (c - b).days == 1:
             run = (a, c)
             break
-    assert run is not None, "cache must contain 3 contiguous days for this test"
+    assert (
+        run is not None
+    ), "cache must contain 3 contiguous days for this test"
     start, end = run
 
     df = load_klines("ETHUSDT", start, end)
@@ -103,15 +109,16 @@ def test_load_klines_skips_missing_days_gracefully():
                 ]
                 csv_bytes = ("\n".join(rows) + "\n").encode()
                 resp.status_code = 200
-                resp.content = io_zip_bytes(
-                    csv_bytes, f"ETHUSDT-1h-{d}.csv")
+                resp.content = io_zip_bytes(csv_bytes, f"ETHUSDT-1h-{d}.csv")
                 return resp
         raise AssertionError(f"unexpected url: {url}")
 
     start = date(2099, 1, 1)
     end = date(2099, 1, 3)
     with tempfile_cache(mod):
-        with patch.object(mod, "_SESSION", Mock(get=Mock(side_effect=fake_get))):
+        with patch.object(
+            mod, "_SESSION", Mock(get=Mock(side_effect=fake_get))
+        ):
             df = load_klines("ETHUSDT", start, end)
 
     # Missing day skipped, no raise; the two surrounding days give 4 rows
@@ -148,16 +155,26 @@ def test_fetch_monthly_klines_parses_zip_and_caches():
 
     resp = Mock(status_code=200, content=zip_buf)
 
-    with tempfile_cache(mod) as tmp:
+    with tempfile_cache(mod):
         with patch.object(mod, "_SESSION", Mock(get=Mock(return_value=resp))):
-            df1 = fetch_monthly_klines("ETHUSDT", date(2099, 1, 1),
-                                       date(2099, 1, 31))
+            df1 = fetch_monthly_klines(
+                "ETHUSDT", date(2099, 1, 1), date(2099, 1, 31)
+            )
             # Second call should NOT hit the network (cache hit).
-            with patch.object(mod, "_SESSION",
-                              Mock(get=Mock(side_effect=AssertionError(
-                                  "expected cache hit, no network")))):
-                df2 = fetch_monthly_klines("ETHUSDT", date(2099, 1, 1),
-                                           date(2099, 1, 31))
+            with patch.object(
+                mod,
+                "_SESSION",
+                Mock(
+                    get=Mock(
+                        side_effect=AssertionError(
+                            "expected cache hit, no network"
+                        )
+                    )
+                ),
+            ):
+                df2 = fetch_monthly_klines(
+                    "ETHUSDT", date(2099, 1, 1), date(2099, 1, 31)
+                )
 
     assert list(df1.columns) == OHLCV_COLS
     assert df1.index.is_monotonic_increasing
@@ -173,18 +190,21 @@ def test_fetch_monthly_klines_skips_404_month():
     resp = Mock(status_code=404)
     with tempfile_cache(mod):
         with patch.object(mod, "_SESSION", Mock(get=Mock(return_value=resp))):
-            df = fetch_monthly_klines("ETHUSDT", date(2099, 1, 1),
-                                      date(2099, 3, 31))
+            df = fetch_monthly_klines(
+                "ETHUSDT", date(2099, 1, 1), date(2099, 3, 31)
+            )
     assert df.empty
     assert list(df.columns) == OHLCV_COLS
 
 
 # --- helpers -----------------------------------------------------------------
 
+
 def io_zip_bytes(csv_bytes: bytes, inner_name: str) -> bytes:
     """Wrap a CSV payload as a single-file zip in memory."""
     import io as _io
     import zipfile as _zip
+
     buf = _io.BytesIO()
     with _zip.ZipFile(buf, "w", _zip.ZIP_DEFLATED) as z:
         z.writestr(inner_name, csv_bytes)
@@ -200,6 +220,7 @@ class tempfile_cache:
     def __init__(self, mod):
         self._mod = mod
         import tempfile
+
         self._tmp = tempfile.TemporaryDirectory()
         self._tmp_path = Path(self._tmp.name)
 

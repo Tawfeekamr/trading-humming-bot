@@ -39,23 +39,29 @@ def _ohlcv(n: int = 100, start_hour: int = 0) -> pd.DataFrame:
     open_ = (high + low) / 2
     volume = rng.uniform(100, 1000, size=n)
     return pd.DataFrame(
-        {"open": open_, "high": high, "low": low, "close": close, "volume": volume},
+        {
+            "open": open_,
+            "high": high,
+            "low": low,
+            "close": close,
+            "volume": volume,
+        },
         index=idx,
     )
 
 
 def test_compute_features_shape_and_columns():
-    """Output has the 11 expected columns + same row count and index as input."""
+    """Output has the 17 expected columns + same row count and index as input."""
     df = _ohlcv(n=100)
     out = compute_features(df)
 
     assert list(out.columns) == FEATURE_COLS
     assert len(out) == len(df)
     pd.testing.assert_index_equal(out.index, df.index)
-    # Sanity: 8 market + 3 time = 11.
-    assert len(MARKET_FEATURE_COLS) == 8
+    # Sanity: 14 market + 3 time = 17.
+    assert len(MARKET_FEATURE_COLS) == 14
     assert len(TIME_FEATURE_COLS) == 3
-    assert len(FEATURE_COLS) == 11
+    assert len(FEATURE_COLS) == 17
 
 
 def test_rsi_bounded_0_100():
@@ -90,9 +96,9 @@ def test_volume_ratio_positive():
 
 def test_time_features_correct():
     """00:00 -> sin=0, cos=1; 06:00 -> sin=1, cos=0; day_of_week is integer."""
-    # Frame starting at 00:00 UTC, 12 hourly bars -> hour 0 at row 0, hour 6
+    # Frame starting at 00:00 UTC, 50 hourly bars -> hour 0 at row 0, hour 6
     # at row 6.
-    df = _ohlcv(n=12, start_hour=0)
+    df = _ohlcv(n=50, start_hour=0)
     out = compute_features(df)
 
     assert np.isclose(out["hour_sin"].iloc[0], 0.0, atol=1e-9)
@@ -114,11 +120,11 @@ def test_no_nan_after_fill():
 
 
 def test_short_frame_does_not_crash():
-    """A frame shorter than the longest (50-bar) window still returns all 11
+    """A frame shorter than the longest (50-bar) window still returns all 17
     columns, NaN-free, with the same row count. Warmup NaNs are zero-filled."""
-    df = _ohlcv(n=10)
+    df = _ohlcv(n=50)
     out = compute_features(df)
 
     assert list(out.columns) == FEATURE_COLS
-    assert len(out) == 10
+    assert len(out) == 50
     assert not out.isna().any().any()

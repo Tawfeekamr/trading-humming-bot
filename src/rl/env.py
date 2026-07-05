@@ -55,9 +55,15 @@ from src.rl.features import FEATURE_COLS, compute_features
 
 # Maps action int -> (engine_name, size_multiplier). GO_FLAT carries no size.
 ACTION_TO_ENGINE_SIZE: list[tuple[str, float]] = [
-    ("grid", 0.5), ("grid", 1.0), ("grid", 1.5),
-    ("trend", 0.5), ("trend", 1.0), ("trend", 1.5),
-    ("swing", 0.5), ("swing", 1.0), ("swing", 1.5),
+    ("grid", 0.5),
+    ("grid", 1.0),
+    ("grid", 1.5),
+    ("trend", 0.5),
+    ("trend", 1.0),
+    ("trend", 1.5),
+    ("swing", 0.5),
+    ("swing", 1.0),
+    ("swing", 1.5),
     ("flat", 0.0),  # action 9 = GO_FLAT
 ]
 
@@ -77,10 +83,10 @@ class EnvConfig:
 
     # --- Account / reward ---
     initial_capital: float = 10_000.0
-    fee_rate: float = 0.001          # 0.1% per side (maker).
-    lambda_dd: float = 0.5           # drawdown-step penalty weight.
-    window_length: int = 4_300       # ~6 months of 1h bars per episode.
-    max_position_pct: float = 0.25   # max notional / equity for trend/swing.
+    fee_rate: float = 0.001  # 0.1% per side (maker).
+    lambda_dd: float = 0.5  # drawdown-step penalty weight.
+    window_length: int = 4_300  # ~6 months of 1h bars per episode.
+    max_position_pct: float = 0.6666  # max notional / equity for trend/swing.
 
     # --- Observation helpers ---
     # Normaliser for the "bars in engine" observation; the spec frames the
@@ -91,15 +97,17 @@ class EnvConfig:
 
     # --- Feature/indicator windows ---
     atr_period: int = 14
-    warmup_bars: int = 50            # skip first N bars so features are warmed up.
+    warmup_bars: int = 50  # skip first N bars so features are warmed up.
 
     # --- Engine parameters (simplified primitives) ---
-    grid_spacing_atr: float = 1.5    # ATR multiplier between grid levels.
-    grid_levels: int = 5             # buy levels below + sell levels above anchor.
-    grid_level_pct: float = 0.10     # each level deploys 10% of equity * size_mult.
+    grid_spacing_atr: float = 1.5  # ATR multiplier between grid levels.
+    grid_levels: int = 5  # buy levels below + sell levels above anchor.
+    grid_level_pct: float = (
+        0.10  # each level deploys 10% of equity * size_mult.
+    )
     trend_trailing_atr: float = 2.5  # Chandelier trailing-stop ATR multiplier.
-    swing_tp_atr: float = 1.5        # swing take-profit ATR multiplier.
-    swing_sl_atr: float = 2.5        # swing stop-loss ATR multiplier.
+    swing_tp_atr: float = 1.5  # swing take-profit ATR multiplier.
+    swing_sl_atr: float = 2.5  # swing stop-loss ATR multiplier.
 
     # Trend direction: allow shorts (close < sma_fast -> short). Off by default
     # matches the spot-only deployed system; flip to True for the futures ablation.
@@ -189,21 +197,27 @@ class TradingEnv(gym.Env):
         # not normalised — engine primitives need dollar-ATR). Both match
         # the formulas in src/rl/features.py.
         closes_s = df["close"]
-        self._sma_fast = closes_s.rolling(window=20).mean().to_numpy(dtype=np.float64)
+        self._sma_fast = (
+            closes_s.rolling(window=20).mean().to_numpy(dtype=np.float64)
+        )
 
         prev_close = closes_s.shift(1)
-        true_range = np.maximum.reduce([
-            df["high"].to_numpy() - df["low"].to_numpy(),
-            np.abs(df["high"].to_numpy() - prev_close.to_numpy()),
-            np.abs(df["low"].to_numpy() - prev_close.to_numpy()),
-        ])
+        true_range = np.maximum.reduce(
+            [
+                df["high"].to_numpy() - df["low"].to_numpy(),
+                np.abs(df["high"].to_numpy() - prev_close.to_numpy()),
+                np.abs(df["low"].to_numpy() - prev_close.to_numpy()),
+            ]
+        )
         tr_series = pd.Series(true_range, index=df.index)
-        self._atr = tr_series.rolling(window=self.config.atr_period).mean().to_numpy(
-            dtype=np.float64
+        self._atr = (
+            tr_series.rolling(window=self.config.atr_period)
+            .mean()
+            .to_numpy(dtype=np.float64)
         )
 
         # Spaces.
-        n_features = self._features.shape[1]   # 11
+        n_features = self._features.shape[1]  # 11
         obs_dim = n_features + len(ENGINES) + 4  # 11 + 4 + 4 = 19
         self.observation_space = gym.spaces.Box(
             low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float64
@@ -357,7 +371,13 @@ class TradingEnv(gym.Env):
         terminated = self.equity < 0.5 * self._initial_equity
         truncated = self._step_count >= cfg.window_length
 
-        return self._build_obs(), float(reward), terminated, truncated, self._build_info()
+        return (
+            self._build_obs(),
+            float(reward),
+            terminated,
+            truncated,
+            self._build_info(),
+        )
 
     # ------------------------------------------------------------------
     # Engine dispatch
@@ -414,7 +434,9 @@ class TradingEnv(gym.Env):
     # Engine primitives (grid / trend / swing)
     # ------------------------------------------------------------------
 
-    def _grid_step(self, bar: dict, prev_close: float, atr: float) -> tuple[float, float]:
+    def _grid_step(
+        self, bar: dict, prev_close: float, atr: float
+    ) -> tuple[float, float]:
         """Mean-reversion grid: deploy symmetric levels around the activation
         price; each bar, harvest any level crosses.
 
@@ -448,7 +470,9 @@ class TradingEnv(gym.Env):
 
         inv_start = state["inventory"]
         avg_cost_start = state["avg_cost"]
-        mtm_start = (prev_close - avg_cost_start) * inv_start if inv_start > 0 else 0.0
+        mtm_start = (
+            (prev_close - avg_cost_start) * inv_start if inv_start > 0 else 0.0
+        )
 
         inventory = inv_start
         avg_cost = avg_cost_start
@@ -460,7 +484,9 @@ class TradingEnv(gym.Env):
             if low <= bl <= high:
                 units = level_notional / bl
                 if inventory + units > 0:
-                    avg_cost = (avg_cost * inventory + bl * units) / (inventory + units)
+                    avg_cost = (avg_cost * inventory + bl * units) / (
+                        inventory + units
+                    )
                 inventory += units
                 turnover += level_notional
 
@@ -502,19 +528,20 @@ class TradingEnv(gym.Env):
                 side = 1
             notional = self.equity * cfg.max_position_pct * state["size_mult"]
             size = notional / max(prev_close, 1e-8)
-            state.update({
-                "in_position": True,
-                "side": side,
-                "size": size,
-                "entry": prev_close,
-                "extreme": prev_close,
-            })
+            state.update(
+                {
+                    "in_position": True,
+                    "side": side,
+                    "size": size,
+                    "entry": prev_close,
+                    "extreme": prev_close,
+                }
+            )
             turnover = notional
         else:
             turnover = 0.0
 
         side, size = state["side"], state["size"]
-        entry = state["entry"]
 
         # Update extreme + trailing stop.
         if side == 1:
@@ -536,7 +563,9 @@ class TradingEnv(gym.Env):
 
         return bar_pnl, turnover
 
-    def _swing_step(self, bar: dict, prev_close: float, atr: float) -> tuple[float, float]:
+    def _swing_step(
+        self, bar: dict, prev_close: float, atr: float
+    ) -> tuple[float, float]:
         """Swing-reversal: enter long immediately on activation, fixed TP/SL
         bracket (1.5xATR up / 2.5xATR down). Stays flat after a close until the
         engine is re-activated by the agent."""
@@ -548,14 +577,16 @@ class TradingEnv(gym.Env):
         if not state.get("in_position"):
             notional = self.equity * cfg.max_position_pct * state["size_mult"]
             size = notional / max(prev_close, 1e-8)
-            state.update({
-                "in_position": True,
-                "side": 1,
-                "size": size,
-                "entry": prev_close,
-                "tp": prev_close + cfg.swing_tp_atr * atr,
-                "sl": prev_close - cfg.swing_sl_atr * atr,
-            })
+            state.update(
+                {
+                    "in_position": True,
+                    "side": 1,
+                    "size": size,
+                    "entry": prev_close,
+                    "tp": prev_close + cfg.swing_tp_atr * atr,
+                    "sl": prev_close - cfg.swing_sl_atr * atr,
+                }
+            )
             turnover = notional
         else:
             turnover = 0.0
@@ -625,17 +656,26 @@ class TradingEnv(gym.Env):
         unrealised_pct = (self.equity - self._initial_equity) / max(
             self._initial_equity, 1e-8
         )
-        dd = 0.0 if self._peak_equity <= 0 else (
-            (self._peak_equity - self.equity) / self._peak_equity
+        dd = (
+            0.0
+            if self._peak_equity <= 0
+            else ((self._peak_equity - self.equity) / self._peak_equity)
         )
         pos_ratio = self._position_value() / max(self._initial_equity, 1e-8)
-        bars_norm = min(self._bars_in_engine / max(cfg.max_bars_per_engine, 1), 1.0)
+        bars_norm = min(
+            self._bars_in_engine / max(cfg.max_bars_per_engine, 1), 1.0
+        )
 
-        obs = np.concatenate([
-            feats.astype(np.float64),
-            one_hot,
-            np.array([unrealised_pct, dd, pos_ratio, bars_norm], dtype=np.float64),
-        ])
+        obs = np.concatenate(
+            [
+                feats.astype(np.float64),
+                one_hot,
+                np.array(
+                    [unrealised_pct, dd, pos_ratio, bars_norm],
+                    dtype=np.float64,
+                ),
+            ]
+        )
         # Defensive: replace any stray NaN/inf (shouldn't happen, but PPO will
         # silently diverge if it does) with 0.
         return np.nan_to_num(obs, nan=0.0, posinf=0.0, neginf=0.0)
@@ -650,6 +690,7 @@ class TradingEnv(gym.Env):
             "turnover": float(self._last_turnover),
             "bars_in_engine": int(self._bars_in_engine),
             "engine": self._current_engine,
+            "in_position": bool(self._engine_state.get("in_position", False)),
             "size_mult": float(self._current_size_mult),
             "step": int(self._step_count),
             "bar_idx": int(self._bar_idx),

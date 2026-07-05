@@ -1,5 +1,8 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use crate::models::bar::Bar;
+use ort::session::Session;
+use ort::value::Tensor;
+use crate::ml::features::extract_14_features;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum MarketRegime {
@@ -14,62 +17,63 @@ pub struct RegimePrediction {
     pub probabilities: [f64; 3],
 }
 
-pub struct RegimeClassifier;
+pub struct RegimeClassifier {
+    session: Session,
+}
 
 impl RegimeClassifier {
     pub fn new(model_path: &str) -> Result<Self> {
-        std::fs::metadata(model_path)?;
-        Ok(Self)
+        if !std::path::Path::new(model_path).exists() {
+            return Err(anyhow!("Model not found at path: {}", model_path));
+        }
+
+        let session = Session::builder()?.commit_from_file(model_path)?;
+        Ok(Self { session })
     }
 
-    pub fn predict(&self, bars: &[Bar]) -> Result<RegimePrediction> {
-        let _features = extract_features(bars);
-        // TODO: Run ONNX inference when ort crate integration is complete
+    pub fn predict(&mut self, bars: &[Bar]) -> Result<RegimePrediction> {
+        let features = extract_14_features(bars);
+        
+        if features.iter().all(|&x| x == 0.0) {
+            return Ok(RegimePrediction {
+                regime: MarketRegime::Ranging,
+                confidence: 0.0,
+                probabilities: [1.0, 0.0, 0.0],
+            });
+        }
+        
+        let shape = vec![1, features.len() as i64];
+        let tensor = Tensor::from_array((shape, features))?;
+        let inputs = ort::inputs!["float_input" => tensor];
+        let outputs = self.session.run(inputs)?;
+        
+        let (_, label_slice) = outputs["output_label"].try_extract_tensor::<i64>()?;
+        let regime_idx = label_slice[0];
+        
+        let (_, probs_slice) = outputs["probabilities"].try_extract_tensor::<f32>()?;
+        let p0 = probs_slice[0] as f64;
+        let p1 = probs_slice[1] as f64;
+        let p2 = probs_slice[2] as f64;
+        
+        let regime = match regime_idx {
+            0 => MarketRegime::Ranging,
+            1 => MarketRegime::Trending,
+            2 => MarketRegime::Danger,
+            _ => MarketRegime::Ranging,
+        };
+        
+        let confidence = match regime_idx {
+            0 => p0,
+            1 => p1,
+            2 => p2,
+            _ => p0,
+        };
+        
         Ok(RegimePrediction {
-            regime: MarketRegime::Ranging,
-            confidence: 0.5,
-            probabilities: [0.5, 0.3, 0.2],
+            regime,
+            confidence,
+            probabilities: [p0, p1, p2],
         })
     }
 }
 
-/// Extract feature vector from recent bars
-/// Must match the Python training pipeline feature engineering exactly
-pub fn extract_features(bars: &[Bar]) -> Vec<f64> {
-    if bars.len() < 16 {
-        return Vec::new();
-    }
-
-    let mut features = Vec::new();
-    let close = bars.last().unwrap().close;
-
-    // Returns at different timeframes
-    let returns_1m = (close - bars[bars.len() - 2].close) / bars[bars.len() - 2].close;
-    features.push(returns_1m);
-
-    let returns_5m = (close - bars[bars.len() - 6].close) / bars[bars.len() - 6].close;
-    features.push(returns_5m);
-
-    let returns_15m = (close - bars[bars.len() - 16].close) / bars[bars.len() - 16].close;
-    features.push(returns_15m);
-
-    // Volatility (std of last 20 returns)
-    let returns: Vec<f64> = bars.windows(2)
-        .map(|w| (w[1].close - w[0].close) / w[0].close)
-        .collect();
-    let mean = returns.iter().sum::<f64>() / returns.len() as f64;
-    let variance = returns.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / returns.len() as f64;
-    features.push(variance.sqrt());
-
-    // Volume ratio (current vs average)
-    let avg_vol: f64 = bars.iter().rev().take(20).map(|b| b.volume).sum::<f64>() / 20.0;
-    let vol_ratio = if avg_vol > 0.0 { bars.last().unwrap().volume / avg_vol } else { 1.0 };
-    features.push(vol_ratio);
-
-    // Placeholders for BB position, RSI, EMA slope (will be enhanced)
-    features.push(0.5);
-    features.push(50.0);
-    features.push(0.0);
-
-    features
-}

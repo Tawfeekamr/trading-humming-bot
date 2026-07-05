@@ -88,12 +88,16 @@ def _cli_main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m src.rl.agents.ppo_predict",
         description="Run a trained PPO model on a recent window of klines and "
-                    "print summary stats (eval helper).",
+        "print summary stats (eval helper).",
     )
     parser.add_argument("--model", required=True, help="Path to PPO .zip.")
     parser.add_argument("--pair", default="ETHUSDT")
-    parser.add_argument("--months", type=int, default=3,
-                        help="How many months of recent klines to evaluate on (default: 3).")
+    parser.add_argument(
+        "--months",
+        type=int,
+        default=3,
+        help="How many months of recent klines to evaluate on (default: 3).",
+    )
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args(argv)
 
@@ -107,7 +111,10 @@ def _cli_main(argv: list[str] | None = None) -> int:
     start = end - timedelta(days=30 * args.months)
     df = load_klines(args.pair, start, end)
     if df.empty:
-        print(f"ERROR: no data for {args.pair} [{start}, {end}].", file=sys.stderr)
+        print(
+            f"ERROR: no data for {args.pair} [{start}, {end}].",
+            file=sys.stderr,
+        )
         return 1
 
     try:
@@ -124,10 +131,14 @@ def _cli_main(argv: list[str] | None = None) -> int:
     final = eq[-1] if len(eq) else float("nan")
     ret = (eq[-1] / eq[0] - 1.0) if len(eq) >= 2 else 0.0
     peak = np.maximum.accumulate(eq) if len(eq) else eq
-    max_dd = float(np.max((peak - eq) / np.maximum(peak, 1e-8))) if len(eq) else 0.0
-    print(f"{args.pair}: {len(actions)} steps | "
-          f"final equity=${final:,.2f} | return={ret*100:+.2f}% | "
-          f"max DD={max_dd*100:.2f}%")
+    max_dd = (
+        float(np.max((peak - eq) / np.maximum(peak, 1e-8))) if len(eq) else 0.0
+    )
+    print(
+        f"{args.pair}: {len(actions)} steps | "
+        f"final equity=${final:,.2f} | return={ret*100:+.2f}% | "
+        f"max DD={max_dd*100:.2f}%"
+    )
     return 0
 
 

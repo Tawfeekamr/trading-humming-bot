@@ -41,16 +41,27 @@ except ImportError:  # pragma: no cover - very old urllib3 layout
 logger = logging.getLogger(__name__)
 
 # Reuse the Rust backtest daily cache so we don't duplicate ~360 files.
-_CACHE_ROOT = Path(__file__).resolve().parents[2] / "backtest" / "data_cache" / "klines"
+_CACHE_ROOT = (
+    Path(__file__).resolve().parents[2] / "backtest" / "data_cache" / "klines"
+)
 _MONTHLY_CACHE_DIR = _CACHE_ROOT / "_monthly"
 
 _DAILY_BASE_URL = "https://data.binance.vision/data/spot/daily/klines"
 _MONTHLY_BASE_URL = "https://data.binance.vision/data/spot/monthly/klines"
 
 KLINE_COLUMNS = [
-    "open_time", "open", "high", "low", "close", "volume",
-    "close_time", "quote_vol", "count", "taker_buy_vol",
-    "taker_buy_quote_vol", "ignore",
+    "open_time",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "close_time",
+    "quote_vol",
+    "count",
+    "taker_buy_vol",
+    "taker_buy_quote_vol",
+    "ignore",
 ]
 OHLCV_COLS = ["open", "high", "low", "close", "volume"]
 
@@ -169,8 +180,11 @@ def load_klines(pair: str, start: date, end: date) -> pd.DataFrame:
                 frames.append(_read_klines_csv(cache_path))
                 continue
             except Exception as e:
-                logger.warning("Corrupt kline cache %s (%s); re-downloading",
-                               cache_path, e)
+                logger.warning(
+                    "Corrupt kline cache %s (%s); re-downloading",
+                    cache_path,
+                    e,
+                )
                 cache_path.unlink(missing_ok=True)
 
         # Not cached (or was corrupt) -> download daily zip. Cache the raw CSV
@@ -179,18 +193,23 @@ def load_klines(pair: str, start: date, end: date) -> pd.DataFrame:
         try:
             df, raw = _download_daily_zip(pair, day)
         except FileNotFoundError:
-            logger.warning("No kline data for %s %s (404) — skipping", pair, day)
+            logger.warning(
+                "No kline data for %s %s (404) — skipping", pair, day
+            )
             continue
         except requests.RequestException as e:
-            logger.warning("Failed to download %s %s after retries: %s",
-                           pair, day, e)
+            logger.warning(
+                "Failed to download %s %s after retries: %s", pair, day, e
+            )
             continue
 
         cache_path.write_bytes(raw)
         frames.append(df)
 
     if not frames:
-        logger.warning("load_klines(%s, %s, %s): no data found", pair, start, end)
+        logger.warning(
+            "load_klines(%s, %s, %s): no data found", pair, start, end
+        )
         return pd.DataFrame(columns=OHLCV_COLS)
 
     df = pd.concat(frames)
@@ -221,21 +240,28 @@ def fetch_monthly_klines(pair: str, start: date, end: date) -> pd.DataFrame:
                 frames.append(pd.read_parquet(cache_path))
                 continue
             except Exception as e:
-                logger.warning("Corrupt monthly cache %s (%s); re-downloading",
-                               cache_path, e)
+                logger.warning(
+                    "Corrupt monthly cache %s (%s); re-downloading",
+                    cache_path,
+                    e,
+                )
                 cache_path.unlink(missing_ok=True)
 
         url = f"{_MONTHLY_BASE_URL}/{pair}/1h/{pair}-1h-{tag}.zip"
         try:
             resp = _SESSION.get(url, timeout=120)
             if resp.status_code == 404:
-                logger.info("Monthly klines %s %s: 404 (future/partial) — skipping",
-                            pair, tag)
+                logger.info(
+                    "Monthly klines %s %s: 404 (future/partial) — skipping",
+                    pair,
+                    tag,
+                )
                 continue
             resp.raise_for_status()
         except requests.RequestException as e:
-            logger.warning("Failed to download %s %s after retries: %s",
-                           pair, tag, e)
+            logger.warning(
+                "Failed to download %s %s after retries: %s", pair, tag, e
+            )
             continue
 
         with zipfile.ZipFile(io.BytesIO(resp.content)) as z:
@@ -248,8 +274,9 @@ def fetch_monthly_klines(pair: str, start: date, end: date) -> pd.DataFrame:
         frames.append(df)
 
     if not frames:
-        logger.warning("fetch_monthly_klines(%s, %s, %s): no data found",
-                       pair, start, end)
+        logger.warning(
+            "fetch_monthly_klines(%s, %s, %s): no data found", pair, start, end
+        )
         return pd.DataFrame(columns=OHLCV_COLS)
 
     df = pd.concat(frames)
