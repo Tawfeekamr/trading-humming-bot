@@ -5,6 +5,7 @@ pub mod trade_journal;
 pub mod swing;
 pub mod status_cache;
 pub mod regime_cache;
+pub mod routing_cache;
 
 use async_trait::async_trait;
 use anyhow::Result;
