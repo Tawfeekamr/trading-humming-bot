@@ -13,10 +13,17 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import pytest
+
+# CI's test job installs requirements.txt only; the heavy RL stack
+# (gymnasium/torch/sb3) lives in requirements-rl.txt and is absent there.
+# Skip this whole module when gymnasium is missing so collection doesn't
+# abort the entire pytest run.
+pytest.importorskip("gymnasium")
+
 import gymnasium as gym
 import numpy as np
 import pandas as pd
-import pytest
 
 from src.rl.env import ACTION_TO_ENGINE_SIZE, ENGINES, EnvConfig, TradingEnv
 
