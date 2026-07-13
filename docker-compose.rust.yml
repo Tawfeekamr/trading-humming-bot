@@ -63,7 +63,10 @@ services:
     image: ghcr.io/tawfeekamr/trading-signal-listener:latest
     container_name: trading-regime-pusher
     restart: unless-stopped
-    command: ["python", "-m", "src.ml.regime_pusher"]
+    # Override the image ENTRYPOINT (Dockerfile.hybrid sets
+    # `python -m src.run_signal_listener`); `command:` would only override CMD
+    # and the listener would still run.
+    entrypoint: ["python", "-m", "src.ml.regime_pusher"]
     depends_on:
       rust-bot:
         condition: service_healthy
