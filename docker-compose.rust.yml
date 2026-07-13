@@ -54,3 +54,28 @@ services:
       options:
         max-size: "50m"
         max-file: "3"
+
+  # ── Regime Pusher (RF regime classifier → POST /api/v1/regime) ──────────
+  # Reuses the signal-listener image (has sklearn + pandas_ta + requests).
+  # Keeps the Rust engine's regime cache live so grid/MR consume ML regime
+  # labels instead of falling back to None. Paper-gated, no torch.
+  regime-pusher:
+    image: ghcr.io/tawfeekamr/trading-signal-listener:latest
+    container_name: trading-regime-pusher
+    restart: unless-stopped
+    command: ["python", "-m", "src.ml.regime_pusher"]
+    depends_on:
+      rust-bot:
+        condition: service_healthy
+    environment:
+      - RUST_ENGINE_URL=http://rust-bot:3030
+      - REGIME_PAIRS=ETH-USDT,BNB-USDT,DOGE-USDT,XRP-USDT
+      - REGIME_INTERVAL_SEC=180
+      - MODEL_DIR=/app/models
+    volumes:
+      - ./models:/app/models:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"

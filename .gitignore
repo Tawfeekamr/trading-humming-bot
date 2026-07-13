@@ -19,6 +19,10 @@ trading-engine-core/data/
 backtest/data_cache/
 backtest/results/
 models/*.pkl
+# Exception: the reproducible regime classifiers the live regime-pusher ships.
+# Small (~0.5 MB each), versioned so EC2's deploy-time `git pull` delivers them
+# alongside the code (no SCP/S3 transfer needed; SSM-only host, no SSH key).
+!models/regime_*_clean.pkl
 models/rl/*.log
 # walk-forward per-slice research checkpoints (regenerable via the sweep)
 models/rl/_wf_*
