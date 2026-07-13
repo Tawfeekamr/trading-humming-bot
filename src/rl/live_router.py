@@ -163,11 +163,9 @@ def run_loop(
         bar_seconds: sleep between bars (default 3600 = 1h).
     """
     import time
-    from datetime import date, timedelta
 
     import requests
 
-    from src.rl.data import load_klines
     from src.rl.features import FEATURE_COLS, compute_features
     from src.rl.router import PPORouter
 
@@ -185,31 +183,40 @@ def run_loop(
     router = PPORouter(model_path)
 
     while True:
-        end = date.today()
-        start = end - timedelta(days=2)  # enough to warm up indicators
-        df = load_klines(pair, start, end)
-        feats = compute_features(df)[FEATURE_COLS]
-        row = feats.iloc[-1]
-
-        equity = _get_equity(rust_url)
-        obs = build_observation(
-            row,
-            {"equity": equity, "initial_equity": initial_capital},
-        )
-
-        action = router.predict(obs)
-        payload = decode_action(int(action))
-
         try:
-            requests.post(
-                f"{rust_url}/api/v1/routing",
-                json=payload,
-                timeout=5,
+            # Live 1h bars from the engine. Replaces load_klines(today-2d, today),
+            # which pulled Binance's delayed daily archive (1-2 day lag, no current
+            # day) and used a window below compute_features' ~50-bar warmup — so a
+            # live router could never build a valid feature row. The engine's bar
+            # cache holds 500 live 1h bars.
+            df = _fetch_live_klines(rust_url, pair)
+            feats = compute_features(df)[FEATURE_COLS]
+            if feats.empty:
+                raise RuntimeError("empty feature frame after warmup")
+            row = feats.iloc[-1]
+
+            equity = _get_equity(rust_url)
+            obs = build_observation(
+                row,
+                {"equity": equity, "initial_equity": initial_capital},
             )
-        except requests.RequestException:
-            # Network blip — log nothing here (no logger wired in Phase 1) and
-            # retry on the next bar. The end-to-end paper run is the validator.
-            pass
+
+            action = router.predict(obs)
+            payload = decode_action(int(action))
+
+            try:
+                requests.post(
+                    f"{rust_url}/api/v1/routing",
+                    json=payload,
+                    timeout=5,
+                )
+            except requests.RequestException:
+                # Network blip — retry on the next bar.
+                pass
+        except Exception as exc:  # never let one bad bar kill the sidecar
+            import sys
+
+            print(f"[live_router] cycle failed: {exc}", file=sys.stderr)
 
         time.sleep(bar_seconds)
 
@@ -227,3 +234,46 @@ def _get_equity(rust_url: str) -> float:
     r = requests.get(f"{rust_url}/api/v1/capital", timeout=5)
     r.raise_for_status()
     return float(r.json()["total_equity"])
+
+
+def _symbol_for_engine(pair: str) -> str:
+    """Normalize a pair id to the engine's bar-cache key form.
+
+    Accepts ``ETHUSDT``, ``ETH-USDT``, or ``ETH/USDT`` → ``ETH-USDT``
+    (the pair key the engine's ``state.bars`` cache and ``/api/v1/klines``
+    symbol param expect).
+    """
+    p = pair.replace("/", "-").upper()
+    if p.endswith("-USDT"):
+        return p
+    if p.endswith("USDT"):
+        return p[:-4] + "-USDT"
+    return p
+
+
+def _fetch_live_klines(rust_url: str, pair: str, limit: int = 500):
+    """Fetch recent 1h bars for ``pair`` from the engine's ``GET /api/v1/klines``.
+
+    Returns an OHLCV DataFrame indexed by UTC datetime — the same shape
+    ``compute_features`` consumes. ``limit`` defaults to the engine's
+    ``MAX_BARS_PER_PAIR`` (500), comfortably above the ~50-bar warmup.
+    Raises ``RuntimeError`` on an empty response so the caller can skip the
+    cycle rather than feed compute_features an empty frame.
+    """
+    import pandas as pd
+    import requests
+
+    symbol = _symbol_for_engine(pair)
+    r = requests.get(
+        f"{rust_url}/api/v1/klines",
+        params={"symbol": symbol, "interval": "1h", "limit": limit},
+        timeout=15,
+    )
+    r.raise_for_status()
+    bars = r.json()
+    if not bars:
+        raise RuntimeError(f"empty klines response for {pair}")
+    df = pd.DataFrame(bars)
+    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True, errors="coerce")
+    df = df.set_index("timestamp").sort_index()
+    return df[["open", "high", "low", "close", "volume"]]

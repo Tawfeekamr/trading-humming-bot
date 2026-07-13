@@ -24,7 +24,62 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.rl.live_router import build_observation, decode_action
+from src.rl.live_router import (
+    _fetch_live_klines,
+    _symbol_for_engine,
+    build_observation,
+    decode_action,
+)
+
+
+# --- Live data source (engine /api/v1/klines) — numpy/pytest only ----------
+
+
+def test_symbol_for_engine_normalizes_all_forms():
+    assert _symbol_for_engine("ETHUSDT") == "ETH-USDT"
+    assert _symbol_for_engine("ETH-USDT") == "ETH-USDT"
+    assert _symbol_for_engine("ETH/USDT") == "ETH-USDT"
+    assert _symbol_for_engine("BTCUSDT") == "BTC-USDT"
+
+
+def test_fetch_live_klines_normalizes_symbol_and_shape(monkeypatch):
+    import requests as _requests
+
+    captured = {}
+
+    class _Resp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return [{"open": 1.0, "high": 2.0, "low": 0.5, "close": 1.5,
+                     "volume": 10.0, "timestamp": 1780000000000}]
+
+    def _get(url, params=None, **kw):
+        captured["url"] = url
+        captured["params"] = params
+        return _Resp()
+
+    monkeypatch.setattr(_requests, "get", _get)
+    df = _fetch_live_klines("http://eng", "ETHUSDT")
+    assert captured["params"]["symbol"] == "ETH-USDT"  # normalized to engine key
+    assert captured["params"]["interval"] == "1h"
+    assert list(df.columns) == ["open", "high", "low", "close", "volume"]
+
+
+def test_fetch_live_klines_raises_on_empty(monkeypatch):
+    import requests as _requests
+
+    class _Resp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return []
+
+    monkeypatch.setattr(_requests, "get", lambda *a, **k: _Resp())
+    with pytest.raises(RuntimeError):
+        _fetch_live_klines("http://eng", "ETHUSDT")
 
 
 # --- Task 7: pure action decoder (numpy-only) ------------------------------
