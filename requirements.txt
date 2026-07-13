@@ -21,7 +21,10 @@ telethon>=1.37.0
 psutil==7.0.0
 
 # Machine Learning
-scikit-learn>=1.5.0
+# Pinned to the version the regime classifiers are trained with (conda 1.6.1)
+# so the loaded .pkl matches the runtime — avoids the InconsistentVersion warning
+# and guarantees prediction consistency (signal image + CI test env + training).
+scikit-learn==1.6.1
 
 # Backtesting
 vectorbt==1.0.0
