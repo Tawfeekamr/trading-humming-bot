@@ -2,7 +2,7 @@ use crate::config::TrendConfig;
 use crate::indicators::{Ema, Rsi, Atr, Adx, Choppiness, Macd, VolumeSma};
 use crate::models::bar::Bar;
 use crate::models::order::OrderSide;
-use crate::strategy::{Strategy, TickContext, StrategyStatus};
+use crate::strategy::{Strategy, TickContext, StrategyStatus, MarketRegime};
 // Journal removed — trades go to the unified trades.db via log_unified.
 use crate::connector::types::{OrderRequest, Fill, OrderTypeReq, TimeInForceReq};
 use crate::notifications::TelegramBot;
@@ -786,7 +786,19 @@ impl Strategy for TrendStrategy {
         // ghost positions/trades from historical bars — indicators still warm.
         // Skip when entries are suppressed (paused / force_flat) — the engine's
         // routing layer set this; exits above still ran, so open positions unwind.
-        if self.position.is_none() && !ctx.replay && !self.entries_suppressed {
+        // ML regime gate: skip NEW entries in Ranging/Danger at sufficient
+        // confidence. Entries only — the position-management path below this
+        // block continues to run (exits, trailing, TP ladder). regime=None
+        // (replay without --regime-file, or pre-ML) → TA decides, back-compat.
+        let entry_blocked_by_regime = self.config.regime_gate
+            && matches!(
+                ctx.regime,
+                Some(MarketRegime::Ranging) | Some(MarketRegime::Danger)
+            )
+            && ctx.regime_confidence >= self.config.min_regime_confidence;
+
+        if self.position.is_none() && !ctx.replay && !self.entries_suppressed
+            && !entry_blocked_by_regime {
             if self.should_activate(current_price) {
                 let side = entry_side_for(self.direction(current_price));
                 let stop_loss = self.calculate_stop_loss(current_price, side);
@@ -1349,6 +1361,13 @@ mod tests {
         c
     }
 
+    fn tick_at_regime(price: f64, regime: MarketRegime, conf: f64) -> TickContext {
+        let mut c = tick_at(price);
+        c.regime = Some(regime);
+        c.regime_confidence = conf;
+        c
+    }
+
     /// Strong smooth uptrend with entry gates lowered so should_activate fires.
     /// (We're testing the *replay* gate, not the entry conditions — so make
     /// entry deterministic.) Proves replay suppresses an entry live would take.
@@ -1588,6 +1607,91 @@ mod tests {
         paused.set_paused(false);
         let resumed_orders = run_tick(&mut paused, tick_at(last));
         assert!(is_entry(&resumed_orders), "after set_paused(false) entries resume");
+    }
+
+    // ── ML regime gate (entries only, never management) ──
+
+    #[test]
+    fn regime_gate_off_allows_entry_regardless_of_regime() {
+        let last = 100.0 * 1.005_f64.powi(259);
+        let is_entry = |o: &[OrderRequest]| o.iter().any(|x| !x.reduce_only);
+        let mut s = uptrend_strategy();
+        s.config.regime_gate = false;
+        let orders = run_tick(&mut s, tick_at_regime(last, MarketRegime::Ranging, 0.95));
+        assert!(is_entry(&orders), "gate OFF → entry taken even in high-conf Ranging");
+    }
+
+    #[test]
+    fn regime_gate_trending_allows_entry() {
+        let last = 100.0 * 1.005_f64.powi(259);
+        let is_entry = |o: &[OrderRequest]| o.iter().any(|x| !x.reduce_only);
+        let mut s = uptrend_strategy();
+        s.config.regime_gate = true;
+        let orders = run_tick(&mut s, tick_at_regime(last, MarketRegime::Trending, 0.9));
+        assert!(is_entry(&orders), "Trending is the trend-follower's regime → enter");
+    }
+
+    #[test]
+    fn regime_gate_ranging_high_conf_blocks_entry() {
+        let last = 100.0 * 1.005_f64.powi(259);
+        let is_entry = |o: &[OrderRequest]| o.iter().any(|x| !x.reduce_only);
+        let mut s = uptrend_strategy();
+        s.config.regime_gate = true;
+        s.config.min_regime_confidence = 0.55;
+        let orders = run_tick(&mut s, tick_at_regime(last, MarketRegime::Ranging, 0.8));
+        assert!(!is_entry(&orders), "high-conf Ranging must block new entry");
+    }
+
+    #[test]
+    fn regime_gate_ranging_low_conf_allows_entry() {
+        let last = 100.0 * 1.005_f64.powi(259);
+        let is_entry = |o: &[OrderRequest]| o.iter().any(|x| !x.reduce_only);
+        let mut s = uptrend_strategy();
+        s.config.regime_gate = true;
+        s.config.min_regime_confidence = 0.55;
+        let orders = run_tick(&mut s, tick_at_regime(last, MarketRegime::Ranging, 0.4));
+        assert!(is_entry(&orders), "low-conf Ranging falls back to TA → entry");
+    }
+
+    #[test]
+    fn regime_gate_danger_high_conf_blocks_entry() {
+        let last = 100.0 * 1.005_f64.powi(259);
+        let is_entry = |o: &[OrderRequest]| o.iter().any(|x| !x.reduce_only);
+        let mut s = uptrend_strategy();
+        s.config.regime_gate = true;
+        s.config.min_regime_confidence = 0.55;
+        let orders = run_tick(&mut s, tick_at_regime(last, MarketRegime::Danger, 0.7));
+        assert!(!is_entry(&orders), "high-conf Danger must block new entry");
+    }
+
+    #[test]
+    fn regime_gate_none_regime_allows_entry() {
+        let last = 100.0 * 1.005_f64.powi(259);
+        let is_entry = |o: &[OrderRequest]| o.iter().any(|x| !x.reduce_only);
+        let mut s = uptrend_strategy();
+        s.config.regime_gate = true;
+        let orders = run_tick(&mut s, tick_at(last));
+        assert!(is_entry(&orders), "regime=None → TA decides → entry (back-compat)");
+    }
+
+    #[test]
+    fn regime_gate_does_not_suppress_management_of_open_position() {
+        let last = 100.0 * 1.005_f64.powi(259);
+        let mut s = uptrend_strategy();
+        s.config.regime_gate = true;
+        s.config.min_regime_confidence = 0.55;
+        let stop = s.calculate_stop_loss(100.0, OrderSide::Buy);
+        s.position = Some(TrendPosition {
+            side: OrderSide::Buy, entry_price: 100.0, stop_loss: stop,
+            quantity: 2.0, remaining_qty: 2.0, trailing_stop: None,
+            highest_since_entry: 100.0, lowest_since_entry: 100.0, tp_levels: vec![],
+            entry_time: 1_700_000_000_000, restored: false, last_funding_time: 0,
+        });
+        let orders = run_tick(&mut s, tick_at_regime(last, MarketRegime::Ranging, 0.8));
+        assert!(orders.iter().all(|o| o.reduce_only),
+            "no new (non-reduce-only) entry while regime blocks");
+        assert!(s.position.is_some(),
+            "open position is not closed just because regime is Ranging");
     }
 
     /// C2: force_flat() on an open position emits a Market reduce-only close,
