@@ -182,6 +182,8 @@ impl TrendStrategy {
                 trade_shorts: config.trade_shorts,
                 perp_mark_source: config.perp_mark_source.clone(),
                 funding_accrual: config.funding_accrual,
+                regime_gate: config.regime_gate,
+                min_regime_confidence: config.min_regime_confidence,
             },
             ema_fast: Ema::new(config.ema_fast),
             ema_slow: Ema::new(config.ema_slow),
@@ -1311,6 +1313,7 @@ mod tests {
             volume_ratio_threshold: 1.2, entry_score_threshold: 5, rsi_long_max: 65.0,
             rsi_short_min: 35.0, atr_trailing_mult: 3.0, trade_shorts: false,
             perp_mark_source: None, funding_accrual: false,
+            regime_gate: false, min_regime_confidence: 0.55,
         }
     }
 

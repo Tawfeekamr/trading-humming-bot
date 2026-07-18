@@ -133,6 +133,11 @@ dashboard:
 # ── Trend Engine ──────────────────────────────────────────────
 trend:
   enabled: true
+  regime_gate: true             # ML regime gate: skip NEW entries when regime ∈ {Ranging, Danger}
+                                # at confidence ≥ min_regime_confidence. Entries only — open positions
+                                # keep being managed. Wired 2026-07-18 (was off; trend ignored regime
+                                # and lost -$1,099/14d on ETH whipsaw). See trend.rs on_tick.
+  min_regime_confidence: 0.55   # below this, don't trust the label → fall back to TA.
   capital: 25000                # trend's slice = capital.budgets.trend (risk-sizing reference)
   ema_fast: 30  # Was 30 — 30/40 too close, almost no crossovers; 12/40 gives proper signals
   ema_slow: 40

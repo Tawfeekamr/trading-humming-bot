@@ -262,6 +262,16 @@ pub struct TrendConfig {
     /// Accrue funding on open shorts every 8h (requires perp_mark_source).
     #[serde(default)]
     pub funding_accrual: bool,
+    /// ML regime gate: skip NEW entries when regime ∈ {Ranging, Danger} at
+    /// confidence ≥ min_regime_confidence. Entries only — open positions keep
+    /// being managed (TP/SL/trailing). Default false (back-compat).
+    #[serde(default)]
+    pub regime_gate: bool,
+    /// Minimum classifier confidence to trust a Ranging/Danger label and gate
+    /// the entry. Below this, fall back to TA (matches regime-pusher
+    /// "low-conf → TA-gated" philosophy). Default 0.55.
+    #[serde(default = "default_055")]
+    pub min_regime_confidence: f64,
 }
 
 fn default_10k() -> f64 { 10000.0 }
@@ -555,3 +565,33 @@ fn default_30() -> f64 { 30.0 }
 fn default_1() -> f64 { 1.0 }
 fn default_28() -> f64 { 28.0 }
 fn default_48_usize() -> usize { 48 }
+
+#[cfg(test)]
+mod regime_gate_config_tests {
+    use super::*;
+
+    #[derive(serde::Deserialize)]
+    struct Wrap {
+        trend: TrendConfig,
+    }
+
+    #[test]
+    fn trend_regime_gate_defaults_false_when_absent() {
+        let yaml = "trend:\n  ema_fast: 20\n";
+        let w: Wrap = serde_yaml::from_str(yaml).unwrap();
+        assert!(!w.trend.regime_gate, "regime_gate must default false");
+        assert!(
+            (w.trend.min_regime_confidence - 0.55).abs() < 1e-9,
+            "min_regime_confidence must default 0.55, got {}",
+            w.trend.min_regime_confidence
+        );
+    }
+
+    #[test]
+    fn trend_regime_gate_reads_true_when_set() {
+        let yaml = "trend:\n  ema_fast: 20\n  regime_gate: true\n  min_regime_confidence: 0.7\n";
+        let w: Wrap = serde_yaml::from_str(yaml).unwrap();
+        assert!(w.trend.regime_gate);
+        assert!((w.trend.min_regime_confidence - 0.7).abs() < 1e-9);
+    }
+}
