@@ -81,6 +81,16 @@ fn norm_pair(p: &str) -> String {
     p.to_uppercase().replace('-', "")
 }
 
+/// Normalize a Unix timestamp to milliseconds. Binance's data products are
+/// inconsistent: the public REST API and older binance.vision CSVs use
+/// milliseconds, while newer (2026+) binance.vision daily CSVs use microseconds.
+/// Any plausible timestamp (year < 5000) is < 1e14 in ms, so anything larger is
+/// treated as microseconds and divided by 1000.
+fn to_ms(ts: i64) -> i64 {
+    const MS_CEILING: i64 = 100_000_000_000_000; // 1e14
+    if ts > MS_CEILING { ts / 1000 } else { ts }
+}
+
 /// Per-pair regime label timeline for replay injection. Pairs normalize by
 /// uppercasing and stripping '-', so "ETHUSDT" (backtest symbol) and
 /// "ETH-USDT" (regime-pusher key) resolve to the same timeline.
@@ -97,7 +107,7 @@ impl RegimeTimeline {
             entries.sort_by_key(|e| e.ts);
             let v: Vec<(i64, i32, f64)> = entries
                 .into_iter()
-                .map(|e| (e.ts, e.regime, e.confidence))
+                .map(|e| (to_ms(e.ts), e.regime, e.confidence))
                 .collect();
             map.insert(norm_pair(&pair), v);
         }
@@ -111,11 +121,14 @@ impl RegimeTimeline {
 
     /// Most-recent label with ts ≤ ts_ms (regime persists until updated, like
     /// the live cache TTL). Returns None if no label is at-or-before ts_ms.
+    /// `ts_ms` may be in microseconds (newer binance.vision CSVs); it is
+    /// normalized to ms internally.
     pub fn get(&self, pair: &str, ts_ms: i64) -> Option<(i32, f64)> {
+        let q = to_ms(ts_ms);
         let v = self.map.get(&norm_pair(pair))?;
         v.iter()
             .rev()
-            .find(|(t, _, _)| *t <= ts_ms)
+            .find(|(t, _, _)| *t <= q)
             .map(|(_, r, c)| (*r, *c))
     }
 
@@ -567,5 +580,18 @@ mod regime_timeline_tests {
     fn empty_timeline_is_none() {
         let tl = RegimeTimeline::default();
         assert_eq!(tl.get("ETHUSDT", 1000), None);
+    }
+
+    #[test]
+    fn microsecond_query_matches_millisecond_labels() {
+        // Binance's newer (2026+) binance.vision CSVs emit open_time in microseconds
+        // while the REST API emits milliseconds. Labels (ms) must still resolve for a
+        // μs query at the same instant. 1_700_000_001_000 ms == 1_700_000_001_000_000 μs.
+        let json = r#"{"ETH-USDT": [{"ts": 1700000001000, "regime": 0, "confidence": 0.8}]}"#;
+        let tl = RegimeTimeline::from_json_str(json).unwrap();
+        // μs query at ts = label ts × 1000 → must still find the label.
+        assert_eq!(tl.get("ETHUSDT", 1_700_000_001_000_000), Some((0, 0.8)));
+        // μs query before the label → None.
+        assert_eq!(tl.get("ETHUSDT", 1_699_999_000_000_000), None);
     }
 }

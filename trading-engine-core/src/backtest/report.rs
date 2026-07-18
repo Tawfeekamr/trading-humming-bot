@@ -153,7 +153,7 @@ pub fn write_validation_report(
          {}\n\n\
          - IS→OOS Sharpe gap: **{:.2}** → {}\n\n\
          ## Fidelity gaps (apply to every metric above)\n\
-         - **regime=None** — grid/trend ML regime gate is OFF (optimistic; live uses ML regime).\n\
+         - **regime=None unless --regime-file** — grid/trend ML regime gate is OFF by default (optimistic; live uses ML regime). Supply `--regime-file` to inject per-bar regime labels.\n\
          - **perp-as-spot-proxy + flat funding** — trend-short MTM uses spot≈perp, funding accrual = 0 (trend shorts approximate).\n\
          - **MR excluded** — MR is tick-resolution (30s flush window); its faithful backtest is the separate `backtest/mean_reversion/` tick-replay, not this 1h harness.\n",
         symbol,
@@ -224,7 +224,7 @@ pub fn write_sweep_report(dir: &Path, symbol: &str, rep: &SweepResult) -> Result
          {}\n\n\
          ## Gate reasons\n{}\n\n\
          ## Fidelity gaps\n\
-         - regime=None (grid/trend ML gate off — optimistic).\n\
+         - regime=None unless --regime-file supplied (grid/trend ML gate off by default — optimistic).\n\
          - perp-as-spot-proxy + flat funding (trend-short MTM approximate).\n\
          - MR not swept (tick-resolution; separate tick-replay backtest).\n\
          - trade_journal OnceLock caches across sweep runs — no metric impact (Metrics come from in-memory P&L, not the DB).\n",

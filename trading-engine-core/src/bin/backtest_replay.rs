@@ -21,7 +21,8 @@
 //!     so the short-side MTM is approximate, not exact.
 //!   * `funding_rate = None` — flat-funding assumption (zero per-bar accrual).
 //!     Real per-roll funding history is deferred with the perp klines.
-//!   * `regime = None` in TickContext — replay does not synthesize ML regime.
+//!   * `regime = None` in TickContext unless `--regime-file <path>` is supplied,
+//!     in which case per-bar ML regime labels are injected (closes this gap).
 //!   * MR `bid_depth` is degenerate: replay synthesizes a mid-only book, so
 //!     depth is ~1 unit (faithful L2 history is out of scope).
 use std::path::Path;
