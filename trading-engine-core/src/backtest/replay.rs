@@ -31,7 +31,7 @@
 //! Market order from `on_fill` (which would same-bar fill and could cascade).
 use std::collections::HashMap;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::capital::CapitalManager;
 use crate::config::GridConfig;
@@ -39,7 +39,7 @@ use crate::connector::types::OrderBook;
 use crate::models::bar::Bar;
 use crate::notifications::TelegramBot;
 use crate::strategy::grid::GridStrategy;
-use crate::strategy::{Strategy, TickContext};
+use crate::strategy::{MarketRegime, Strategy, TickContext};
 
 use super::fills::FillSim;
 use super::perp::HistoricalPerpSource;
@@ -66,6 +66,66 @@ impl EngineKind {
             EngineKind::Trend => "trend",
             EngineKind::Swing => "swing",
             EngineKind::MeanReversion => "mean_reversion",
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct RegimeEntry {
+    ts: i64,
+    regime: i32,
+    confidence: f64,
+}
+
+fn norm_pair(p: &str) -> String {
+    p.to_uppercase().replace('-', "")
+}
+
+/// Per-pair regime label timeline for replay injection. Pairs normalize by
+/// uppercasing and stripping '-', so "ETHUSDT" (backtest symbol) and
+/// "ETH-USDT" (regime-pusher key) resolve to the same timeline.
+#[derive(Debug, Clone, Default)]
+pub struct RegimeTimeline {
+    map: HashMap<String, Vec<(i64, i32, f64)>>, // pair -> sorted (ts_ms, regime, confidence)
+}
+
+impl RegimeTimeline {
+    pub fn from_json_str(s: &str) -> anyhow::Result<Self> {
+        let raw: HashMap<String, Vec<RegimeEntry>> = serde_json::from_str(s)?;
+        let mut map = HashMap::new();
+        for (pair, mut entries) in raw {
+            entries.sort_by_key(|e| e.ts);
+            let v: Vec<(i64, i32, f64)> = entries
+                .into_iter()
+                .map(|e| (e.ts, e.regime, e.confidence))
+                .collect();
+            map.insert(norm_pair(&pair), v);
+        }
+        Ok(Self { map })
+    }
+
+    pub fn from_json_file(path: &std::path::Path) -> anyhow::Result<Self> {
+        let s = std::fs::read_to_string(path)?;
+        Self::from_json_str(&s)
+    }
+
+    /// Most-recent label with ts ≤ ts_ms (regime persists until updated, like
+    /// the live cache TTL). Returns None if no label is at-or-before ts_ms.
+    pub fn get(&self, pair: &str, ts_ms: i64) -> Option<(i32, f64)> {
+        let v = self.map.get(&norm_pair(pair))?;
+        v.iter()
+            .rev()
+            .find(|(t, _, _)| *t <= ts_ms)
+            .map(|(_, r, c)| (*r, *c))
+    }
+
+    /// Map a raw int label to MarketRegime (0=Ranging, 1=Trending, else Danger).
+    pub fn to_market_regime(label: Option<(i32, f64)>) -> (Option<MarketRegime>, f64) {
+        match label {
+            Some((0, c)) => (Some(MarketRegime::Ranging), c),
+            Some((1, c)) => (Some(MarketRegime::Trending), c),
+            Some((_, c)) => (Some(MarketRegime::Danger), c),
+            None => (None, 0.0),
         }
     }
 }
@@ -113,6 +173,10 @@ pub struct ReplayConfig {
     /// `on_fill` returns empty (exits decided in `on_tick`), so the run_loop
     /// `on_fill`-chaining fix (Task 4) is a no-op for it. No perp needed.
     pub mean_reversion: crate::config::MeanReversionConfig,
+    /// Optional ML regime timeline. When set, each bar's TickContext gets the
+    /// regime label active at bar.timestamp (most-recent at-or-before). None
+    /// → regime=None (current back-compat behavior).
+    pub regime: Option<RegimeTimeline>,
 }
 
 #[derive(Debug)]
@@ -176,6 +240,7 @@ pub async fn run_engine_on_bars(
                 rc.warmup_bars,
                 rc.bar_hours,
                 None,
+                rc.regime.as_ref(),
             )
             .await?)
         }
@@ -210,6 +275,7 @@ pub async fn run_engine_on_bars(
                 rc.warmup_bars,
                 rc.bar_hours,
                 perp.as_deref(),
+                rc.regime.as_ref(),
             )
             .await?)
         }
@@ -238,6 +304,7 @@ pub async fn run_engine_on_bars(
                 rc.warmup_bars,
                 rc.bar_hours,
                 None,
+                rc.regime.as_ref(),
             )
             .await?)
         }
@@ -265,6 +332,7 @@ pub async fn run_engine_on_bars(
                 rc.warmup_bars,
                 rc.bar_hours,
                 None,
+                rc.regime.as_ref(),
             )
             .await?)
         }
@@ -317,6 +385,7 @@ pub async fn run_loop(
     warmup_bars: usize,
     _bar_hours: f64,
     perp: Option<&HistoricalPerpSource>,
+    regime: Option<&RegimeTimeline>,
 ) -> anyhow::Result<RunResult> {
     let mut equity_curve = Vec::with_capacity(bars.len());
     let mut fills_buf = Vec::new();
@@ -365,7 +434,8 @@ pub async fn run_loop(
         debug_assert!(reactive.is_empty(), "on_fill returned a Market order — same-bar cascade not supported");
 
         // 2. Build context and run the engine for this bar.
-        let ctx = build_ctx_from(symbol_of(strategy), bar, &bars[..i], capital, /*replay*/ i < warmup_bars);
+        let regime_label = regime.and_then(|t| t.get(symbol_of(strategy), bar.timestamp));
+        let ctx = build_ctx_from(symbol_of(strategy), bar, &bars[..i], capital, /*replay*/ i < warmup_bars, regime_label);
         let new_orders = strategy.on_tick(&ctx).await?;
 
         // 3. Submit. Market fills now (at bar.close ± slippage); limit/stop rest.
@@ -432,6 +502,7 @@ fn build_ctx_from(
     prior: &[Bar],
     capital: &CapitalManager,
     replay: bool,
+    regime: Option<(i32, f64)>,
 ) -> TickContext {
     let recent: Vec<Bar> = prior.iter().rev().take(200).cloned().rev().collect();
     let ob = if replay {
@@ -453,15 +524,48 @@ fn build_ctx_from(
     };
     let mut balances = HashMap::new();
     balances.insert("USDT".to_string(), 1e9);
+    let (regime, regime_confidence) = RegimeTimeline::to_market_regime(regime);
     TickContext {
         order_book: ob,
         recent_bars: recent,
         balances,
         open_orders: vec![],
-        regime: None,
-        regime_confidence: 0.0,
+        regime,
+        regime_confidence,
         timestamp: bar.timestamp,
         capital: Some(capital.clone()),
         replay,
+    }
+}
+
+#[cfg(test)]
+mod regime_timeline_tests {
+    use super::RegimeTimeline;
+
+    #[test]
+    fn get_returns_most_recent_label_at_or_before_ts() {
+        // Pair keys normalize: "ETHUSDT" and "ETH-USDT" resolve to the same timeline.
+        let json = r#"{"ETH-USDT": [
+            {"ts": 1000, "regime": 1, "confidence": 0.6},
+            {"ts": 2000, "regime": 0, "confidence": 0.8},
+            {"ts": 3000, "regime": 0, "confidence": 0.7}
+        ]}"#;
+        let tl = RegimeTimeline::from_json_str(json).unwrap();
+        // Before first label → None
+        assert_eq!(tl.get("ETHUSDT", 999), None);
+        // Exactly at a label → that label
+        assert_eq!(tl.get("ETHUSDT", 2000), Some((0, 0.8)));
+        // Between labels → most recent at-or-before
+        assert_eq!(tl.get("ETH-USDT", 2500), Some((0, 0.8)));
+        // After last label → last label (persists until updated, like live TTL)
+        assert_eq!(tl.get("ETHUSDT", 9999), Some((0, 0.7)));
+        // Unknown pair → None
+        assert_eq!(tl.get("BTCUSDT", 2000), None);
+    }
+
+    #[test]
+    fn empty_timeline_is_none() {
+        let tl = RegimeTimeline::default();
+        assert_eq!(tl.get("ETHUSDT", 1000), None);
     }
 }

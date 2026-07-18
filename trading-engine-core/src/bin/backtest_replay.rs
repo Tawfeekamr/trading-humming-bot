@@ -54,6 +54,9 @@ async fn main() -> anyhow::Result<()> {
     let mut cfg_path: String = "config/strategy.yaml".into();
     let mut validate = false;
     let mut sweep = false;
+    let mut regime_file: Option<String> = None;
+    let mut start_override: Option<String> = None;
+    let mut end_override: Option<String> = None;
 
     let mut args = std::env::args().skip(1);
     let mut positional_idx = 0;
@@ -72,6 +75,21 @@ async fn main() -> anyhow::Result<()> {
             cfg_path = args
                 .next()
                 .ok_or_else(|| anyhow::anyhow!("--config requires a value"))?;
+        } else if a == "--regime-file" {
+            regime_file = Some(
+                args.next()
+                    .ok_or_else(|| anyhow::anyhow!("--regime-file requires a value"))?,
+            );
+        } else if a == "--start" {
+            start_override = Some(
+                args.next()
+                    .ok_or_else(|| anyhow::anyhow!("--start requires a value (YYYY-MM-DD)"))?,
+            );
+        } else if a == "--end" {
+            end_override = Some(
+                args.next()
+                    .ok_or_else(|| anyhow::anyhow!("--end requires a value (YYYY-MM-DD)"))?,
+            );
         } else if a == "--validate" {
             validate = true;
         } else if a == "--sweep" {
@@ -104,8 +122,18 @@ async fn main() -> anyhow::Result<()> {
 
     // ---- Load config + bars ----
     let cfg = AppConfig::load(&cfg_path)?;
-    let end = chrono::Utc::now().date_naive();
-    let start = end - chrono::Duration::days(30 * months as i64);
+    let parse_day = |s: &str| -> anyhow::Result<chrono::NaiveDate> {
+        chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
+            .map_err(|e| anyhow::anyhow!("bad date '{}': {}", s, e))
+    };
+    let end = match &end_override {
+        Some(s) => parse_day(s)?,
+        None => chrono::Utc::now().date_naive(),
+    };
+    let start = match &start_override {
+        Some(s) => parse_day(s)?,
+        None => end - chrono::Duration::days(30 * months as i64),
+    };
     println!(
         "Loading {} 1h bars {} → {} (engine={:?}) ...",
         pair, start, end, kind
@@ -118,6 +146,19 @@ async fn main() -> anyhow::Result<()> {
         tokio::task::spawn_blocking(move || bars::load_bars(&pair_for_load, start, end))
             .await??;
     println!("{} bars loaded", bars.len());
+
+    // Optional ML regime timeline: inject per-bar regime labels into the
+    // replay (closes the "regime=None" fidelity gap). None → back-compat.
+    let regime = match &regime_file {
+        Some(p) => {
+            let tl = trading_engine_core::backtest::replay::RegimeTimeline::from_json_file(
+                std::path::Path::new(p),
+            )?;
+            println!("Loaded regime timeline from {}", p);
+            Some(tl)
+        }
+        None => None,
+    };
 
     // ---- Build ReplayConfig ----
     // tick/step: prefer the configured pair entry; fall back to first pair
@@ -163,6 +204,7 @@ async fn main() -> anyhow::Result<()> {
         funding_rate: None,
         swing: cfg.swing.clone(),
         mean_reversion: cfg.mean_reversion.clone(),
+        regime,
     };
 
     // ---- Run + report ----
