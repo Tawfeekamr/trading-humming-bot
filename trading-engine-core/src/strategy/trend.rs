@@ -184,6 +184,7 @@ impl TrendStrategy {
                 funding_accrual: config.funding_accrual,
                 regime_gate: config.regime_gate,
                 min_regime_confidence: config.min_regime_confidence,
+                enabled_pairs: config.enabled_pairs.clone(),
             },
             ema_fast: Ema::new(config.ema_fast),
             ema_slow: Ema::new(config.ema_slow),
@@ -1326,6 +1327,7 @@ mod tests {
             rsi_short_min: 35.0, atr_trailing_mult: 3.0, trade_shorts: false,
             perp_mark_source: None, funding_accrual: false,
             regime_gate: false, min_regime_confidence: 0.55,
+            enabled_pairs: Vec::new(),
         }
     }
 

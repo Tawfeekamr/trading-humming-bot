@@ -124,16 +124,25 @@ async fn async_main() -> Result<()> {
         );
         engine.add_strategy(Box::new(grid));
 
-        // Trend strategy per pair
-        let mut trend = trading_engine_core::strategy::trend::TrendStrategy::new(
-            symbol,
-            &trend_cfg,
-            telegram.clone_for_signal(),
-        );
-        if let Some(p) = &perp_source {
-            trend = trend.with_perp(p.clone());
+        // Trend strategy per pair — only on configured pairs (empty = all).
+        // Live P&L showed trend's edge is coin-specific (BNB +$569, DOGE +$43,
+        // XRP −$25, ETH −$1,243 all-time), so ETH is excluded here — trend
+        // destroys money on ETH regardless of regime (whipsaw), but grid is
+        // fine on ETH, so this filter is trend-only (mirrors swing's gate).
+        let trend_sym_norm = symbol.replace('-', "");
+        let trend_allowed = trend_cfg.enabled_pairs.is_empty()
+            || trend_cfg.enabled_pairs.iter().any(|p| p.replace('-', "") == trend_sym_norm);
+        if trend_allowed {
+            let mut trend = trading_engine_core::strategy::trend::TrendStrategy::new(
+                symbol,
+                &trend_cfg,
+                telegram.clone_for_signal(),
+            );
+            if let Some(p) = &perp_source {
+                trend = trend.with_perp(p.clone());
+            }
+            engine.add_strategy(Box::new(trend));
         }
-        engine.add_strategy(Box::new(trend));
 
         // Mean Reversion strategy per pair — gated by mean_reversion.enabled
         // (grid/trend have no enabled flag and always run; MR is the only one

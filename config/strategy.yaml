@@ -138,6 +138,10 @@ trend:
                                 # keep being managed. Wired 2026-07-18 (was off; trend ignored regime
                                 # and lost -$1,099/14d on ETH whipsaw). See trend.rs on_tick.
   min_regime_confidence: 0.55   # below this, don't trust the label → fall back to TA.
+  enabled_pairs: ["DOGE-USDT", "BTC-USDT", "BNB-USDT", "XRP-USDT"]  # trend-only pair
+                                # filter (empty = all). ETH EXCLUDED: trend lost −$1,243
+                                # all-time on ETH (whipsaw) while BNB made +$569 — trend's
+                                # edge is coin-specific. Grid still trades ETH (fine there).
   capital: 25000                # trend's slice = capital.budgets.trend (risk-sizing reference)
   ema_fast: 30  # Was 30 — 30/40 too close, almost no crossovers; 12/40 gives proper signals
   ema_slow: 40

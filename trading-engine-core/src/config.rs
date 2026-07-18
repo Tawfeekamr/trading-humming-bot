@@ -272,6 +272,12 @@ pub struct TrendConfig {
     /// "low-conf → TA-gated" philosophy). Default 0.55.
     #[serde(default = "default_055")]
     pub min_regime_confidence: f64,
+    /// Pairs the trend engine is allowed to trade. Empty = all configured
+    /// pairs (back-compat). Used to exclude coins where trend has no edge
+    /// (e.g. ETH lost −$1,243 all-time while BNB made +$569 — trend is
+    /// coin-specific, not regime-fixable). Mirrors swing's enabled_pairs.
+    #[serde(default)]
+    pub enabled_pairs: Vec<String>,
 }
 
 fn default_10k() -> f64 { 10000.0 }
@@ -593,5 +599,16 @@ mod regime_gate_config_tests {
         let w: Wrap = serde_yaml::from_str(yaml).unwrap();
         assert!(w.trend.regime_gate);
         assert!((w.trend.min_regime_confidence - 0.7).abs() < 1e-9);
+    }
+
+    #[test]
+    fn trend_enabled_pairs_defaults_empty_and_reads_list() {
+        let yaml_absent = "trend:\n  ema_fast: 20\n";
+        let w: Wrap = serde_yaml::from_str(yaml_absent).unwrap();
+        assert!(w.trend.enabled_pairs.is_empty(), "enabled_pairs must default empty (= all pairs)");
+
+        let yaml_set = "trend:\n  ema_fast: 20\n  enabled_pairs: [\"BNB-USDT\", \"DOGE-USDT\"]\n";
+        let w: Wrap = serde_yaml::from_str(yaml_set).unwrap();
+        assert_eq!(w.trend.enabled_pairs, vec!["BNB-USDT".to_string(), "DOGE-USDT".to_string()]);
     }
 }
