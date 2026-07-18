@@ -36,6 +36,7 @@ fn default_trend_config() -> TrendConfig {
         trade_shorts: false,
         perp_mark_source: None,
         funding_accrual: false,
+        ..Default::default()
     }
 }
 

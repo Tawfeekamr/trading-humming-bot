@@ -42,6 +42,7 @@ fn rc() -> ReplayConfig {
         taker_fee_bps: 10.0,
         maker_fee_bps: 10.0,
         slippage_bps: 0.0,
+        regime: None,
     }
 }
 

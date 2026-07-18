@@ -45,6 +45,7 @@ fn cfg() -> ReplayConfig {
         funding_rate: None,
         swing: None,
         mean_reversion: MeanReversionConfig::default(),
+        regime: None,
     }
 }
 
@@ -149,6 +150,7 @@ async fn trend_long_runs_on_uptrend() {
         funding_rate: None,
         swing: None,
         mean_reversion: app_cfg.mean_reversion.clone(),
+        regime: None,
     };
     let bars = trending_bars(true, 400);
     let res = run_engine_on_bars(EngineKind::Trend, &rc, bars)
@@ -205,6 +207,7 @@ async fn swing_runs_on_synthetic_range() {
         funding_rate: None,
         swing: app_cfg.swing.clone(),
         mean_reversion: app_cfg.mean_reversion.clone(),
+        regime: None,
     };
     let bars = ranging_bars(300);
     let res = run_engine_on_bars(EngineKind::Swing, &rc, bars)
@@ -348,6 +351,7 @@ async fn on_fill_returned_orders_are_submitted_not_discarded() {
         /*warmup_bars*/ 5,
         /*bar_hours*/ 1.0,
         /*perp*/ None,
+        /*regime*/ None,
     )
     .await
     .expect("run_loop must complete");
@@ -442,6 +446,7 @@ async fn mr_runs_on_synthetic_reverting_series() {
         funding_rate: None,
         swing: app_cfg.swing.clone(),
         mean_reversion: app_cfg.mean_reversion.clone(),
+        regime: None,
     };
     let bars = reverting_bars(300);
     let res = run_engine_on_bars(EngineKind::MeanReversion, &rc, bars)

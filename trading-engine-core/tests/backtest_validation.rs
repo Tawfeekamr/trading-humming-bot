@@ -19,6 +19,7 @@ fn rc_for(grid_cfg: trading_engine_core::config::GridConfig) -> ReplayConfig {
         perp_bars: None, funding_rate: None,
         tick_size: 0.01, step_size: 0.0001,
         taker_fee_bps: 10.0, maker_fee_bps: 10.0, slippage_bps: 0.0,
+        regime: None,
     }
 }
 
