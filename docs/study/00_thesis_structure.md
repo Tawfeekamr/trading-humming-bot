@@ -1,7 +1,7 @@
 # Thesis Structure and Writing Guide
 
 ## Project Title
-**Machine Learning Regime Dynamics in Multi-Asset Execution: A Hybrid Algorithmic Trading Framework**
+**Machine Learning Regime Dynamics in Multi-Asset Execution: Benchmarking Supervised and Reinforcement Learning Policies**
 
 ## Purpose of this Directory
 This directory contains the foundational structure and outlines for your Master's degree thesis/project report. Each file represents a core chapter or section of a standard academic thesis in Computer Science or Financial Engineering.

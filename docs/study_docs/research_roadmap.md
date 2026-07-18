@@ -1,6 +1,6 @@
 # Research Roadmap: Master's Degree Thesis
 
-**Thesis Title:** Machine Learning Regime Dynamics in Multi-Asset Execution: A Hybrid Algorithmic Trading Framework
+**Thesis Title:** Machine Learning Regime Dynamics in Multi-Asset Execution: Benchmarking Supervised and Reinforcement Learning Policies
 
 This document outlines the step-by-step process to transition your existing `trading-humming-bot` project into a formal Master's degree research thesis. 
 

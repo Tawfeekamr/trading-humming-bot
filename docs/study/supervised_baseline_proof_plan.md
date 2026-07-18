@@ -1,6 +1,6 @@
 # Supervised Baseline Proof Plan & Results-Chapter Outline
 
-**Thesis title:** *Machine Learning Regime Dynamics in Multi-Asset Trading: Reinforcement Learning versus Supervised Regime-Switching Policies*
+**Thesis title:** *Machine Learning Regime Dynamics in Multi-Asset Execution: Benchmarking Supervised and Reinforcement Learning Policies*
 
 **Purpose.** Before any RL, establish that the supervised regime-switching router's results are *real* — not an overfit backtest artifact. This is both the scientifically correct ordering and the spec's Phase-0 gate. This document is the proof pipeline **as a checklist**, and it doubles as the **Results-chapter outline**.
 

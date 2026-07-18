@@ -1,6 +1,6 @@
 # Design Spec — Reinforcement Learning Execution Agent
 
-**Thesis title:** *Machine Learning Regime Dynamics in Crypto Execution: Evaluating Supervised and Reinforcement Learning Active Policies Against Passive Benchmarks*
+**Thesis title:** *Machine Learning Regime Dynamics in Multi-Asset Execution: Benchmarking Supervised and Reinforcement Learning Policies*
 
 **Date:** 2026-06-18
 **Status:** Design — pending user review

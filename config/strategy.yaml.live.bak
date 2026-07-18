@@ -1,0 +1,262 @@
+# ════════════════════════════════════════════════════════════════════
+#  TA-Enhanced Multi-Pair Grid Bot — Strategy Configuration
+#  All non-secret settings live here. Loaded by the strategy script.
+# ════════════════════════════════════════════════════════════════════
+
+# ── Pairs & Exchange ─────────────────────────────────────────────
+pairs:
+  - symbol: "DOGE-USDT"
+    step_size: 1
+    tick_size: 0.00001
+    enabled: true
+  - symbol: "ETH-USDT"
+    step_size: 0.0001
+    tick_size: 0.01
+    enabled: true
+  - symbol: "BTC-USDT"
+    step_size: 0.00001
+    tick_size: 0.01
+    enabled: false
+  - symbol: "BNB-USDT"
+    step_size: 0.001
+    tick_size: 0.01
+    enabled: true
+  - symbol: "XRP-USDT"
+    step_size: 0.1
+    tick_size: 0.0001
+    enabled: true
+
+exchange:
+  name: "binance"
+  api_key_env: "BINANCE_TESTNET_API_KEY"
+  api_secret_env: "BINANCE_TESTNET_API_SECRET"
+  testnet: true
+timeframe: "1h"
+
+# ── Account Capital & Per-Strategy Budgets ────────────────────────
+# account_usdt seeds the paper balance (decoupled from any one strategy).
+# budgets cap each strategy's CUMULATIVE deployed capital via CapitalManager, so
+# no single strategy can monopolize the shared USDT pool (grid was deploying 48%
+# of equity and starving MR to 0-qty). Strategies not listed are uncapped. The
+# sum of budgets may exceed deployable (account − reserve); the free-pool check
+# still bounds total deployment, budgets bound each individual strategy.
+capital:
+  account_usdt: 100000            # paper account size (was seeded from grid.capital_usdt)
+  reserve_limit_pct: 20.0         # keep 20% of equity in USDT
+  budgets:
+    grid: 40000                   # was monopolizing; capped at 40% of account
+    trend: 25000
+    swing: 15000
+    mean_reversion: 20000         # was starved to 0 — now has a real slice
+
+# ── Paper Fill Realism ─────────────────────────────────────────────
+# Adverse slippage + tiered maker/taker fees applied to paper taker fills
+# (Market, StopMarket). Maker limits fill at their resting price (no slippage).
+# Defaults below preserve the original flat-0.1%-fee, zero-slippage behavior;
+# flip slippage_bps to ~8 and the fees to ~5/2 for realistic USDT-M modeling.
+paper:
+  slippage_bps: 0       # 0 preserves old behavior; ~8 for realistic
+  taker_fee_bps: 10     # 0.1% (current). Realistic USDT-M taker ~5
+  maker_fee_bps: 10     # 0.1% (current). Realistic USDT-M maker ~2
+
+# ── Grid Parameters ───────────────────────────────────────────────
+grid:
+  levels: 5                   # Claude: 5 is fine — activation logic matters more than count
+  capital_usdt: 40000         # grid's slice = capital.budgets.grid (layout budget + request desire)
+  min_usdt_reserve: 100       # Always keep this in reserve
+  order_refresh_time: 60      # Seconds between order refresh
+  # Regime gate thresholds (tuned for current market conditions)
+  adx_range_max: 25.0         # ADX below this = no strong trend (was 22, widened)
+  chop_range_min: 50.0        # Choppiness above this = ranging (was 55, lowered)
+  natr_floor: 0.005           # Min normalized ATR for grid to capture profit
+  natr_ceil: 0.04             # Max normalized ATR — above this, risk too high
+  fill_cooldown_secs: 60      # Per-level fill cooldown (prevents churn loop)
+  ml_trending_block_threshold: 0.75  # Block grid when ML Trending confidence >= this (was 0.55)
+  ml_danger_block_threshold: 0.55    # Block grid when ML Danger confidence >= this
+  max_inventory_pct: 60              # Stop new BUYS when inventory notional >= this % of granted capital
+
+# ── Indicator Settings ────────────────────────────────────────────
+indicators:
+  bollinger:
+    period: 15  # Standard 20 — reverted from 15 (was swept on ETH only)
+    std_dev: 2.0
+
+  rsi:
+    period: 14
+    oversold: 35  # Standard 30
+    overbought: 70            # Grid pauses above this
+
+  ema:
+    period: 200               # Trend filter: only run grid above EMA200
+
+  atr:
+    period: 14
+    spacing_multiplier: 1.5   # Grid spacing = ATR × this value
+
+# ── Grid State Rules ──────────────────────────────────────────────
+rules:
+  activate_conditions:
+    - "price > ema_200"
+    - "rsi < 65"
+  pause_conditions:
+    - "price < ema_200"
+    - "rsi > 70"
+  reactivate_conditions:
+    - "rsi < 35"
+    - "price near lower_bb"
+
+# ── Risk Management ───────────────────────────────────────────────
+# Portfolio heat math: 2 positions × 2% risk = 4% max concurrent exposure
+# This is safely below the 5% daily loss limit so all stops can execute cleanly
+risk:
+  max_drawdown_pct: 10        # Bot halts if portfolio drops this % from peak
+  daily_loss_limit_pct: 5     # Circuit breaker if -5% in 24h (> 4% heat = safe)
+  max_base_exposure_pct: 80    # Never deploy more than 80% capital in base asset
+
+# ── Dashboard ─────────────────────────────────────────────────────
+dashboard:
+  port: 8501
+
+# ── Trend Engine ──────────────────────────────────────────────
+trend:
+  enabled: true
+  capital: 25000                # trend's slice = capital.budgets.trend (risk-sizing reference)
+  ema_fast: 30  # Was 30 — 30/40 too close, almost no crossovers; 12/40 gives proper signals
+  ema_slow: 40
+  ema_trend: 200
+  rsi_period: 14
+  rsi_long_max: 65              # Explicit — replaces confusing rsi_max (which was 60)
+  rsi_short_min: 35
+  trade_shorts: true            # Short trades on Direction::Down (implemented 2026-06-30).
+                               # NOTE: engine is SPOT — paper sim shorts via naked balance,
+                               # which is NOT realizable on live Binance spot. See memory
+                               # trend-shorts caveat; flip to false to revert to long-only.
+  perp_mark_source: gateio_usdt_perp  # Mark open shorts against the Gate.io perp feed so
+                                      # short MTM/triggers/exits reflect the perpetual, not spot.
+  funding_accrual: true         # Accrue perp funding on open shorts every 8h (positive rate
+                                # → short pays). Makes paper shorts honest about carry cost.
+  min_signal_score: 3
+  confirmation_ticks: 1
+  risk_per_trade_pct: 1.5        # Was 2.0 — lowered after 2026-06-30 -$855 ETH long loss.
+  max_position_pct: 15.0        # Was 40 — 40% let a single ETH position hit ~$8.4k and a
+                                # 10% crash gap cost -$855. 15% caps notional at ~$3.75k
+                                # so a worst-case 10% gap <= ~$375 loss per trade.
+  max_positions: 2
+  max_total_positions: 2        # Claude: 3×2%=6% > 5% daily limit — reduced to 2
+  exit_signal_threshold: 2      # Close position when signal score drops below this
+  entry_score_threshold: 4      # Was 5 — lowered to allow entries with moderate signals
+  trailing_stop_atr_mult: 2.5   # ATR-based Chandelier Exit
+  trailing_activation_pct: 3.0  # Claude: must be > trail distance to avoid immediate stop-out
+  rr_ratio: 2.0
+  sl_buffer_pct: 0.2
+  max_drawdown_pct: 10.0
+  daily_loss_limit_pct: 5.0
+  timeframe: "1h"
+  # TP scaling: TP1=1R close 33%, TP2=1.5R close 50% remaining, TP3=2R close 80% (10% runner)
+  runner_pct: 10                # Gemini: leave 10% runner after final TP, trail closes it
+
+# ── Fee Optimization ───────────────────────────────────────────
+fee_optimization:
+  bnb_target_usdt: 20         # Target BNB balance in USDT
+  bnb_min_usdt: 10            # Buy BNB when balance drops below this
+  bnb_max_usdt: 50            # Sell excess BNB when above this
+  use_limit_maker: true       # Use LIMIT_MAKER (post-only) for all orders
+
+# ── Signal Copy Engine ──────────────────────────────────────────
+signal_copy:
+  enabled: true                     # Signal Copy Engine active
+  audit_mode: false                 # Execute trades (paper money on testnet)
+  exchange: "gate_io_paper_trade"   # Dedicated exchange for signal copy (3000+ tokens)
+  ai_model: "deepseek-chat"          # DeepSeek model for signal parsing
+
+  # Position management
+  max_positions: 5                  # Max concurrent signal positions (was 3; raised 2026-06-14)
+  per_trade_risk_pct: 3.0           # Risk per trade (% of signal budget)
+  max_position_pct: 25              # Max notional per signal (% of budget); risk-based sizing deploys up to this on favorable R:R
+  capital_pct: 100.0                # % of total capital for signal trades
+  max_capital_usdt: 10000           # Claude: keep equal 10K until out-of-sample evidence
+  min_rr_ratio: 1.0                 # Minimum risk:reward (vs TP3)
+  max_sl_distance_pct: 10.0         # Max stop-loss distance from entry (%)
+  default_sl_atr_multiplier: 2.0   # Default SL = entry ± ATR × this (when signal has no SL)
+  max_entry_zone_pct: 3.0           # Max entry zone width (%)
+  min_quality_score: 6              # DeepSeek: 6+, allow signals with solid structure
+
+  # TP scaling
+  tp1_close_pct: 33                 # Close 33% at TP1, move SL to breakeven
+  tp2_close_pct: 50                 # Close 50% of remaining at TP2, move SL to TP1
+
+  # Risk controls
+  daily_loss_limit_pct: 5.0         # Halt after losing this % of signal capital
+  max_trades_per_day: 10            # Maximum signal trades per day
+  cooldown_minutes: 5               # Wait between trades
+  use_btc_correlation_gate: false   # Pause when BTC regime is DANGER (disabled for testing)
+  blacklisted_pairs: []             # Pairs to never trade from signals
+
+  # Telethon
+  session_name: "signal_listener"   # Session file name (saved in data/)
+
+# ── Mean Reversion (retuned + enabled 2026-06-14) ──────────────────
+mean_reversion:
+  enabled: false                    # Disabled 2026-07-02: validated NO-EDGE (-$170 / 41 trades; avg loss 2.8× avg win = negative EV). Code retained.
+  capital: 1000                     # per-entry notional base (was hardcoded 100); cumulative ≤ budgets.mean_reversion (20000)
+
+# ── Reversal Swing (paper only; ETH-only after corrected backtest) ───
+# The original "backtest GO" was read off a BROKEN sweep (every cell netted $0;
+# PR #38 fixed it). The corrected sweep shows the strategy LOSES on 2025-26 data.
+# PR #39 retunes (score 2→3, TP1 1.5R) — cuts the loss ~75% and flips ETH's recent
+# (OOS) period positive, but full-period stays negative; edge is marginal.
+# ETH-only + wide stop = the least-bad config (BNB/DOGE/XRP lose full-period; ETH
+# is the only pair with a positive OOS cell). Runs as 1h-LTF / 4h-HTF — the prod
+# feed is 1h, NOT the 5m/1h that was backtested, so RE-RUN the sweep on 1h before
+# live. Caveat: live uses Market entry (= sweep Mode A → ~breakeven OOS); the
+# positive OOS needs maker entries (Mode B), not yet wired. Capital modest for paper.
+swing:
+  enabled: true
+  enabled_pairs: ["ETH-USDT"]  # ETH-only: corrected sweep (#38/#39) — BNB/DOGE/XRP lose full-period
+  runner_exit: "band_or_chandelier"   # serde rename_all=snake_case on RunnerExitMode
+  htf_period: "4h"                  # aggregate the 1h feed → 4h regime/band
+  ltf_period: "1h"                  # LTF = the global feed
+  donchian_period: 20
+  band_atr_mult: 1.5              # Widened from 0.5: on the deployed 1h/4h feed,
+                                  # 0.5×ATR(1h) was a razor-thin zone (~0.5% above
+                                  # the 4h Donchian low) that 1h closes almost never
+                                  # landed in, so swing never entered even at valid
+                                  # range-low setups (BNB missed by $0.17). 1.5×ATR
+                                  # (~1.5% above the low) still means "buy the range
+                                  # low" but is attainable. Re-backtest before live.
+  rsi_period: 14
+  rsi_oversold: 30.0
+  volume_multiplier: 1.5
+  volume_avg_period: 20
+  atr_period: 14
+  atr_stop_mult: 2.5                # wide stop: retuned sweep (#39) least-bad region
+  maker_entry: false               # false = Market entry (today's behavior). true =
+                                  # rest a LIMIT_MAKER buy at the decision price; if it
+                                  # doesn't fill within entry_timeout_bars, cancel it.
+                                  # The retuned sweep's positive OOS cell was maker-entry;
+                                  # paper-validatable now (live resting orders need the
+                                  # user-data-stream, not yet wired).
+  entry_timeout_bars: 2            # LTF bars a maker entry may rest before cancel.
+  min_rr: 2.0
+  min_score: 2                     # Braver 2026-07-02: default 3 → 2 (2-of-5 confirmations). Reversible.
+  risk_per_trade_pct: 1.0
+  adx_range_entry: 25.0            # Braver 2026-07-02: 22 → 25 (enter mild-trend/range; was too strict → idle). Still < adx_trend_exit (28).
+  adx_trend_exit: 28.0
+  capital: 15000                # swing's slice = capital.budgets.swing
+
+# ── Signal Copy (Futures mode) ──────────────────────────────────────
+# Activated by SIGNAL_MODE=futures in the signal container. Merged over the
+# spot signal_copy block at boot so the Rust config validator still parses the
+# whole file (serde ignores unknown top-level keys; this is Python-only config).
+signals_futures:
+  enabled: true
+  exchange: gate_io_paper_futures   # paper sim priced off Gate.io USDT-perp (binance testnet retired — fapi -1121)
+  testnet: false                     # paper has no testnet; field kept for compat reads
+  leverage: 3
+  margin_type: isolated
+  allow_shorts: true
+  per_trade_risk_pct: 1.0   # % of budget risked per trade (guard reads per_trade_risk_pct, NOT risk_pct)
+  max_positions: 2
+  max_capital_usdt: 10000    # 10K paper budget (matches spot signal engine)
+  pairs: []
+  enabled_pairs: []
