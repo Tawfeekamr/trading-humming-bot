@@ -54,3 +54,55 @@ def test_danger_takes_precedence_over_trending():
     df = pd.DataFrame({"close": close})
     out = _labels(df, horizon=10, trend_thr=0.02, danger_thr=-0.03)
     assert out["regime_label"].iloc[15] == 2
+
+
+# ─── now-cast (trailing-window) labels ────────────────────────────────────────
+
+
+def _nowcast(df, **kw):
+    from src.data.label_generation import generate_regime_labels_nowcast
+
+    return generate_regime_labels_nowcast(df, **kw)
+
+
+def test_nowcast_trending_uptrend_is_trending():
+    # +30% ramp: the trailing 24-bar return exceeds 2% -> trending (1) at the end.
+    df = pd.DataFrame({"close": np.linspace(100, 130, 60)})
+    out = _nowcast(df, window=24, trend_thr=0.02, danger_thr=-0.03)
+    assert out["regime_label"].iloc[-1] == 1
+
+
+def test_nowcast_ranging_flat_noise_is_ranging():
+    rng = np.random.RandomState(0)
+    close = 100 + rng.randn(200) * 0.005  # tiny noise, <2% move, <3% drawdown
+    df = pd.DataFrame({"close": close})
+    out = _nowcast(df, window=24, trend_thr=0.02, danger_thr=-0.03)
+    assert (out["regime_label"].iloc[24:180] == 0).all()
+
+
+def test_nowcast_danger_crash_is_danger_and_takes_precedence():
+    # Ramp up (would be trending) then a -10% crash in the last bars: danger wins
+    # (max drawdown within the trailing window <= -3%, checked before trending).
+    close = np.concatenate([np.linspace(100, 115, 40), np.linspace(115, 103.5, 10)])
+    df = pd.DataFrame({"close": close})
+    out = _nowcast(df, window=24, trend_thr=0.02, danger_thr=-0.03)
+    assert out["regime_label"].iloc[-1] == 2
+
+
+def test_nowcast_first_window_minus_one_bars_are_sentinel():
+    df = pd.DataFrame({"close": np.linspace(100, 130, 60)})
+    out = _nowcast(df, window=24)
+    assert (out["regime_label"].iloc[:23] == -1).all()
+    assert out["regime_label"].iloc[23] != -1
+
+
+def test_nowcast_has_no_lookahead():
+    # Truncating the series must not change labels on the retained prefix
+    # (now-cast only ever looks at past bars).
+    full = pd.DataFrame(
+        {"close": np.concatenate([np.linspace(100, 130, 60), np.linspace(130, 110, 30)])}
+    )
+    trunc = full.iloc[:70]
+    a = _nowcast(full, window=24)["regime_label"].iloc[:70].to_numpy()
+    b = _nowcast(trunc, window=24)["regime_label"].to_numpy()
+    assert np.array_equal(a, b)
