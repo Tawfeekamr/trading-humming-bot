@@ -34,6 +34,13 @@ pub struct KlinesQuery {
     pub limit: Option<u16>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct PromotionReportQuery {
+    pub min_trades: Option<usize>,
+    pub min_profit_factor: Option<f64>,
+    pub min_win_rate_pct: Option<f64>,
+}
+
 // ── Health check ─────────────────────────────────────────────────────
 
 pub async fn health() -> Json<serde_json::Value> {
@@ -186,6 +193,28 @@ pub async fn get_strategies(
 /// Centralized capital snapshot (total equity, reserve, free capital, per-strategy).
 pub async fn get_capital(State(state): State<AppState>) -> Json<crate::capital::CapitalSnapshot> {
     Json(state.capital.snapshot())
+}
+
+pub async fn get_promotion_report(
+    State(state): State<AppState>,
+    Query(q): Query<PromotionReportQuery>,
+) -> impl IntoResponse {
+    let statuses = state.strategies.snapshot().await;
+    match crate::strategy::trade_journal::UnifiedTradeJournal::new()
+        .and_then(|j| {
+            j.promotion_report_since(
+                &statuses,
+                q.min_trades.unwrap_or(30),
+                q.min_profit_factor.unwrap_or(1.2),
+                q.min_win_rate_pct.unwrap_or(50.0),
+            )
+        }) {
+        Ok(report) => (axum::http::StatusCode::OK, Json(report)).into_response(),
+        Err(e) => (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        ).into_response(),
+    }
 }
 
 // ── Regime update (pushed by Python ML) ───────────────────────────────

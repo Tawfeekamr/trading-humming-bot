@@ -42,7 +42,10 @@ async fn async_main() -> Result<()> {
     let swing_cfg = config.swing.clone();
 
     let connector: Arc<dyn trading_engine_core::connector::Connector> = if config.exchange.testnet {
-        info!("Using PAPER TRADE engine with real Binance market data");
+        info!(
+            "Using PAPER TRADE engine with {} Binance market data",
+            if config.paper.market_data_testnet { "testnet" } else { "production" }
+        );
         let fill_cooldown_ms: i64 = std::env::var("PAPER_FILL_COOLDOWN_MS")
             .ok().and_then(|v| v.parse().ok())
             .unwrap_or(5000);
@@ -54,14 +57,15 @@ async fn async_main() -> Result<()> {
                 balances,
                 &api_key,
                 &api_secret,
-                true, // testnet flag for BinanceRest
+                config.paper.market_data_testnet,
             )
             .with_fill_cooldown(fill_cooldown_ms)
             .with_realism(
                 config.paper.slippage_bps,
                 config.paper.taker_fee_bps,
                 config.paper.maker_fee_bps,
-            ),
+            )
+            .with_state_path("data/paper_orders.json")
         )
     } else if config.exchange.name.contains("gate") {
         info!("Using LIVE Gate.io connector");

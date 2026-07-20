@@ -2,6 +2,7 @@ use anyhow::Result;
 use chrono::{DateTime, Duration, Utc};
 use rusqlite::Connection;
 use rusqlite_migration::{M, Migrations};
+use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::OnceLock;
@@ -20,6 +21,35 @@ pub struct UnifiedTradeJournal {
     /// live. Backfill reads them as siblings so a test (or alt deploy) that
     /// points TRADES_JOURNAL_PATH at a temp dir gets self-consistent sources.
     data_dir: PathBuf,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PaperPromotionCandidate {
+    pub engine: String,
+    pub pair: String,
+    pub trades: usize,
+    pub net_pnl: f64,
+    pub gross_win: f64,
+    pub gross_loss: f64,
+    pub profit_factor: f64,
+    pub win_rate_pct: f64,
+    pub first_trade: String,
+    pub last_trade: String,
+    pub state: String,
+    pub open_orders: usize,
+    pub status_pnl: f64,
+    pub status_details: String,
+    pub promotable: bool,
+    pub blockers: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PaperPromotionReport {
+    pub ready: bool,
+    pub min_trades: usize,
+    pub min_profit_factor: f64,
+    pub min_win_rate_pct: f64,
+    pub candidates: Vec<PaperPromotionCandidate>,
 }
 
 fn migrations() -> Migrations<'static> {
@@ -215,6 +245,103 @@ impl UnifiedTradeJournal {
         info!("Unified journal backfill: copied {} rows from per-engine journals", total);
         Ok(total)
     }
+    pub fn promotion_report_since(
+        &self,
+        statuses: &[crate::strategy::StrategyStatus],
+        min_trades: usize,
+        min_profit_factor: f64,
+        min_win_rate_pct: f64,
+    ) -> Result<PaperPromotionReport> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT engine, pair,
+                    COUNT(*) AS trades,
+                    COALESCE(SUM(pnl), 0.0) AS net_pnl,
+                    COALESCE(SUM(CASE WHEN pnl > 0 THEN pnl ELSE 0 END), 0.0) AS gross_win,
+                    ABS(COALESCE(SUM(CASE WHEN pnl < 0 THEN pnl ELSE 0 END), 0.0)) AS gross_loss,
+                    COALESCE(SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END), 0) AS wins,
+                    MIN(timestamp) AS first_trade,
+                    MAX(timestamp) AS last_trade
+             FROM trades
+             WHERE engine IN ('grid', 'trend', 'swing', 'mr')
+             GROUP BY engine, pair
+             ORDER BY net_pnl DESC, trades DESC",
+        )?;
+        let mut rows = stmt.query([])?;
+        let mut candidates = Vec::new();
+        while let Some(row) = rows.next()? {
+            let engine: String = row.get(0)?;
+            let pair: String = row.get(1)?;
+            let trades_i: i64 = row.get(2)?;
+            let trades = trades_i.max(0) as usize;
+            let net_pnl: f64 = row.get(3)?;
+            let gross_win: f64 = row.get(4)?;
+            let gross_loss: f64 = row.get(5)?;
+            let wins_i: i64 = row.get(6)?;
+            let first_trade: String = row.get(7)?;
+            let last_trade: String = row.get(8)?;
+            let profit_factor = if gross_loss > 0.0 {
+                gross_win / gross_loss
+            } else if gross_win > 0.0 {
+                f64::INFINITY
+            } else {
+                0.0
+            };
+            let win_rate_pct = if trades > 0 {
+                (wins_i.max(0) as f64) * 100.0 / trades as f64
+            } else {
+                0.0
+            };
+            let status = statuses
+                .iter()
+                .find(|s| s.name == engine && s.pair == pair);
+            let state = status.map(|s| s.state.clone()).unwrap_or_else(|| "UNKNOWN".to_string());
+            let open_orders = status.map(|s| s.open_orders).unwrap_or(0);
+            let status_pnl = status.map(|s| s.pnl).unwrap_or(0.0);
+            let status_details = status.map(|s| s.details.clone()).unwrap_or_else(|| "No live status snapshot".to_string());
+            let mut blockers = Vec::new();
+            if trades < min_trades {
+                blockers.push(format!("trades {trades} < {min_trades}"));
+            }
+            if profit_factor < min_profit_factor {
+                blockers.push(format!("profit_factor {:.2} < {:.2}", profit_factor, min_profit_factor));
+            }
+            if win_rate_pct < min_win_rate_pct {
+                blockers.push(format!("win_rate {:.1}% < {:.1}%", win_rate_pct, min_win_rate_pct));
+            }
+            if state == "POSITION" {
+                blockers.push("open position".to_string());
+            }
+            let promotable = blockers.is_empty();
+            candidates.push(PaperPromotionCandidate {
+                engine,
+                pair,
+                trades,
+                net_pnl,
+                gross_win,
+                gross_loss,
+                profit_factor,
+                win_rate_pct,
+                first_trade,
+                last_trade,
+                state,
+                open_orders,
+                status_pnl,
+                status_details,
+                promotable,
+                blockers,
+            });
+        }
+        let ready = candidates.iter().any(|c| c.promotable);
+        Ok(PaperPromotionReport {
+            ready,
+            min_trades,
+            min_profit_factor,
+            min_win_rate_pct,
+            candidates,
+        })
+    }
+
 }
 
 /// One-shot write used by each engine's close path. Opens a transient connection
@@ -367,5 +494,39 @@ mod tests {
 
         // Two distinct trades: the old live log + the recovered new close.
         assert_eq!(count(&j, "signal", "ADA-USDT"), 2);
+    }
+
+    #[test]
+    fn promotion_report_marks_profitable_ready_strategy() {
+        let tmp = tempfile::tempdir().unwrap();
+        let j = UnifiedTradeJournal::new_at(tmp.path().join("trades.db")).unwrap();
+        let now = Utc::now().to_rfc3339();
+        {
+            let conn = j.conn.lock().unwrap();
+            for pnl in [100.0, -40.0, 80.0] {
+                conn.execute(
+                    "INSERT INTO trades (timestamp, engine, pair, pnl, exit_reason, is_backfilled)
+                     VALUES (?1, 'grid', 'ETH-USDT', ?2, 'test', 0)",
+                    rusqlite::params![now, pnl],
+                ).unwrap();
+            }
+        }
+        let statuses = vec![crate::strategy::StrategyStatus {
+            name: "grid".to_string(),
+            pair: "ETH-USDT".to_string(),
+            state: "WAITING".to_string(),
+            pnl: 140.0,
+            open_orders: 0,
+            details: "Ready".to_string(),
+        }];
+
+        let report = j.promotion_report_since(&statuses, 3, 2.0, 50.0).unwrap();
+
+        assert!(report.ready);
+        assert_eq!(report.candidates[0].engine, "grid");
+        assert_eq!(report.candidates[0].pair, "ETH-USDT");
+        assert_eq!(report.candidates[0].trades, 3);
+        assert!((report.candidates[0].profit_factor - 4.5).abs() < 1e-9);
+        assert!(report.candidates[0].promotable);
     }
 }
