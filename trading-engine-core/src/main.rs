@@ -101,7 +101,9 @@ async fn async_main() -> Result<()> {
     let routing_cache = trading_engine_core::strategy::routing_cache::RoutingCache::new("data/routing_cache.json", 10_800_000);
     let capital = trading_engine_core::capital::CapitalManager::new(config.capital.reserve_limit_pct)
         .with_budgets(config.capital.budgets.clone());
+    let (order_commands, order_command_rx) = trading_engine_core::api::order_command::EngineCommandBus::channel(64);
     let mut engine = trading_engine_core::engine::Engine::new(config, connector.clone(), risk, telegram.clone_for_signal(), bar_cache.clone(), status_cache.clone(), regime_cache.clone(), routing_cache.clone(), capital.clone());
+    engine.set_api_command_receiver(order_command_rx);
 
     // Build the perp mark source ONCE for all pairs when trend opts into it.
     // Cloned as Arc per pair below; a single shared client + cache serves all.
@@ -182,7 +184,7 @@ async fn async_main() -> Result<()> {
         .unwrap_or_else(|_| "3030".to_string())
         .parse()
         .unwrap_or(3030);
-    let app_state = trading_engine_core::api::server::AppState::new(connector, bar_cache, status_cache, regime_cache, routing_cache, capital.clone());
+    let app_state = trading_engine_core::api::server::AppState::new(connector, bar_cache, status_cache, regime_cache, routing_cache, capital.clone(), order_commands);
     let router = trading_engine_core::api::server::create_router(app_state);
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", api_port)).await?;
     info!("API server listening on port {}", api_port);

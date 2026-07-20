@@ -115,6 +115,95 @@ def test_spot_mode_unchanged(monkeypatch, tmp_path):
     assert len(buys) == 1
 
 
+def test_spot_tp_flag_not_marked_when_close_order_fails(monkeypatch, tmp_path):
+    monkeypatch.setattr(SignalEngine, "_refresh_available_pairs", lambda self: None)
+    eng = SignalEngine(config={"enabled": True, "audit_mode": False},
+                       btc_regime_fn=lambda: ("RANGING", 0.0, 0.0),
+                       telegram_send_fn=lambda m: None,
+                       sell_fn=lambda **k: None,
+                       get_price_fn=lambda s: 110.0)
+    from src.signals.signal_position import SignalPosition
+    pos = SignalPosition("BTC-USDT", 100.0, 1.0, 90.0, [110.0], "high", "x", "chan")
+    mark_calls = []
+    partial_calls = []
+    eng._position_mgr.get_open_positions = lambda: [pos]
+    eng._position_mgr.mark_tp_hit = lambda sym, level: mark_calls.append((sym, level))
+    eng._position_mgr.partial_close = lambda *a: partial_calls.append(a) or (0.0, 0.0)
+    eng._position_mgr.update_stop_loss = lambda *a: None
+    eng._record_close = lambda *a, **k: None
+    eng._get_current_price = lambda c, s: 110.0
+    eng._execute_close = lambda *a, **k: False
+
+    eng._manage_positions(None)
+
+    assert mark_calls == []
+    assert partial_calls == []
+
+
+def test_futures_close_failure_does_not_mutate_tracker(monkeypatch, tmp_path):
+    class FailingCloseConn(FakeConn):
+        def close(self, s, side, qty):
+            self.calls.append(("close_failed", s, side, qty))
+            raise RuntimeError("close failed")
+
+    eng, conn, sent = _futures_engine(monkeypatch, tmp_path, connector=FailingCloseConn())
+    from src.signals.signal_position import SignalPosition
+    pos = SignalPosition("ETH-USDT", 3000.0, 2.0, 2950.0, [3100.0], "high", "x", "chan")
+    partial_calls = []
+    mark_calls = []
+    recorded = []
+    eng._position_mgr.get_open_positions = lambda: [pos]
+    eng._position_mgr.partial_close = lambda *a: partial_calls.append(a) or (0.0, 0.0)
+    eng._position_mgr.mark_tp_hit = lambda *a: mark_calls.append(a)
+    eng._position_mgr.update_stop_loss = lambda *a: None
+    eng._record_close = lambda *a: recorded.append(a)
+    eng._get_current_price = lambda c, s: 3100.0
+
+    eng._manage_positions(eng._futures_connector)
+
+    assert any(c[0] == "close_failed" for c in conn.calls)
+    assert partial_calls == []
+    assert mark_calls == []
+    assert recorded == []
+
+
+def test_process_message_allows_futures_short(monkeypatch, tmp_path):
+    eng, conn, sent = _futures_engine(monkeypatch, tmp_path)
+    sig = _short()
+    eng._parser.parse = lambda *a, **k: sig
+    eng._validator.validate = lambda s: (True, "")
+    eng._risk.block_reason = lambda: None
+    eng._journal.log_raw_message = lambda *a, **k: None
+    eng._get_current_price = lambda c, s: 3000.0
+
+    eng._process_message({"text": "short ETH", "channel_name": "chan", "message_id": 0}, eng._futures_connector)
+
+    assert any(c[0] == "open" and c[2] == "short" for c in conn.calls)
+
+
+def test_futures_entry_rechecks_risk_before_open(monkeypatch, tmp_path):
+    eng, conn, sent = _futures_engine(monkeypatch, tmp_path)
+    eng._risk.block_reason = lambda: "cooldown"
+
+    eng._execute_futures_entry(_short(), "chan")
+
+    assert not any(c[0] == "open" for c in conn.calls)
+
+
+def test_manual_close_uses_position_manager_close(monkeypatch, tmp_path):
+    monkeypatch.setattr(SignalEngine, "_refresh_available_pairs", lambda self: None)
+    eng = SignalEngine(config={"enabled": True, "audit_mode": True},
+                       btc_regime_fn=lambda: ("RANGING", 0.0, 0.0))
+    from src.signals.signal_position import SignalPosition
+    pos = SignalPosition("ETH-USDT", 3000.0, 1.0, 2900.0, [3100.0], "high", "x", "chan")
+    close_calls = []
+    eng._position_mgr.get_position = lambda sym: pos
+    eng._position_mgr.close_position = lambda sym, price, reason: close_calls.append((sym, price, reason)) or 0.0
+
+    assert eng.manual_close("ETH-USDT") == "manual"
+    assert close_calls == [("ETH-USDT", 3000.0, "manual")]
+
+
 def _futures_manage_engine(monkeypatch, tmp_path, price, side="long",
                            tps_long=(3100.0, 3200.0, 3300.0), tps_short=(2900.0, 2800.0, 2700.0),
                            sl_long=2950.0, sl_short=3050.0,

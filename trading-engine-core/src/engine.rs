@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Instant, Duration};
 use tracing::{info, warn, error};
+use tokio::sync::mpsc;
 use crate::config::AppConfig;
 use crate::connector::Connector;
 use crate::connector::binance_ws::{BinanceWs, WsEvent};
@@ -17,6 +18,14 @@ use crate::strategy::routing_cache::RoutingCache;
 use crate::models::bar::Bar;
 use crate::bar_cache::BarCache;
 use crate::signal::SignalEngine;
+use crate::api::order_command::EngineCommand;
+
+async fn recv_api_command(rx: &mut Option<mpsc::Receiver<EngineCommand>>) -> Option<EngineCommand> {
+    match rx {
+        Some(rx) => rx.recv().await,
+        None => std::future::pending().await,
+    }
+}
 
 pub struct Engine {
     config: AppConfig,
@@ -40,6 +49,7 @@ pub struct Engine {
     /// this engine has placed, so strategies can cancel their own resting orders
     /// (e.g. swing's resting TP1 / hard stop) via `pending_cancels`.
     placed_orders: HashMap<String, (String, String)>,
+    api_commands: Option<mpsc::Receiver<EngineCommand>>,
 }
 
 impl Engine {
@@ -69,6 +79,7 @@ impl Engine {
             capital,
             last_risk_save: None,
             placed_orders: HashMap::new(),
+            api_commands: None,
         };
         // Init signal engine after self.config is set
         engine.signal = engine.config.signal.as_ref().filter(|s| s.enabled).map(|sc| {
@@ -80,6 +91,10 @@ impl Engine {
     pub fn add_strategy(&mut self, strategy: Box<dyn Strategy>) {
         info!("Added strategy: {} on {}", strategy.name(), strategy.trading_pair());
         self.strategies.push(strategy);
+    }
+
+    pub fn set_api_command_receiver(&mut self, rx: mpsc::Receiver<EngineCommand>) {
+        self.api_commands = Some(rx);
     }
 
     /// Run the main trading loop
@@ -153,6 +168,11 @@ impl Engine {
         self.routing_cache.load_from_file().await;
         info!("Routing cache loaded from file");
 
+        // Restore placed-orders map so strategies can cancel their own resting
+        // orders across restarts (swing TP1 / hard stop placed before shutdown).
+        self.load_placed_orders().await;
+        info!("Placed orders loaded from file");
+
         // Restore circuit-breaker state (peak equity, daily baseline, halt) across restarts.
         let risk_path = std::env::var("RISK_STATE_PATH").unwrap_or_else(|_| "data/risk_state.json".to_string());
         let boot_balances = self.connector.get_balances().await.unwrap_or_default();
@@ -163,47 +183,120 @@ impl Engine {
             self.risk.circuit_breaker.start_of_day_equity(),
             self.risk.circuit_breaker.is_halted_raw());
 
-        // Main event loop
-        while let Some(event) = ws_rx.recv().await {
-            match event {
-                WsEvent::OrderBookUpdate { symbol, bids, asks } => {
-                    // Normalize WebSocket symbol ("XRPUSDT") to config pair key ("XRP-USDT")
-                    let pair_key = self.find_pair_for_symbol(&symbol)
-                        .unwrap_or_else(|| symbol.clone());
-                    self.order_books.insert(pair_key.clone(), OrderBook {
-                        symbol: pair_key,
-                        bids,
-                        asks,
-                        timestamp: chrono::Utc::now().timestamp_millis(),
-                    });
-                    self.tick_strategies().await?;
-                    self.process_paper_fills().await?;
-                    self.feed_breaker().await;
-                }
-                WsEvent::Kline { symbol, bar, is_closed } => {
-                    if is_closed {
-                        // WebSocket uses "DOGEUSDT" format; config uses "DOGE-USDT".
-                        let pair_key = self.find_pair_for_symbol(&symbol)
-                            .unwrap_or(symbol);
-                        self.bar_buffers.push_closed_bar(pair_key, bar).await;
-                        // Persist bar buffers every closed candle
-                        self.save_bar_buffers().await;
+        // Main event loop. API order/cancel commands are handled here so HTTP
+        // callers mutate exchange state through the same Engine-owned path as
+        // strategy orders, not directly from axum handler tasks.
+        let mut api_commands = self.api_commands.take();
+        loop {
+            tokio::select! {
+                cmd = recv_api_command(&mut api_commands) => {
+                    if let Some(cmd) = cmd {
+                        self.handle_api_command(cmd).await;
+                    } else {
+                        api_commands = None;
                     }
                 }
-                WsEvent::Trade { symbol, price, .. } => {
-                    let _ = (symbol, price);
-                }
-                _ => {}
-            }
+                event = ws_rx.recv() => {
+                    let Some(event) = event else { break; };
+                    match event {
+                        WsEvent::OrderBookUpdate { symbol, bids, asks } => {
+                            // Normalize WebSocket symbol ("XRPUSDT") to config pair key ("XRP-USDT")
+                            let pair_key = self.find_pair_for_symbol(&symbol)
+                                .unwrap_or_else(|| symbol.clone());
+                            self.order_books.insert(pair_key.clone(), OrderBook {
+                                symbol: pair_key,
+                                bids,
+                                asks,
+                                timestamp: chrono::Utc::now().timestamp_millis(),
+                            });
+                            self.tick_strategies().await?;
+                            self.process_paper_fills().await?;
+                            self.feed_breaker().await;
+                        }
+                        WsEvent::Kline { symbol, bar, is_closed } => {
+                            if is_closed {
+                                // WebSocket uses "DOGEUSDT" format; config uses "DOGE-USDT".
+                                let pair_key = self.find_pair_for_symbol(&symbol)
+                                    .unwrap_or(symbol);
+                                self.bar_buffers.push_closed_bar(pair_key, bar).await;
+                                // Persist bar buffers every closed candle
+                                self.save_bar_buffers().await;
+                            }
+                        }
+                        WsEvent::Trade { symbol, price, .. } => {
+                            let _ = (symbol, price);
+                        }
+                        _ => {}
+                    }
 
-            // Signal engine: manage positions on every tick
-            if let Some(ref signal) = self.signal {
-                signal.manage_positions(&*self.connector).await;
+                    // Signal engine: manage positions on every tick
+                    if let Some(signal) = &self.signal {
+                        signal.manage_positions(&*self.connector).await;
+                    }
+                }
             }
         }
+        self.api_commands = api_commands;
 
         warn!("WebSocket event stream ended");
         Ok(())
+    }
+
+    async fn handle_api_command(&mut self, cmd: EngineCommand) {
+        match cmd {
+            EngineCommand::PlaceOrder { req, respond_to } => {
+                let result = self.place_api_order(req).await.map_err(|e| e.to_string());
+                let _ = respond_to.send(result);
+            }
+            EngineCommand::CancelOrder { symbol, order_id, respond_to } => {
+                let result = self.cancel_api_order(&symbol, &order_id).await.map_err(|e| e.to_string());
+                let _ = respond_to.send(result);
+            }
+            EngineCommand::CancelAllOrders { symbol, respond_to } => {
+                let result = self.cancel_all_api_orders(&symbol).await.map_err(|e| e.to_string());
+                let _ = respond_to.send(result);
+            }
+        }
+    }
+
+    async fn place_api_order(&mut self, req: OrderRequest) -> Result<OrderResponse> {
+        if !req.reduce_only {
+            self.risk.check_trading_allowed()?;
+        }
+
+        let resp = self.connector.place_order(&req).await?;
+        info!("API order placed through Engine: {} {} {} @ {}",
+            resp.order_id, resp.symbol, resp.quantity, resp.price);
+        if let Some(cid) = &resp.client_order_id {
+            self.placed_orders.insert(
+                cid.clone(),
+                (resp.symbol.clone(), resp.order_id.clone()),
+            );
+            self.save_placed_orders().await;
+        }
+        Ok(resp)
+    }
+
+    async fn cancel_api_order(&mut self, symbol: &str, order_id: &str) -> Result<()> {
+        self.connector.cancel_order(symbol, order_id).await?;
+        let original_len = self.placed_orders.len();
+        self.placed_orders.retain(|_, (mapped_symbol, mapped_order_id)| {
+            mapped_symbol != symbol || mapped_order_id != order_id
+        });
+        if self.placed_orders.len() != original_len {
+            self.save_placed_orders().await;
+        }
+        Ok(())
+    }
+
+    async fn cancel_all_api_orders(&mut self, symbol: &str) -> Result<Vec<CancelResult>> {
+        let results = self.connector.cancel_all_orders(symbol).await?;
+        let original_len = self.placed_orders.len();
+        self.placed_orders.retain(|_, (mapped_symbol, _)| mapped_symbol != symbol);
+        if self.placed_orders.len() != original_len {
+            self.save_placed_orders().await;
+        }
+        Ok(results)
     }
 
     async fn tick_strategies(&mut self) -> Result<()> {
@@ -381,6 +474,7 @@ impl Engine {
                             cid.clone(),
                             (resp.symbol.clone(), resp.order_id.clone()),
                         );
+                        self.save_placed_orders().await;
                     }
                 }
                 Err(e) => error!("Order failed: {}", e),
@@ -393,13 +487,21 @@ impl Engine {
     /// (strategy_index, client_id_as_strategy_set_it); the engine reconstructs
     /// the owner-tagged id it recorded at placement time.
     async fn process_cancels(&mut self, cancels: Vec<(usize, String)>) {
+        let mut any_removed = false;
         for (idx, cid) in cancels {
             let tagged = format!("owner:{}#{}", idx, cid);
-            if let Some((symbol, order_id)) = self.placed_orders.remove(&tagged) {
-                if let Err(e) = self.connector.cancel_order(&symbol, &order_id).await {
-                    warn!("Cancel failed for {} ({}): {}", symbol, cid, e);
+            if let Some((symbol, order_id)) = self.placed_orders.get(&tagged).cloned() {
+                match self.connector.cancel_order(&symbol, &order_id).await {
+                    Ok(()) => {
+                        self.placed_orders.remove(&tagged);
+                        any_removed = true;
+                    }
+                    Err(e) => warn!("Cancel failed for {} ({}): {}", symbol, cid, e),
                 }
             }
+        }
+        if any_removed {
+            self.save_placed_orders().await;
         }
     }
 
@@ -407,9 +509,9 @@ impl Engine {
     async fn save_bar_buffers(&self) {
         let snap = self.bar_buffers.snapshot().await;
         let path = std::path::PathBuf::from("data/bar_buffers.json");
-        let _ = std::fs::create_dir_all("data");
+        let _ = tokio::fs::create_dir_all("data").await;
         if let Ok(json) = serde_json::to_string_pretty(&snap) {
-            if let Err(e) = std::fs::write(&path, json) {
+            if let Err(e) = tokio::fs::write(&path, json).await {
                 warn!("Failed to save bar buffers: {}", e);
             }
         }
@@ -421,7 +523,7 @@ impl Engine {
         if !path.exists() { return std::collections::HashSet::new(); }
 
         let mut loaded = std::collections::HashSet::new();
-        match std::fs::read_to_string(&path) {
+        match tokio::fs::read_to_string(&path).await {
             Ok(content) => {
                 match serde_json::from_str::<std::collections::HashMap<String, Vec<Bar>>>(&content) {
                     Ok(buffers) => {
@@ -441,6 +543,50 @@ impl Engine {
             Err(e) => warn!("Failed to read bar buffers: {}", e),
         }
         loaded
+    }
+
+    /// Persist placed_orders map so strategies can cancel their own resting
+    /// orders across restarts (e.g. swing TP1 / hard stop placed before shutdown).
+    /// Called after each insert (order placed) and remove (filled or canceled).
+    async fn save_placed_orders(&self) {
+        let path = std::path::PathBuf::from("data/placed_orders.json");
+        let tmp = std::path::PathBuf::from("data/placed_orders.json.tmp");
+        // Convert HashMap to sorted Vec of [cid, symbol, order_id] triples for
+        // deterministic serialization (HashMap iteration order is non-deterministic
+        // and would churn the file on every save).
+        let mut entries: Vec<[&str; 3]> = self.placed_orders.iter()
+            .map(|(cid, (sym, oid))| [cid.as_str(), sym.as_str(), oid.as_str()])
+            .collect();
+        entries.sort_by_key(|e| e[0]);
+        if let Ok(json) = serde_json::to_string_pretty(&entries) {
+            let _ = tokio::fs::create_dir_all("data").await;
+            if tokio::fs::write(&tmp, json).await.is_ok() {
+                let _ = tokio::fs::rename(&tmp, &path).await;
+            }
+        }
+    }
+
+    /// Restore placed_orders from disk on startup.
+    async fn load_placed_orders(&mut self) {
+        let path = std::path::PathBuf::from("data/placed_orders.json");
+        if !path.exists() { return; }
+        match tokio::fs::read_to_string(&path).await {
+            Ok(content) => {
+                match serde_json::from_str::<Vec<[String; 3]>>(&content) {
+                    Ok(entries) => {
+                        for entry in entries {
+                            self.placed_orders.insert(
+                                entry[0].clone(),
+                                (entry[1].clone(), entry[2].clone()),
+                            );
+                        }
+                        info!("Restored {} placed orders from disk", self.placed_orders.len());
+                    }
+                    Err(e) => warn!("Failed to parse placed orders: {}", e),
+                }
+            }
+            Err(e) => warn!("Failed to read placed orders: {}", e),
+        }
     }
 
     /// Replay loaded bars through strategies to restore indicator state
@@ -514,10 +660,12 @@ impl Engine {
         // fills that carry no owner tag.
         let mut all_orders = Vec::new();
         let mut all_cancels: Vec<(usize, String)> = Vec::new();
+        let mut any_fill_removed = false;
         for (_ob_symbol, fill) in &fills_by_pair {
             // A resting order that filled is consumed — drop it from the cancel map.
             if let Some(cid) = fill.client_order_id.as_deref() {
                 self.placed_orders.remove(cid);
+                any_fill_removed = true;
             }
             match Self::owner_index(fill) {
                 Some(idx) => {
@@ -545,6 +693,9 @@ impl Engine {
                     }
                 }
             }
+        }
+        if any_fill_removed {
+            self.save_placed_orders().await;
         }
         self.submit_orders(all_orders).await?;
         self.process_cancels(all_cancels).await;
@@ -574,7 +725,8 @@ mod tests {
 
     use super::*;
     use async_trait::async_trait;
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
+    use parking_lot::Mutex;
     use crate::strategy::StrategyStatus;
     use crate::models::order::OrderSide;
     use crate::connector::types::OrderStatus;
@@ -622,14 +774,14 @@ mod tests {
         async fn on_stop(&mut self) -> Result<()> { Ok(()) }
 
         fn set_paused(&mut self, paused: bool) {
-            self.log.lock().unwrap().paused = Some(paused);
+            self.log.lock().paused = Some(paused);
         }
         fn force_flat(&mut self) {
-            self.log.lock().unwrap().flat_called = true;
+            self.log.lock().flat_called = true;
         }
 
         fn status(&self) -> StrategyStatus {
-            let log = self.log.lock().unwrap();
+            let log = self.log.lock();
             let state = match log.paused {
                 Some(true) => "Paused",
                 Some(false) => "Active",
@@ -673,6 +825,37 @@ mod tests {
             -> Result<Vec<crate::models::bar::Bar>> { Ok(vec![]) }
     }
 
+    struct FailingCancelConnector {
+        calls: Arc<Mutex<Vec<(String, String)>>>,
+    }
+
+    #[async_trait]
+    impl Connector for FailingCancelConnector {
+        async fn place_order(&self, _req: &OrderRequest) -> Result<OrderResponse> {
+            Ok(OrderResponse {
+                order_id: String::new(),
+                client_order_id: None,
+                symbol: String::new(),
+                side: OrderSide::Buy,
+                price: 0.0,
+                quantity: 0.0,
+                status: OrderStatus::New,
+            })
+        }
+        async fn cancel_order(&self, symbol: &str, order_id: &str) -> Result<()> {
+            self.calls.lock().push((symbol.to_string(), order_id.to_string()));
+            Err(anyhow::anyhow!("cancel failed"))
+        }
+        async fn cancel_all_orders(&self, _symbol: &str) -> Result<Vec<CancelResult>> { Ok(vec![]) }
+        async fn get_balances(&self) -> Result<HashMap<String, f64>> { Ok(HashMap::new()) }
+        async fn get_open_orders(&self, _symbol: &str) -> Result<Vec<OpenOrder>> { Ok(vec![]) }
+        async fn get_order_book(&self, _symbol: &str, _limit: u16) -> Result<OrderBook> {
+            Ok(OrderBook { symbol: String::new(), bids: vec![], asks: vec![], timestamp: 0 })
+        }
+        async fn get_klines(&self, _symbol: &str, _interval: &str, _limit: u16)
+            -> Result<Vec<crate::models::bar::Bar>> { Ok(vec![]) }
+    }
+
     /// Build a minimal Engine via struct literal. tick_strategies touches
     /// `capital`, `connector`, `order_books`, `regime_cache`, `routing_cache`,
     /// `status_cache`, and `strategies` — the rest are seeded empty/default.
@@ -703,6 +886,7 @@ mod tests {
             capital: CapitalManager::new(20.0),
             last_risk_save: None,
             placed_orders: HashMap::new(),
+            api_commands: None,
         }
     }
 
@@ -730,13 +914,13 @@ mod tests {
 
         engine.tick_strategies().await.expect("tick must complete");
 
-        assert_eq!(grid_log.lock().unwrap().paused, Some(false),
+        assert_eq!(grid_log.lock().paused, Some(false),
             "active engine (grid) must be unpaused");
-        assert_eq!(trend_log.lock().unwrap().paused, Some(true),
+        assert_eq!(trend_log.lock().paused, Some(true),
             "non-active engine (trend) must be paused");
         // flat=false ⇒ neither should have force_flat called.
-        assert!(!grid_log.lock().unwrap().flat_called);
-        assert!(!trend_log.lock().unwrap().flat_called);
+        assert!(!grid_log.lock().flat_called);
+        assert!(!trend_log.lock().flat_called);
     }
 
     #[tokio::test]
@@ -762,9 +946,9 @@ mod tests {
         engine.tick_strategies().await.expect("tick must complete");
 
         // Even the active engine must be force_flat'd when flat=true.
-        assert!(grid_log.lock().unwrap().flat_called,
+        assert!(grid_log.lock().flat_called,
             "active engine must still be force_flat'd when flat=true");
-        assert!(trend_log.lock().unwrap().flat_called,
+        assert!(trend_log.lock().flat_called,
             "non-active engine must be force_flat'd when flat=true");
     }
 
@@ -789,11 +973,163 @@ mod tests {
 
         engine.tick_strategies().await.expect("tick must complete");
 
-        assert_eq!(grid_log.lock().unwrap().paused, None,
+        assert_eq!(grid_log.lock().paused, None,
             "no routing ⇒ set_paused must not be called");
-        assert_eq!(trend_log.lock().unwrap().paused, None);
-        assert!(!grid_log.lock().unwrap().flat_called);
-        assert!(!trend_log.lock().unwrap().flat_called);
+        assert_eq!(trend_log.lock().paused, None);
+        assert!(!grid_log.lock().flat_called);
+        assert!(!trend_log.lock().flat_called);
+    }
+
+    #[tokio::test]
+    async fn test_failed_cancel_keeps_placed_order_mapping() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let routing = RoutingCache::new("/tmp/test_engine_cancel_mapping.json", 0);
+        let mut engine = minimal_engine(vec![], routing);
+        engine.connector = Arc::new(FailingCancelConnector { calls: calls.clone() });
+        engine.placed_orders.insert(
+            "owner:0#swing-tp1".into(),
+            ("BTCUSDT".into(), "exchange-order-1".into()),
+        );
+
+        engine.process_cancels(vec![(0, "swing-tp1".into())]).await;
+
+        assert_eq!(calls.lock().as_slice(), &[("BTCUSDT".into(), "exchange-order-1".into())]);
+        assert!(
+            engine.placed_orders.contains_key("owner:0#swing-tp1"),
+            "mapping must remain retryable when exchange cancel fails",
+        );
+    }
+
+    #[derive(Default)]
+    struct RecordingConnector {
+        placed: Arc<Mutex<Vec<OrderRequest>>>,
+        cancelled: Arc<Mutex<Vec<(String, String)>>>,
+    }
+
+    #[async_trait]
+    impl Connector for RecordingConnector {
+        async fn place_order(&self, req: &OrderRequest) -> Result<OrderResponse> {
+            self.placed.lock().push(req.clone());
+            Ok(OrderResponse {
+                order_id: "exchange-api-1".into(),
+                client_order_id: req.client_order_id.clone(),
+                symbol: req.symbol.clone(),
+                side: req.side,
+                price: req.price.unwrap_or(0.0),
+                quantity: req.quantity,
+                status: OrderStatus::New,
+            })
+        }
+
+        async fn cancel_order(&self, symbol: &str, order_id: &str) -> Result<()> {
+            self.cancelled.lock().push((symbol.to_string(), order_id.to_string()));
+            Ok(())
+        }
+
+        async fn cancel_all_orders(&self, symbol: &str) -> Result<Vec<CancelResult>> {
+            Ok(vec![CancelResult { order_id: "cancel-all-1".into(), symbol: symbol.into() }])
+        }
+
+        async fn get_balances(&self) -> Result<HashMap<String, f64>> { Ok(HashMap::new()) }
+        async fn get_open_orders(&self, _symbol: &str) -> Result<Vec<OpenOrder>> { Ok(vec![]) }
+        async fn get_order_book(&self, _symbol: &str, _limit: u16) -> Result<OrderBook> {
+            Ok(OrderBook { symbol: String::new(), bids: vec![], asks: vec![], timestamp: 0 })
+        }
+        async fn get_klines(&self, _symbol: &str, _interval: &str, _limit: u16)
+            -> Result<Vec<crate::models::bar::Bar>> { Ok(vec![]) }
+    }
+
+    #[tokio::test]
+    async fn test_api_place_order_command_uses_engine_tracking() {
+        let routing = RoutingCache::new("/tmp/test_engine_api_place.json", 0);
+        let mut engine = minimal_engine(vec![], routing);
+        let connector = Arc::new(RecordingConnector::default());
+        let placed = connector.placed.clone();
+        engine.connector = connector;
+        let (respond_to, response) = tokio::sync::oneshot::channel();
+
+        engine.handle_api_command(EngineCommand::PlaceOrder {
+            req: OrderRequest {
+                symbol: "BTCUSDT".into(),
+                side: OrderSide::Buy,
+                order_type: OrderTypeReq::Limit,
+                price: Some(50000.0),
+                quantity: 0.001,
+                time_in_force: Some(TimeInForceReq::Gtc),
+                client_order_id: Some("api-client-1".into()),
+                reduce_only: false,
+            },
+            respond_to,
+        }).await;
+
+        let resp = response.await.unwrap().unwrap();
+        assert_eq!(resp.order_id, "exchange-api-1");
+        assert_eq!(placed.lock().len(), 1);
+        assert_eq!(
+            engine.placed_orders.get("api-client-1"),
+            Some(&("BTCUSDT".into(), "exchange-api-1".into())),
+            "API orders with client IDs must be tracked by Engine for later cancel/fill cleanup",
+        );
+    }
+
+    #[tokio::test]
+    async fn test_api_cancel_command_removes_engine_tracking_after_success() {
+        let routing = RoutingCache::new("/tmp/test_engine_api_cancel.json", 0);
+        let mut engine = minimal_engine(vec![], routing);
+        let connector = Arc::new(RecordingConnector::default());
+        let cancelled = connector.cancelled.clone();
+        engine.connector = connector;
+        engine.placed_orders.insert(
+            "api-client-1".into(),
+            ("BTCUSDT".into(), "exchange-api-1".into()),
+        );
+        let (respond_to, response) = tokio::sync::oneshot::channel();
+
+        engine.handle_api_command(EngineCommand::CancelOrder {
+            symbol: "BTCUSDT".into(),
+            order_id: "exchange-api-1".into(),
+            respond_to,
+        }).await;
+
+        response.await.unwrap().unwrap();
+        assert_eq!(cancelled.lock().as_slice(), &[("BTCUSDT".into(), "exchange-api-1".into())]);
+        assert!(
+            !engine.placed_orders.contains_key("api-client-1"),
+            "Engine should remove API order mapping only after connector cancel succeeds",
+        );
+    }
+
+    #[tokio::test]
+    async fn test_api_cancel_all_command_removes_engine_tracking_for_symbol() {
+        let routing = RoutingCache::new("/tmp/test_engine_api_cancel_all.json", 0);
+        let mut engine = minimal_engine(vec![], routing);
+        let connector = Arc::new(RecordingConnector::default());
+        engine.connector = connector;
+        engine.placed_orders.insert(
+            "api-btc".into(),
+            ("BTCUSDT".into(), "exchange-btc".into()),
+        );
+        engine.placed_orders.insert(
+            "api-eth".into(),
+            ("ETHUSDT".into(), "exchange-eth".into()),
+        );
+        let (respond_to, response) = tokio::sync::oneshot::channel();
+
+        engine.handle_api_command(EngineCommand::CancelAllOrders {
+            symbol: "BTCUSDT".into(),
+            respond_to,
+        }).await;
+
+        let results = response.await.unwrap().unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(
+            !engine.placed_orders.contains_key("api-btc"),
+            "Engine should remove same-symbol mappings after successful cancel-all",
+        );
+        assert!(
+            engine.placed_orders.contains_key("api-eth"),
+            "Engine must not remove mappings for other symbols",
+        );
     }
 
     /// Task 6 boot test: when `data/routing_cache.json` exists at startup, the

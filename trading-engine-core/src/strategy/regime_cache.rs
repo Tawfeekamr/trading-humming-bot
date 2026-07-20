@@ -91,7 +91,7 @@ impl RegimeCache {
                 .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
                 .duration_since(std::time::SystemTime::UNIX_EPOCH)
                 .unwrap_or_default()
-                .as_secs())
+                .as_nanos() as u64)
             .unwrap_or(0);
 
         // Fast path under a read lock: skip if nothing changed.
@@ -137,7 +137,7 @@ impl RegimeCache {
                 .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
                 .duration_since(std::time::SystemTime::UNIX_EPOCH)
                 .unwrap_or_default()
-                .as_secs())
+                .as_nanos() as u64)
             .unwrap_or(0);
 
         let mut state = self.state.write().await;
@@ -149,10 +149,19 @@ impl RegimeCache {
 
     /// Persist current state to file (called after HTTP push as backup).
     pub async fn persist(&self) {
-        let state = self.state.read().await;
-        if state.map.is_empty() { return; }
-        if let Ok(json) = serde_json::to_string_pretty(&state.map) {
-            let _ = std::fs::write(&self.file_path, json);
+        let map = { self.state.read().await.map.clone() };
+        if map.is_empty() { return; }
+        if let Ok(json) = serde_json::to_string_pretty(&map) {
+            if std::fs::write(&self.file_path, json).is_ok() {
+                let mtime = std::fs::metadata(&self.file_path)
+                    .map(|m| m.modified()
+                        .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+                        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_nanos() as u64)
+                    .unwrap_or(0);
+                self.state.write().await.last_mtime = mtime;
+            }
         }
     }
 }
@@ -197,6 +206,21 @@ mod tests {
         let btc = cache2.get("BTC-USDT").await;
         assert_eq!(btc, Some((2, 0.9)));
 
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn test_regime_persist_refreshes_mtime() {
+        let path = "/tmp/test_regime_persist_mtime.json";
+        let _ = std::fs::remove_file(path);
+        let cache = RegimeCache::new(path, 0);
+        cache.update(&[
+            RegimeUpdate { pair: "BTC-USDT".into(), regime: 1, confidence: 0.8 },
+        ]).await;
+        cache.persist().await;
+
+        let state = cache.state.read().await;
+        assert!(state.last_mtime > 0, "persist must refresh last_mtime after write");
         let _ = std::fs::remove_file(path);
     }
 

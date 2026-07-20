@@ -106,17 +106,28 @@ impl SignalEngine {
             for pos in &positions {
                 let current_price = match prices.get(&pos.symbol) { Some(p) => *p, None => continue };
                 if current_price <= 0.0 { continue; }
+                let is_short = pos.side == "short";
 
-                // Stop-loss check
-                if current_price <= pos.stop_loss {
+                // Stop-loss check (direction-aware)
+                let sl_hit = if is_short {
+                    current_price >= pos.stop_loss
+                } else {
+                    current_price <= pos.stop_loss
+                };
+                if sl_hit {
                     let pnl = mgr.close_position(&pos.symbol, current_price, "stop_loss");
                     notifications.push(format!("[{}] 🛑 SL hit: {} @ ${:.2}, PnL: ${:.2}", mode, pos.symbol, current_price, pnl.unwrap_or(0.0)));
                     closes.push((pos.clone(), current_price, "stop_loss".to_string(), pnl));
                     continue;
                 }
 
+                // TP hit helper: direction-aware price comparison
+                let tp_hit = |tp_price: f64| -> bool {
+                    if is_short { current_price <= tp_price } else { current_price >= tp_price }
+                };
+
                 // TP1 hit
-                if !pos.tp1_hit && !pos.take_profits.is_empty() && current_price >= pos.take_profits[0] {
+                if !pos.tp1_hit && !pos.take_profits.is_empty() && tp_hit(pos.take_profits[0]) {
                     mgr.get_position_mut(&pos.symbol).map(|p| p.tp1_hit = true);
                     mgr.partial_close(&pos.symbol, pos.tp1_close_pct, pos.take_profits[0], "tp1");
                     mgr.update_stop_loss(&pos.symbol, pos.entry_price); // Move SL to breakeven
@@ -124,7 +135,7 @@ impl SignalEngine {
                 }
 
                 // TP2 hit
-                if !pos.tp2_hit && pos.take_profits.len() >= 2 && current_price >= pos.take_profits[1] {
+                if !pos.tp2_hit && pos.take_profits.len() >= 2 && tp_hit(pos.take_profits[1]) {
                     mgr.get_position_mut(&pos.symbol).map(|p| p.tp2_hit = true);
                     mgr.partial_close(&pos.symbol, pos.tp2_close_pct, pos.take_profits[1], "tp2");
                     mgr.update_stop_loss(&pos.symbol, pos.take_profits[0]); // Move SL to TP1
@@ -132,23 +143,33 @@ impl SignalEngine {
                 }
 
                 // TP3 hit — start trailing runner instead of full close
-                if !pos.tp3_hit && pos.take_profits.len() >= 3 && current_price >= pos.take_profits[2] {
+                if !pos.tp3_hit && pos.take_profits.len() >= 3 && tp_hit(pos.take_profits[2]) {
                     mgr.get_position_mut(&pos.symbol).map(|p| p.tp3_hit = true);
                     // Move SL to TP3 (breakeven for the runner) — don't close.
-                    // The remaining position trails upward, capturing TPs 4-8.
                     mgr.update_stop_loss(&pos.symbol, pos.take_profits[2]);
-                    notifications.push(format!("[{}] TP3 hit: {} @ ${:.2}, SL → TP3 (trailing runner for TPs 4+)", mode, pos.symbol, pos.take_profits[2]));
+                    notifications.push(format!("[{}] TP3 hit: {} @ ${:.2}, SL → TP3 (trailing runner)", mode, pos.symbol, pos.take_profits[2]));
                 }
 
-                // Trailing runner after TP3: ratchet SL upward toward remaining TPs
+                // Trailing runner after TP3: ratchet SL toward remaining TPs
                 if pos.tp3_hit && pos.take_profits.len() > 3 {
-                    // Find the next un-hit TP level above current price
-                    let next_tp_idx = (3..pos.take_profits.len())
-                        .find(|&i| pos.take_profits[i] > pos.stop_loss)
-                        .unwrap_or(pos.take_profits.len() - 1);
+                    let next_tp_idx = if is_short {
+                        // Short: find next TP BELOW current SL (ratchet downward)
+                        (3..pos.take_profits.len())
+                            .find(|&i| pos.take_profits[i] < pos.stop_loss)
+                            .unwrap_or(pos.take_profits.len() - 1)
+                    } else {
+                        // Long: find next TP ABOVE current SL (ratchet upward)
+                        (3..pos.take_profits.len())
+                            .find(|&i| pos.take_profits[i] > pos.stop_loss)
+                            .unwrap_or(pos.take_profits.len() - 1)
+                    };
                     let next_tp = pos.take_profits[next_tp_idx];
-                    // Trail: when price reaches the next TP, ratchet SL up to halfway
-                    if current_price >= next_tp && next_tp > pos.stop_loss {
+                    let should_trail = if is_short {
+                        current_price <= next_tp && next_tp < pos.stop_loss
+                    } else {
+                        current_price >= next_tp && next_tp > pos.stop_loss
+                    };
+                    if should_trail {
                         let new_sl = (next_tp + pos.stop_loss) / 2.0;
                         mgr.update_stop_loss(&pos.symbol, new_sl);
                         notifications.push(format!("[{}] Trail ratchet: {} SL → ${:.2} (approaching TP{})", mode, pos.symbol, new_sl, next_tp_idx + 1));
@@ -156,8 +177,6 @@ impl SignalEngine {
                 }
             }
         } // position lock released
-
-        // Side-effects (telegram + journal + unified-journal) run WITHOUT the lock.
         for msg in &notifications {
             self.notify(msg).await;
         }

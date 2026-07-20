@@ -90,6 +90,23 @@ def test_dispatch_cycle_futures_error_does_not_kill_spot():
     assert spot.managed == 1
 
 
+def test_dispatch_cycle_spot_error_still_manages_both_engines():
+    """A spot processing error must not skip SL/TP management for the cycle."""
+    listener = _FakeListener("MSG")
+
+    class _BoomSpot(_RecordingEngine):
+        def process_one(self, msg, connector):
+            raise RuntimeError("spot boom")
+
+    spot = _BoomSpot("spot", own_listener=True, listener=listener)
+    futures = _RecordingEngine("futures", own_listener=False)
+
+    rsl.dispatch_cycle(spot, futures, object())
+
+    assert spot.managed == 1
+    assert futures.managed == 1
+
+
 def test_dispatch_cycle_spot_only_when_futures_is_none():
     """Futures disabled => dispatch_cycle with futures=None still drains + spot.
 

@@ -1123,6 +1123,18 @@ mod tests {
     }
 
     #[test]
+    fn waiting_status_reports_adx_gate_when_activation_would_block() {
+        let mut s = warmed_strategy(false);
+        s.config.entry_score_threshold = 1;
+        s.config.adx_gate_threshold = 1_000.0;
+        s.last_price = s.ema_fast.value().max(s.ema_slow.value()) + 1.0;
+
+        let st = s.status();
+
+        assert!(st.details.contains("ADX gate"), "details: {}", st.details);
+    }
+
+    #[test]
     fn short_stop_loss_is_above_entry_long_stop_below() {
         let s = warmed_strategy(true);
         let atr = s.atr.value();

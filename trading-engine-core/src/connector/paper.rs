@@ -1,9 +1,12 @@
 use anyhow::{Result, anyhow};
 use std::collections::HashMap;
+use std::path::PathBuf;
+use serde::{Deserialize, Serialize};
 use crate::connector::types::*;
 use crate::connector::binance_rest::BinanceRest;
 use crate::models::order::OrderSide;
 
+#[derive(Clone, Serialize, Deserialize)]
 struct PaperOrder {
     id: String,
     client_order_id: Option<String>,
@@ -13,6 +16,12 @@ struct PaperOrder {
     quantity: f64,
     order_type: OrderTypeReq,
     reduce_only: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+struct PaperState {
+    open_orders: Vec<PaperOrder>,
+    next_order_id: u64,
 }
 
 /// Split a trading symbol into (base, quote), borrowing from the input.
@@ -243,12 +252,47 @@ impl PaperTradeEngine {
     pub fn trade_history(&self) -> &[Fill] {
         &self.trade_history
     }
+
+    pub fn open_orders(&self, symbol: &str) -> Vec<OpenOrder> {
+        let sym_norm = symbol.replace("-", "");
+        self.open_orders
+            .iter()
+            .filter(|order| order.symbol.replace("-", "") == sym_norm)
+            .map(|order| OpenOrder {
+                order_id: order.id.clone(),
+                symbol: order.symbol.clone(),
+                side: order.side,
+                price: order.price.unwrap_or(0.0),
+                quantity: order.quantity,
+                filled_quantity: 0.0,
+                status: OrderStatus::New,
+            })
+            .collect()
+    }
+
+    pub fn cancel_all_orders(&mut self, symbol: &str) -> Vec<CancelResult> {
+        let sym_norm = symbol.replace("-", "");
+        let mut cancelled = Vec::new();
+        self.open_orders.retain(|order| {
+            if order.symbol.replace("-", "") == sym_norm {
+                cancelled.push(CancelResult {
+                    order_id: order.id.clone(),
+                    symbol: order.symbol.clone(),
+                });
+                false
+            } else {
+                true
+            }
+        });
+        cancelled
+    }
 }
 
 /// Connector trait implementation for paper trading
 pub struct PaperTradeConnector {
     engine: std::sync::Mutex<PaperTradeEngine>,
     market_data: Option<BinanceRest>,
+    state_path: Option<PathBuf>,
 }
 
 impl PaperTradeConnector {
@@ -257,6 +301,7 @@ impl PaperTradeConnector {
         Self {
             engine: std::sync::Mutex::new(PaperTradeEngine::new(balances)),
             market_data: None,
+            state_path: None,
         }
     }
 
@@ -271,7 +316,38 @@ impl PaperTradeConnector {
         Self {
             engine: std::sync::Mutex::new(PaperTradeEngine::new(balances)),
             market_data: Some(BinanceRest::new(api_key, api_secret, testnet)),
+            state_path: None,
         }
+    }
+
+    pub fn with_state_path(mut self, path: impl Into<PathBuf>) -> Self {
+        let path = path.into();
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            if let Ok(state) = serde_json::from_str::<PaperState>(&content) {
+                if let Ok(mut engine) = self.engine.lock() {
+                    engine.open_orders = state.open_orders;
+                    engine.next_order_id = state.next_order_id.max(1);
+                }
+            }
+        }
+        self.state_path = Some(path);
+        self
+    }
+
+    fn persist_state(&self) -> anyhow::Result<()> {
+        let Some(path) = &self.state_path else { return Ok(()); };
+        let content = {
+            let engine = self.engine.lock().unwrap();
+            serde_json::to_string_pretty(&PaperState {
+                open_orders: engine.open_orders.clone(),
+                next_order_id: engine.next_order_id,
+            })?
+        };
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(path, content)?;
+        Ok(())
     }
 
     /// Set the per-symbol fill cooldown (ms). Call after constructing.
@@ -294,17 +370,29 @@ impl PaperTradeConnector {
 #[async_trait::async_trait]
 impl crate::connector::Connector for PaperTradeConnector {
     async fn place_order(&self, req: &OrderRequest) -> anyhow::Result<OrderResponse> {
-        let mut engine = self.engine.lock().unwrap();
-        engine.place_order(req)
+        let resp = {
+            let mut engine = self.engine.lock().unwrap();
+            engine.place_order(req)?
+        };
+        self.persist_state()?;
+        Ok(resp)
     }
 
     async fn cancel_order(&self, _symbol: &str, order_id: &str) -> anyhow::Result<()> {
-        let mut engine = self.engine.lock().unwrap();
-        engine.cancel_order(order_id)
+        {
+            let mut engine = self.engine.lock().unwrap();
+            engine.cancel_order(order_id)?;
+        }
+        self.persist_state()
     }
 
-    async fn cancel_all_orders(&self, _symbol: &str) -> anyhow::Result<Vec<CancelResult>> {
-        Ok(Vec::new()) // Not implemented for paper
+    async fn cancel_all_orders(&self, symbol: &str) -> anyhow::Result<Vec<CancelResult>> {
+        let cancelled = {
+            let mut engine = self.engine.lock().unwrap();
+            engine.cancel_all_orders(symbol)
+        };
+        self.persist_state()?;
+        Ok(cancelled)
     }
 
     async fn get_balances(&self) -> anyhow::Result<std::collections::HashMap<String, f64>> {
@@ -312,8 +400,9 @@ impl crate::connector::Connector for PaperTradeConnector {
         Ok(engine.balances().clone())
     }
 
-    async fn get_open_orders(&self, _symbol: &str) -> anyhow::Result<Vec<OpenOrder>> {
-        Ok(Vec::new()) // Not implemented for paper
+    async fn get_open_orders(&self, symbol: &str) -> anyhow::Result<Vec<OpenOrder>> {
+        let engine = self.engine.lock().unwrap();
+        Ok(engine.open_orders(symbol))
     }
 
     async fn get_order_book(&self, symbol: &str, limit: u16) -> anyhow::Result<OrderBook> {
@@ -338,14 +427,21 @@ impl crate::connector::Connector for PaperTradeConnector {
     }
 
     async fn try_fill_at_price(&self, symbol: &str, market_price: f64) -> Vec<Fill> {
-        let mut engine = self.engine.lock().unwrap();
-        engine.try_fill_at_price(symbol, market_price)
+        let fills = {
+            let mut engine = self.engine.lock().unwrap();
+            engine.try_fill_at_price(symbol, market_price)
+        };
+        if !fills.is_empty() {
+            let _ = self.persist_state();
+        }
+        fills
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::connector::Connector;
 
     fn engine() -> PaperTradeEngine {
         let mut bal = HashMap::new();
@@ -544,5 +640,103 @@ mod tests {
         let maker_fee = e2.try_fill_at_price("BTCUSDT", 50_000.0)[0].fee;
         // 50000 * 1.0 * 2/10000 = 10.0
         assert!((maker_fee - 10.0).abs() < 1e-6, "maker fee {}", maker_fee);
+    }
+
+    #[tokio::test]
+    async fn connector_returns_resting_paper_open_orders_for_symbol() {
+        let connector = PaperTradeConnector::new(HashMap::new());
+        connector.place_order(&OrderRequest {
+            symbol: "BTCUSDT".to_string(),
+            side: OrderSide::Buy,
+            order_type: OrderTypeReq::Limit,
+            price: Some(50_000.0),
+            quantity: 0.25,
+            time_in_force: Some(TimeInForceReq::Gtc),
+            client_order_id: Some("paper-client-1".into()),
+            reduce_only: false,
+        }).await.unwrap();
+        connector.place_order(&OrderRequest {
+            symbol: "ETHUSDT".to_string(),
+            side: OrderSide::Sell,
+            order_type: OrderTypeReq::Limit,
+            price: Some(3_000.0),
+            quantity: 1.0,
+            time_in_force: Some(TimeInForceReq::Gtc),
+            client_order_id: None,
+            reduce_only: false,
+        }).await.unwrap();
+
+        let orders = connector.get_open_orders("BTC-USDT").await.unwrap();
+
+        assert_eq!(orders.len(), 1);
+        assert_eq!(orders[0].order_id, "paper_1");
+        assert_eq!(orders[0].symbol, "BTCUSDT");
+        assert_eq!(orders[0].side, OrderSide::Buy);
+        assert_eq!(orders[0].price, 50_000.0);
+        assert_eq!(orders[0].quantity, 0.25);
+        assert_eq!(orders[0].filled_quantity, 0.0);
+        assert_eq!(orders[0].status, OrderStatus::New);
+    }
+
+    #[tokio::test]
+    async fn connector_cancel_all_orders_removes_only_matching_symbol() {
+        let connector = PaperTradeConnector::new(HashMap::new());
+        connector.place_order(&OrderRequest {
+            symbol: "BTCUSDT".to_string(),
+            side: OrderSide::Buy,
+            order_type: OrderTypeReq::Limit,
+            price: Some(50_000.0),
+            quantity: 0.25,
+            time_in_force: None,
+            client_order_id: None,
+            reduce_only: false,
+        }).await.unwrap();
+        connector.place_order(&OrderRequest {
+            symbol: "ETHUSDT".to_string(),
+            side: OrderSide::Buy,
+            order_type: OrderTypeReq::Limit,
+            price: Some(3_000.0),
+            quantity: 1.0,
+            time_in_force: None,
+            client_order_id: None,
+            reduce_only: false,
+        }).await.unwrap();
+
+        let cancelled = connector.cancel_all_orders("BTC-USDT").await.unwrap();
+
+        assert_eq!(cancelled.len(), 1);
+        assert_eq!(cancelled[0].order_id, "paper_1");
+        assert_eq!(connector.get_open_orders("BTCUSDT").await.unwrap().len(), 0);
+        assert_eq!(connector.get_open_orders("ETHUSDT").await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn connector_persists_open_orders_across_restart() {
+        let path = std::env::temp_dir().join(format!(
+            "paper_orders_{}.json",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        {
+            let connector = PaperTradeConnector::new(HashMap::new()).with_state_path(path.clone());
+            connector.place_order(&OrderRequest {
+                symbol: "BTCUSDT".to_string(),
+                side: OrderSide::Buy,
+                order_type: OrderTypeReq::Limit,
+                price: Some(50_000.0),
+                quantity: 0.25,
+                time_in_force: None,
+                client_order_id: Some("persist-me".into()),
+                reduce_only: false,
+            }).await.unwrap();
+        }
+
+        let restarted = PaperTradeConnector::new(HashMap::new()).with_state_path(path.clone());
+        let orders = restarted.get_open_orders("BTCUSDT").await.unwrap();
+
+        assert_eq!(orders.len(), 1);
+        assert_eq!(orders[0].order_id, "paper_1");
+        assert_eq!(orders[0].quantity, 0.25);
+
+        let _ = std::fs::remove_file(path);
     }
 }

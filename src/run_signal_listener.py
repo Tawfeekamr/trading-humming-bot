@@ -129,37 +129,39 @@ def _poll_commands(handler):
 def dispatch_cycle(spot_engine, futures_engine, connector):
     """Run ONE dispatch cycle of the shared signal loop.
 
-    Drains the spot engine's Telethon listener queue and dispatches EVERY message
-    to BOTH engines' `process_one`, then calls `manage(connector)` on both. Only
-    the spot engine owns the listener; the futures engine is headless.
-
-    If `futures_engine` is None (futures disabled or no keys), this degrades to
-    the historical spot-only behavior: drain + spot.process_one + spot.manage.
+    Processes at most one queued message per cycle so a slow DeepSeek call
+    (2-5s) never starves position management (SL/TP checks). Multiple queued
+    messages are drained one-per-second, interleaved with manage() calls.
+    This guarantees position management fires at least every ~5s even under
+    heavy signal load. Only the spot engine owns the listener; the futures
+    engine is headless.
 
     A futures-engine error must never kill the spot engine, so the futures
     dispatch is wrapped in try/except + log.
     """
-    # Drain the spot engine's listener queue. The futures engine has no listener.
+    # Drain at most one message from the spot engine's queue per cycle.
+    msg = None
     if spot_engine._listener is not None:
-        while True:
-            msg = spot_engine._listener.get_message()
-            if msg is None:
-                break
-            spot_engine.process_one(msg, connector)
-            if futures_engine is not None:
-                try:
-                    futures_engine.process_one(msg, connector)
-                except Exception as e:
-                    logger.error("Futures process_one error (spot continues): %s", e)
+        msg = spot_engine._listener.get_message()
 
-    # Then manage positions on both engines.
+    if msg is not None:
+        try:
+            spot_engine.process_one(msg, connector)
+        except Exception as e:
+            logger.error("Spot process_one error (manage still runs): %s", e)
+        if futures_engine is not None:
+            try:
+                futures_engine.process_one(msg, connector)
+            except Exception as e:
+                logger.error("Futures process_one error (spot continues): %s", e)
+
+    # Always manage positions — even when a message was just processed.
     spot_engine.manage(connector)
     if futures_engine is not None:
         try:
             futures_engine.manage(connector)
         except Exception as e:
             logger.error("Futures manage error (spot continues): %s", e)
-
 
 def _build_futures_engine(signal_cfg: dict, fc: dict):
     """Build the headless PAPER futures engine, or None if disabled.

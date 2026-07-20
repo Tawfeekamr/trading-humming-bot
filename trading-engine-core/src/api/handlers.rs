@@ -46,11 +46,11 @@ pub async fn place_order(
     State(state): State<AppState>,
     Json(req): Json<OrderRequest>,
 ) -> impl IntoResponse {
-    match state.connector.place_order(&req).await {
+    match state.order_commands.place_order(req).await {
         Ok(resp) => Ok(Json(resp)),
         Err(e) => Err((
             axum::http::StatusCode::BAD_GATEWAY,
-            Json(serde_json::json!({ "error": e.to_string() })),
+            Json(serde_json::json!({ "error": e })),
         )),
     }
 }
@@ -61,11 +61,11 @@ pub async fn cancel_order(
     State(state): State<AppState>,
     Query(params): Query<CancelOrderQuery>,
 ) -> impl IntoResponse {
-    match state.connector.cancel_order(&params.symbol, &params.order_id).await {
+    match state.order_commands.cancel_order(params.symbol, params.order_id).await {
         Ok(()) => Ok(Json(serde_json::json!({ "cancelled": true }))),
         Err(e) => Err((
             axum::http::StatusCode::BAD_GATEWAY,
-            Json(serde_json::json!({ "error": e.to_string() })),
+            Json(serde_json::json!({ "error": e })),
         )),
     }
 }
@@ -74,11 +74,11 @@ pub async fn cancel_all_orders(
     State(state): State<AppState>,
     Query(params): Query<SymbolQuery>,
 ) -> impl IntoResponse {
-    match state.connector.cancel_all_orders(&params.symbol).await {
+    match state.order_commands.cancel_all_orders(params.symbol).await {
         Ok(results) => Ok(Json(results)),
         Err(e) => Err((
             axum::http::StatusCode::BAD_GATEWAY,
-            Json(serde_json::json!({ "error": e.to_string() })),
+            Json(serde_json::json!({ "error": e })),
         )),
     }
 }
@@ -237,14 +237,23 @@ mod tests {
     use crate::strategy::regime_cache::RegimeCache;
     use crate::strategy::routing_cache::RoutingCache;
     use crate::capital::CapitalManager;
+    use crate::api::order_command::{EngineCommand, EngineCommandBus};
+    use crate::connector::types::OrderResponse;
+    use crate::models::order::OrderSide;
+    use crate::connector::types::OrderStatus;
 
     fn test_app() -> Router {
+        let (bus, _rx) = EngineCommandBus::channel(8);
+        test_app_with_bus(bus)
+    }
+
+    fn test_app_with_bus(bus: EngineCommandBus) -> Router {
         let mut balances = HashMap::new();
         balances.insert("USDT".to_string(), 10000.0);
         let connector = Arc::new(PaperTradeConnector::new(balances)) as Arc<dyn Connector>;
         let regime_cache = RegimeCache::new("data/regime_cache.json", 180_000); // 3min TTL = 3×60s poll
         let routing_cache = RoutingCache::new("data/routing_cache.json", 0); // no TTL for tests
-        create_router(AppState::new(connector, BarCache::new(), StrategyStatusCache::new(), regime_cache, routing_cache, CapitalManager::new(20.0)))
+        create_router(AppState::new(connector, BarCache::new(), StrategyStatusCache::new(), regime_cache, routing_cache, CapitalManager::new(20.0), bus))
     }
 
     #[tokio::test]
@@ -270,7 +279,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_place_order() {
+    async fn test_place_order_fails_when_engine_queue_closed() {
         let app = test_app();
         let body = serde_json::json!({
             "symbol": "BTCUSDT",
@@ -288,7 +297,56 @@ mod tests {
             .body(Body::from(serde_json::to_string(&body).unwrap()))
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
+    }
+
+    #[tokio::test]
+    async fn test_place_order_uses_engine_command_bus() {
+        let (bus, mut rx) = EngineCommandBus::channel(8);
+        let app = test_app_with_bus(bus);
+        let body = serde_json::json!({
+            "symbol": "BTCUSDT",
+            "side": "BUY",
+            "order_type": "Limit",
+            "price": 50000.0,
+            "quantity": 0.001,
+            "time_in_force": "Gtc",
+            "client_order_id": "api_test"
+        });
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/order")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_string(&body).unwrap()))
+            .unwrap();
+
+        let response_task = tokio::spawn(async move { app.oneshot(req).await.unwrap() });
+        let cmd = tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv())
+            .await
+            .expect("API must send command to Engine")
+            .expect("command channel open");
+        match cmd {
+            EngineCommand::PlaceOrder { req, respond_to } => {
+                assert_eq!(req.symbol, "BTCUSDT");
+                assert_eq!(req.client_order_id.as_deref(), Some("api_test"));
+                respond_to.send(Ok(OrderResponse {
+                    order_id: "engine_order".into(),
+                    client_order_id: Some("api_test".into()),
+                    symbol: "BTCUSDT".into(),
+                    side: OrderSide::Buy,
+                    price: 50000.0,
+                    quantity: 0.001,
+                    status: OrderStatus::New,
+                })).unwrap();
+            }
+            _ => panic!("expected place-order command"),
+        }
+
+        let resp = response_task.await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["orderId"], "engine_order");
     }
 
     #[tokio::test]
@@ -332,6 +390,7 @@ mod tests {
         let mut balances = HashMap::new();
         balances.insert("USDT".to_string(), 10000.0);
         let connector = Arc::new(PaperTradeConnector::new(balances)) as Arc<dyn Connector>;
+        let (bus, _rx) = EngineCommandBus::channel(8);
         let app = create_router(AppState::new(
             connector,
             BarCache::new(),
@@ -339,6 +398,7 @@ mod tests {
             RegimeCache::new("data/regime_cache.json", 180_000),
             routing_cache.clone(),
             CapitalManager::new(20.0),
+            bus,
         ));
 
         let payload = serde_json::json!({
