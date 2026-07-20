@@ -42,11 +42,15 @@ pub struct PaperConfig {
     pub taker_fee_bps: f64,
     #[serde(default = "default_10")]
     pub maker_fee_bps: f64,
+    /// Paper execution stays simulated; this only chooses Binance market-data source.
+    /// Default false uses production market data for realistic paper fills/quotes.
+    #[serde(default)]
+    pub market_data_testnet: bool,
 }
 
 impl Default for PaperConfig {
     fn default() -> Self {
-        Self { slippage_bps: 0.0, taker_fee_bps: 10.0, maker_fee_bps: 10.0 }
+        Self { slippage_bps: 0.0, taker_fee_bps: 10.0, maker_fee_bps: 10.0, market_data_testnet: false }
     }
 }
 
@@ -571,6 +575,29 @@ fn default_30() -> f64 { 30.0 }
 fn default_1() -> f64 { 1.0 }
 fn default_28() -> f64 { 28.0 }
 fn default_48_usize() -> usize { 48 }
+
+#[cfg(test)]
+mod paper_config_tests {
+    use super::*;
+
+    #[derive(serde::Deserialize)]
+    struct Wrap {
+        #[serde(default)]
+        paper: PaperConfig,
+    }
+
+    #[test]
+    fn paper_market_data_testnet_defaults_false() {
+        let w: Wrap = serde_yaml::from_str("{}").unwrap();
+        assert!(!w.paper.market_data_testnet);
+    }
+
+    #[test]
+    fn paper_market_data_testnet_reads_true_when_set() {
+        let w: Wrap = serde_yaml::from_str("paper:\n  market_data_testnet: true\n").unwrap();
+        assert!(w.paper.market_data_testnet);
+    }
+}
 
 #[cfg(test)]
 mod regime_gate_config_tests {

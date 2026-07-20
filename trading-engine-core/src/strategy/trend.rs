@@ -97,6 +97,19 @@ struct TrendPositionState {
     realized_pnl: f64,
 }
 
+#[derive(Default, Clone)]
+struct TrendNoTradeCounters {
+    warmup: u64,
+    no_quote: u64,
+    replay: u64,
+    suppressed: u64,
+    regime: u64,
+    direction: u64,
+    adx: u64,
+    score: u64,
+    capital: u64,
+}
+
 pub struct TrendStrategy {
     pair: String,
     config: TrendConfig,
@@ -146,6 +159,7 @@ pub struct TrendStrategy {
     /// Splitting the two flags fixes the regression where `set_paused(true)`
     /// force-closed open positions on every engine switch.
     force_close_pending: bool,
+    no_trade: TrendNoTradeCounters,
 }
 
 impl TrendStrategy {
@@ -204,6 +218,7 @@ impl TrendStrategy {
             perp: None,
             entries_suppressed: false,
             force_close_pending: false,
+            no_trade: TrendNoTradeCounters::default(),
         };
         me.load_position();
         me
@@ -316,24 +331,41 @@ impl TrendStrategy {
         }
     }
 
-    /// Activate — enter when score meets threshold AND direction is clear.
-    fn should_activate(&self, price: f64) -> bool {
+    fn activation_block_reason(&self, price: f64) -> Option<String> {
         let dir = self.direction(price);
         if self.config.trade_shorts {
-            if dir == Direction::Flat { return false; }
-        } else {
-            if dir != Direction::Up { return false; }
+            if dir == Direction::Flat {
+                return Some("direction gate (flat)".to_string());
+            }
+        } else if dir != Direction::Up {
+            return Some(match dir {
+                Direction::Down => "direction gate (shorts disabled)".to_string(),
+                Direction::Flat => "direction gate (flat)".to_string(),
+                Direction::Up => unreachable!(),
+            });
         }
+
         // Trend-strength gate: never enter a pair with no real trend, even if
         // the weighted score clears the threshold on volume/RSI alone. Without
         // this a ranging pair (ADX≈0) enters then immediately trips the
         // "ADX dying" exit → an entry/exit churn loop (XRP logged 1,807 such
         // trades in one day on a no-trend pair).
         let adx_gate = if self.config.adx_gate_threshold > 0.0 { self.config.adx_gate_threshold } else { 20.0 };
-        if self.adx.adx() < adx_gate { return false; }
+        if self.adx.adx() < adx_gate {
+            return Some(format!("ADX gate ({:.1} < {:.1})", self.adx.adx(), adx_gate));
+        }
+
         let threshold = if self.config.entry_score_threshold > 0 { self.config.entry_score_threshold } else { 5 };
         let scores = self.compute_score(dir);
-        scores.total >= threshold
+        if scores.total < threshold {
+            return Some(format!("score gate (need {} more)", threshold - scores.total));
+        }
+        None
+    }
+
+    /// Activate — enter when score meets threshold AND direction is clear.
+    fn should_activate(&self, price: f64) -> bool {
+        self.activation_block_reason(price).is_none()
     }
 
     /// Layer 5: EXIT — ADX dying OR direction flipped.
@@ -490,7 +522,10 @@ impl Strategy for TrendStrategy {
         }
         self.last_bar_count = ctx.recent_bars.len();
 
-        if !self.indicators_ready() { return Ok(orders); }
+        if !self.indicators_ready() {
+            self.no_trade.warmup += 1;
+            return Ok(orders);
+        }
 
         // Require a live order-book quote. The previous fallback to
         // recent_bars.last().close let the strategy trade at a stale bar close
@@ -500,7 +535,10 @@ impl Strategy for TrendStrategy {
         // TP exits at prices the live market never reached (ETH "exits" at
         // $1832.52 while real ETH was ~$1.6k). No live quote => hold.
         let mut current_price = ctx.order_book.mid_price().unwrap_or(0.0);
-        if current_price <= 0.0 { return Ok(orders); }
+        if current_price <= 0.0 {
+            self.no_trade.no_quote += 1;
+            return Ok(orders);
+        }
         // Open SHORT positions are marked against the perp feed (configurable),
         // so short MTM/triggers/exits reflect the perpetual, not spot. Longs and
         // no-position ticks keep the spot mid. On perp fetch failure, fall back
@@ -798,9 +836,33 @@ impl Strategy for TrendStrategy {
             )
             && ctx.regime_confidence >= self.config.min_regime_confidence;
 
-        if self.position.is_none() && !ctx.replay && !self.entries_suppressed
-            && !entry_blocked_by_regime {
-            if self.should_activate(current_price) {
+        if self.position.is_none() {
+            if ctx.replay {
+                self.no_trade.replay += 1;
+            } else if self.entries_suppressed {
+                self.no_trade.suppressed += 1;
+            } else if entry_blocked_by_regime {
+                self.no_trade.regime += 1;
+            } else if let Some(reason) = self.activation_block_reason(current_price) {
+                if reason.starts_with("direction") {
+                    self.no_trade.direction += 1;
+                } else if reason.starts_with("ADX") {
+                    self.no_trade.adx += 1;
+                } else if reason.starts_with("score") {
+                    self.no_trade.score += 1;
+                }
+                // Log WHY entry was skipped — score breakdown, direction, threshold
+                let dir = self.direction(current_price);
+                let scores = self.compute_score(dir);
+                let threshold = if self.config.entry_score_threshold > 0 { self.config.entry_score_threshold } else { 5 };
+                debug!(
+                    "[{}] Entry skipped: {} | dir={:?} score={}/{} need≥={} | ADX={:.1} CHOP={:.0} VOL={:.2} MACD={} RSI={:.1}",
+                    self.pair, reason, dir, scores.total, 9, threshold,
+                    self.adx.adx(), self.choppiness.value(),
+                    self.volume_sma.volume_ratio(),
+                    scores.macd, self.rsi.value()
+                );
+            } else {
                 let side = entry_side_for(self.direction(current_price));
                 let stop_loss = self.calculate_stop_loss(current_price, side);
                 let quantity = self.calculate_quantity(current_price, stop_loss, side);
@@ -823,19 +885,9 @@ impl Strategy for TrendStrategy {
                         order_type: OrderTypeReq::Limit, price: Some(current_price),
                         quantity, time_in_force: Some(TimeInForceReq::Gtc), client_order_id: None,
                     });
+                } else {
+                    self.no_trade.capital += 1;
                 }
-            } else {
-                // Log WHY entry was skipped — score breakdown, direction, threshold
-                let dir = self.direction(current_price);
-                let scores = self.compute_score(dir);
-                let threshold = if self.config.entry_score_threshold > 0 { self.config.entry_score_threshold } else { 5 };
-                debug!(
-                    "[{}] Entry skipped: dir={:?} score={}/{} need≥={} | ADX={:.1} CHOP={:.0} VOL={:.2} MACD={} RSI={:.1}",
-                    self.pair, dir, scores.total, 9, threshold,
-                    self.adx.adx(), self.choppiness.value(),
-                    self.volume_sma.volume_ratio(),
-                    scores.macd, self.rsi.value()
-                );
             }
         }
         Ok(orders)
@@ -926,18 +978,22 @@ impl Strategy for TrendStrategy {
             let scores = self.compute_score(dir);
             let threshold = if self.config.entry_score_threshold > 0 { self.config.entry_score_threshold } else { 5 };
             let dir_str = match dir { Direction::Up => "+1", Direction::Down => "-1", Direction::Flat => "0" };
-            let reason = if dir == Direction::Flat { "Mixed direction".to_string() }
-                         else if dir == Direction::Down && !self.config.trade_shorts { "dir=-1 blocks longs".to_string() }
-                         else if scores.total < threshold { format!("Need {} more", threshold - scores.total) }
-                         else { "Ready".to_string() };
+            let reason = self.activation_block_reason(ref_price).unwrap_or_else(|| "Ready".to_string());
+            let skips = &self.no_trade;
+            let skip_summary = format!(
+                "skips w:{} q:{} r:{} p:{} m:{} d:{} a:{} s:{} c:{}",
+                skips.warmup, skips.no_quote, skips.replay, skips.suppressed, skips.regime,
+                skips.direction, skips.adx, skips.score, skips.capital
+            );
             (
                 "WAITING".to_string(),
-                format!("Score:{}/9 (A:{} C:{} V:{} M:{} R:{}) need≥{} | dir:{} | ADX={:.1} CHOP={:.0} RSI={:.1} | {} | Realized: ${:.0}",
+                format!("Score:{}/9 (A:{} C:{} V:{} M:{} R:{}) need≥{} | dir:{} | ADX={:.1} CHOP={:.0} RSI={:.1} | {} | {} | Realized: ${:.0}",
                     scores.total,
                     scores.adx, scores.chop, scores.volume, scores.macd, scores.rsi,
                     threshold,
                     dir_str,
                     self.adx.adx(), self.choppiness.value(), self.rsi.value(), reason,
+                    skip_summary,
                     self.realized_pnl),
                 self.realized_pnl,
             )
@@ -1045,6 +1101,15 @@ fn trend_exit_message(pair: &str, reason: &str, exit_price: f64, pnl: f64, runni
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// Unique per-call pair so a test's `data/{pair}_trend_position.json` can't be
+    /// corrupted by a parallel test that saves the same pair's position while this
+    /// test reads it via `status()` (the a276226 parallel-flakiness fix pattern).
+    fn unique_test_pair(tag: &str) -> String {
+        static N: AtomicU64 = AtomicU64::new(0);
+        format!("{tag}{}-USDT", N.fetch_add(1, Ordering::SeqCst))
+    }
 
     #[test]
     fn duration_minutes_uses_millisecond_timestamps() {
@@ -1082,6 +1147,22 @@ mod tests {
     }
 
     #[test]
+    fn no_trade_counters_include_adx_gate_skips() {
+        let mut s = warmed_strategy(false);
+        s.pair = format!("ADXGATE-{}-USDT", chrono::Utc::now().timestamp_nanos_opt().unwrap());
+        s.position = None;
+        s.config.entry_score_threshold = 1;
+        s.config.adx_gate_threshold = 1_000.0;
+        let price = s.ema_fast.value().max(s.ema_slow.value()) + 1.0;
+
+        let orders = run_tick(&mut s, tick_at(price));
+        let st = s.status();
+
+        assert!(orders.is_empty());
+        assert!(st.details.contains("a:1"), "details: {}", st.details);
+    }
+
+    #[test]
     fn trade_pnl_sign_correct_for_both_sides() {
         // Long: exit above entry is profit.
         assert!((trade_pnl(OrderSide::Buy, 100.0, 110.0, 2.0) - 20.0).abs() < 1e-9);
@@ -1109,11 +1190,11 @@ mod tests {
         assert!(!tp_hit(OrderSide::Sell, 100.0, 95.0));
     }
 
-    fn warmed_strategy(trade_shorts: bool) -> TrendStrategy {
+    fn warmed_strategy_pair(pair: &str, trade_shorts: bool) -> TrendStrategy {
         let mut config = base_test_config();
         config.trade_shorts = trade_shorts;
         let tg = crate::notifications::TelegramBot::new("", "");
-        let mut s = TrendStrategy::new("TESTPAIR-USDT", &config, tg);
+        let mut s = TrendStrategy::new(pair, &config, tg);
         for i in 0..260 {
             let p = 100.0 + (i as f64 * 0.01); // gentle drift, keeps ATR modest
             s.update_indicators(&Bar::new(p - 0.5, p + 0.5, p - 0.25, p, 100.0, 0));
@@ -1122,9 +1203,13 @@ mod tests {
         s
     }
 
+    fn warmed_strategy(trade_shorts: bool) -> TrendStrategy {
+        warmed_strategy_pair("TESTPAIR-USDT", trade_shorts)
+    }
+
     #[test]
     fn waiting_status_reports_adx_gate_when_activation_would_block() {
-        let mut s = warmed_strategy(false);
+        let mut s = warmed_strategy_pair(&unique_test_pair("ADXG"), false);
         s.config.entry_score_threshold = 1;
         s.config.adx_gate_threshold = 1_000.0;
         s.last_price = s.ema_fast.value().max(s.ema_slow.value()) + 1.0;
