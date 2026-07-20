@@ -52,7 +52,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # Heavy imports (pandas_ta via feature_engineering) — lazy so --help is fast.
     from src.data.feature_engineering import calculate_technical_features
-    from src.data.label_generation import generate_regime_labels
+    from src.data.label_generation import generate_regime_labels_nowcast
     from src.ml.regime_classifier import RegimeClassifier
     from src.rl.data import load_klines
     from src.rl.features import MARKET_FEATURE_COLS
@@ -67,26 +67,51 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  {len(bars):,} bars")
 
     feats = calculate_technical_features(bars)
-    labeled = generate_regime_labels(feats)
-    labeled = labeled[labeled["regime_label"] >= 0]  # drop no-future tail
+    labeled = generate_regime_labels_nowcast(feats)
+    labeled = labeled[labeled["regime_label"] >= 0]  # drop no-history tail (first window-1)
     labeled = labeled.dropna(subset=MARKET_FEATURE_COLS)  # drop warmup NaNs
     if labeled.empty:
         print("ERROR: no labeled rows after warmup/truncation; cannot train.")
         return 1
 
-    X = labeled[MARKET_FEATURE_COLS]
-    y = labeled["regime_label"]
-    counts = {int(k): int(v) for k, v in y.value_counts().items()}
-    print(f"  labeled: {len(labeled):,} rows, class counts {counts}")
+    # Temporal split: fit on the first 85% by time, calibrate on the held-out
+    # tail (never seen by the fit) so emitted probabilities are honest.
+    labeled = labeled.sort_index()
+    split = int(len(labeled) * 0.85)
+    train_df, cal_df = labeled.iloc[:split], labeled.iloc[split:]
+    X_tr, y_tr = train_df[MARKET_FEATURE_COLS], train_df["regime_label"]
+    X_cal, y_cal = cal_df[MARKET_FEATURE_COLS], cal_df["regime_label"]
+    counts = {int(k): int(v) for k, v in y_tr.value_counts().items()}
+    print(
+        f"  fit: {len(train_df):,} rows (class counts {counts}); "
+        f"calibrate: {len(cal_df):,} held-out rows"
+    )
 
     out = args.output or f"models/regime_{_pair_to_slug(args.pair)}_clean.pkl"
     clf = RegimeClassifier(model_path=out, model_type="random_forest")
-    clf.train(X, y)
+    # Deeper, regularized forest — the depth-5 default underfits; now that the
+    # label is learnable, full depth + min_samples_leaf fits real structure, and
+    # isotonic calibration makes the confidences honest.
+    from sklearn.ensemble import RandomForestClassifier
+
+    clf.model = RandomForestClassifier(
+        n_estimators=200,
+        max_depth=None,
+        min_samples_leaf=5,
+        max_features="sqrt",
+        class_weight="balanced_subsample",
+        n_jobs=-1,
+        random_state=42,
+    )
+    clf.train(X_tr, y_tr)
+    clf.calibrate(X_cal, y_cal)
     clf.save_model()
     print(
         f"Saved -> {out}\n"
-        f"  Labeling: forward-looking 3-class (0=ranging, 1=trending, 2=danger), "
-        f"horizon=24 bars, |ret|>=2% / drawdown<=-3%. Defined, not recovered."
+        f"  Labeling: now-cast (trailing window, no lookahead), 3-class "
+        f"(0=ranging, 1=trending, 2=danger), window=24 bars, "
+        f"|ret|>=2% / max-drawdown<=-3%. "
+        f"Forest: depth-full, min_samples_leaf=5, isotonic-calibrated."
     )
     return 0
 

@@ -81,3 +81,58 @@ def generate_regime_labels(
     out = df.copy()
     out["regime_label"] = labels
     return out
+
+
+def generate_regime_labels_nowcast(
+    df: pd.DataFrame,
+    window: int = DEFAULT_HORIZON,
+    trend_thr: float = DEFAULT_TREND_THR,
+    danger_thr: float = DEFAULT_DANGER_THR,
+) -> pd.DataFrame:
+    """Add a trailing-window (now-cast) ``regime_label`` column (0/1/2, or -1).
+
+    At each bar T, classifies the regime over the PAST ``window`` bars ending at
+    and including T — ``close[T-window+1 … T]``. Fully deterministic from past
+    data (no lookahead), unlike the forward-looking :func:`generate_regime_labels`.
+
+    * **2 (danger)** — max drawdown within the window ≤ ``danger_thr``.
+    * **1 (trending)** — ``|return over window|`` ≥ ``trend_thr``.
+    * **0 (ranging)** — neither.
+
+    Danger takes precedence over trending. The first ``window-1`` bars carry
+    ``-1`` (insufficient history) and should be dropped before training.
+
+    Args:
+        df: frame with a ``close`` column (typically
+            ``calculate_technical_features`` output, which preserves ``close``).
+        window: trailing window in bars (default 24 = 1 day of 1h bars).
+        trend_thr: |window return| threshold for the trending class.
+        danger_thr: max-drawdown threshold for the danger class (negative).
+
+    Returns:
+        A copy of ``df`` with an integer ``regime_label`` column.
+    """
+    if "close" not in df.columns:
+        raise ValueError("generate_regime_labels_nowcast requires a 'close' column")
+    if window <= 0:
+        raise ValueError("window must be positive")
+
+    close = df["close"].to_numpy(dtype=np.float64)
+    n = len(close)
+    labels = np.full(n, _NO_LABEL, dtype=np.int64)
+
+    for T in range(window - 1, n):
+        w = close[T - window + 1 : T + 1]            # `window` bars, incl. T
+        running_max = np.maximum.accumulate(w)
+        window_dd = float(((w - running_max) / running_max).min())   # ≤ 0
+        window_ret = float((w[-1] - w[0]) / w[0])
+        if window_dd <= danger_thr:
+            labels[T] = 2
+        elif abs(window_ret) >= trend_thr:
+            labels[T] = 1
+        else:
+            labels[T] = 0
+
+    out = df.copy()
+    out["regime_label"] = labels
+    return out

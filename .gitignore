@@ -45,3 +45,6 @@ iac/**/.terraform/
 
 # Rust build artifacts
 trading-engine-core/target/
+
+# local pre-retrain safety backup (not for commit)
+models/_pre_retrain_backup_*/
