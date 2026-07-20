@@ -292,12 +292,29 @@ class SignalEngine:
         self._process_message(msg, connector)
         return signal
 
-    def manual_close(self, symbol: str) -> Optional[str]:
-        """Manually close a signal position. Returns reason or None."""
+    def manual_close(self, symbol: str, connector=None) -> Optional[str]:
+        """Manually close a signal position at the current market price.
+
+        Places the exchange sell via ``_execute_close`` (so the broker position
+        actually closes — not just the tracker), then records the close at the
+        real price so realized_pnl is correct. Previously this reused
+        ``entry_price`` (→ ~$0 PnL) and skipped ``_execute_close``, leaving the
+        exchange position open while the tracker showed closed.
+        """
         pos = self._position_mgr.get_position(symbol)
         if not pos:
             return None
-        pnl = self._position_mgr.close_position(symbol, pos.entry_price, "manual")
+        conn = connector if connector is not None else self._current_connector
+        price = self._get_current_price(conn, symbol)
+        if price <= 0:
+            logger.warning(f"manual_close {symbol}: no current price — tracker NOT updated")
+            return None
+        if not self._audit_mode and not self._execute_close(pos, price, "manual"):
+            logger.warning(f"manual_close {symbol}: exchange sell FAILED — tracker NOT updated")
+            return None
+        pnl = self._position_mgr.close_position(symbol, price, "manual")
+        self._record_close(pos, price, "manual", pnl)
+        self._notify(f"[{'AUDIT' if self._audit_mode else 'LIVE'}] Manually closed: {symbol} @ ${price:,.2f}")
         return "manual" if pnl is not None else None
 
     def _process_message(self, msg: dict, connector):

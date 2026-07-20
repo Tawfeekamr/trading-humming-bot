@@ -190,18 +190,49 @@ def test_futures_entry_rechecks_risk_before_open(monkeypatch, tmp_path):
     assert not any(c[0] == "open" for c in conn.calls)
 
 
-def test_manual_close_uses_position_manager_close(monkeypatch, tmp_path):
+def test_manual_close_uses_current_price_and_places_exchange_sell(monkeypatch, tmp_path):
+    """manual_close must sell at the CURRENT price (not entry_price → ~$0 PnL)
+    AND place the exchange sell via _execute_close (else the tracker shows closed
+    while the broker position stays open)."""
     monkeypatch.setattr(SignalEngine, "_refresh_available_pairs", lambda self: None)
-    eng = SignalEngine(config={"enabled": True, "audit_mode": True},
+    eng = SignalEngine(config={"enabled": True, "audit_mode": False},
                        btc_regime_fn=lambda: ("RANGING", 0.0, 0.0))
     from src.signals.signal_position import SignalPosition
     pos = SignalPosition("ETH-USDT", 3000.0, 1.0, 2900.0, [3100.0], "high", "x", "chan")
-    close_calls = []
     eng._position_mgr.get_position = lambda sym: pos
-    eng._position_mgr.close_position = lambda sym, price, reason: close_calls.append((sym, price, reason)) or 0.0
+
+    sell_calls, close_calls = [], []
+    eng._get_current_price = lambda conn, sym: 3500.0          # market > entry 3000
+    eng._execute_close = lambda p, price, reason, amount=None: (
+        sell_calls.append((p.symbol, price, reason)) or True)
+    eng._position_mgr.close_position = lambda sym, price, reason: (
+        close_calls.append((sym, price, reason)) or 150.0)     # real PnL, not ~$0
+    eng._record_close = lambda *a, **k: None
+    eng._notify = lambda *a, **k: None
 
     assert eng.manual_close("ETH-USDT") == "manual"
-    assert close_calls == [("ETH-USDT", 3000.0, "manual")]
+    # exchange sell placed at the CURRENT price (not entry 3000)
+    assert sell_calls == [("ETH-USDT", 3500.0, "manual")]
+    # tracker closed at the current price so realized_pnl is real
+    assert close_calls == [("ETH-USDT", 3500.0, "manual")]
+
+
+def test_manual_close_skips_when_no_current_price(monkeypatch, tmp_path):
+    """If no current price is available, manual_close must NOT mutate the tracker
+    (can't compute PnL) and must NOT place an exchange sell."""
+    monkeypatch.setattr(SignalEngine, "_refresh_available_pairs", lambda self: None)
+    eng = SignalEngine(config={"enabled": True, "audit_mode": False},
+                       btc_regime_fn=lambda: ("RANGING", 0.0, 0.0))
+    from src.signals.signal_position import SignalPosition
+    pos = SignalPosition("ETH-USDT", 3000.0, 1.0, 2900.0, [3100.0], "high", "x", "chan")
+    eng._position_mgr.get_position = lambda sym: pos
+    eng._get_current_price = lambda conn, sym: 0.0  # no price available
+    sell_calls, close_calls = [], []
+    eng._execute_close = lambda *a, **k: sell_calls.append(a) or True
+    eng._position_mgr.close_position = lambda *a, **k: close_calls.append(a) or 0.0
+
+    assert eng.manual_close("ETH-USDT") is None
+    assert sell_calls == [] and close_calls == []
 
 
 def _futures_manage_engine(monkeypatch, tmp_path, price, side="long",
