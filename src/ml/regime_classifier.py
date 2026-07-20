@@ -51,15 +51,19 @@ class RegimeClassifier:
         self.is_trained = True
         print("Training complete.")
 
-    def calibrate(self, X_val, y_val):
+    def calibrate(self, X_val, y_val, cv="prefit"):
         n_samples = len(X_val)
         # Isotonic can overfit on small samples; sigmoid is more stable
         method = 'isotonic' if n_samples >= 500 else 'sigmoid'
+        # cv='prefit': the estimator is already fit; fit ONE calibrator on the
+        # full held-out X_val (no k-fold refit). Standard prefit calibration, and
+        # it avoids pickling k copies of the forest (cv=5 -> 6 forests ≈ 95MB;
+        # prefit -> 1 forest ≈ 16MB). Pass cv=5 for the k-fold ensemble behaviour.
         self.calibrated_model = CalibratedClassifierCV(
-            self.model, method=method, cv=5
+            self.model, method=method, cv=cv
         )
         self.calibrated_model.fit(X_val, y_val)
-        print(f"Calibration complete (method={method}, n_samples={n_samples}).")
+        print(f"Calibration complete (method={method}, cv={cv}, n_samples={n_samples}).")
 
     def predict_proba(self, X):
         if not self.is_trained:
