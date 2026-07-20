@@ -55,7 +55,7 @@ def main(argv: list[str] | None = None) -> int:
     from src.data.label_generation import generate_regime_labels_nowcast
     from src.ml.regime_classifier import RegimeClassifier
     from src.rl.data import load_klines
-    from src.rl.features import MARKET_FEATURE_COLS
+    from src.data.feature_contract import FEATURE_SCHEMA_VERSION, MARKET_FEATURE_COLS
 
     end = date.fromisoformat(args.train_end) if args.train_end else date.today()
     start = end - timedelta(days=30 * args.months)
@@ -105,6 +105,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     clf.train(X_tr, y_tr)
     clf.calibrate(X_cal, y_cal)
+    clf.feature_columns = list(MARKET_FEATURE_COLS)
+    clf.feature_schema_version = FEATURE_SCHEMA_VERSION
     clf.save_model()
     print(
         f"Saved -> {out}\n"

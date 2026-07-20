@@ -113,7 +113,15 @@ class SignalPositionManager:
             return pos
 
     def partial_close(self, symbol: str, close_pct: float, price: float, reason: str) -> tuple:
-        """Close a fraction of position. Returns (amount_closed, realized_pnl)."""
+        """Close a fraction of position. Returns (amount_closed, realized_pnl).
+
+        Sets the matching tp_hit flag in the SAME locked _save_state as the
+        amount reduction. A separate mark_tp_hit() call saved the flag in its
+        own _save_state, so a crash between the two left disk in a mixed state
+        (tp_hit=True but amount unchanged) and the next TP over-sold against a
+        stale full amount on restart. Folding the flag in here makes the
+        flag+amount update atomic.
+        """
         with self._lock:
             pos = self._positions.get(symbol)
             if not pos or pos.is_closed:
@@ -123,6 +131,12 @@ class SignalPositionManager:
             pnl = _side_pnl(pos.side, pos.entry_price, price, close_amount)
             pos.amount_closed += close_amount
             pos.realized_pnl += pnl
+            if reason == "tp1":
+                pos.tp1_hit = True
+            elif reason == "tp2":
+                pos.tp2_hit = True
+            elif reason == "tp3":
+                pos.tp3_hit = True
 
             logger.info(f"Signal partial close {symbol}: {close_pct:.0%} @ ${price:,.2f} "
                          f"({reason}, PnL: ${pnl:.2f})")
@@ -130,7 +144,12 @@ class SignalPositionManager:
             return (close_amount, pnl)
 
     def close_position(self, symbol: str, price: float, reason: str) -> Optional[float]:
-        """Fully close position. Returns net PnL."""
+        """Fully close position. Returns net PnL.
+
+        Sets tp3_hit atomically with is_closed when reason is "tp3" — previously
+        the post-close mark_tp_hit(3) early-returned on the is_closed guard, so
+        the flag was never persisted on a successful TP3.
+        """
         with self._lock:
             pos = self._positions.get(symbol)
             if not pos or pos.is_closed:
@@ -140,6 +159,8 @@ class SignalPositionManager:
             pnl = _side_pnl(pos.side, pos.entry_price, price, remaining)
             pos.amount_closed = pos.amount
             pos.realized_pnl += pnl
+            if reason == "tp3":
+                pos.tp3_hit = True
             pos.is_closed = True
             pos.exit_reason = reason
 
@@ -155,6 +176,20 @@ class SignalPositionManager:
             if pos and not pos.is_closed:
                 pos.stop_loss = new_sl
                 self._save_state()
+
+    def mark_tp_hit(self, symbol: str, tp_level: int):
+        """Set TP hit flag under lock. tp_level in {1, 2, 3}."""
+        with self._lock:
+            pos = self._positions.get(symbol)
+            if not pos or pos.is_closed:
+                return
+            if tp_level == 1:
+                pos.tp1_hit = True
+            elif tp_level == 2:
+                pos.tp2_hit = True
+            elif tp_level == 3:
+                pos.tp3_hit = True
+            self._save_state()
 
     @contextmanager
     def _state_lock(self):

@@ -160,8 +160,12 @@ pub struct SignalPosition {
     pub tp2_close_pct: f64,
     #[serde(default)]
     pub order_id: String,
+    #[serde(default = "default_side")]
+    pub side: String,
 }
 
+
+fn default_side() -> String { "long".to_string() }
 fn default_tp1_pct() -> f64 { 0.33 }
 fn default_tp2_pct() -> f64 { 0.50 }
 

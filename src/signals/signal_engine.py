@@ -55,14 +55,7 @@ def _signal_detail(signal, channel_name: str) -> str:
     )
 
 
-# The 14 regime-classifier features output by src.data.feature_engineering.
-# Captured per decision for offline RL state.
-REGIME_FEATURE_COLS = [
-    "returns", "volatility_ratio", "normalized_atr", "trend_strength", "rsi_14",
-    "volume_ratio", "close_location_value", "adx_14", "macd_histogram",
-    "distance_to_vwap", "obv_roc_14", "choppiness_index",
-    "fractal_dimension_index", "aroon_oscillator",
-]
+from src.data.feature_contract import MARKET_FEATURE_COLS as REGIME_FEATURE_COLS
 
 
 class SignalEngineState(Enum):
@@ -277,8 +270,10 @@ class SignalEngine:
                 "halted": risk_status.get("halted", False),
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }
-            with open("data/signal_status.json", "w") as f:
+            tmp_path = "data/signal_status.json.tmp"
+            with open(tmp_path, "w") as f:
                 json.dump(status, f, indent=2)
+            os.replace(tmp_path, "data/signal_status.json")
         except Exception as e:
             logger.debug(f"Failed to write signal status: {e}")
 
@@ -302,9 +297,8 @@ class SignalEngine:
         pos = self._position_mgr.get_position(symbol)
         if not pos:
             return None
-        pos.is_closed = True
-        pos.exit_reason = "manual"
-        return "manual"
+        pnl = self._position_mgr.close_position(symbol, pos.entry_price, "manual")
+        return "manual" if pnl is not None else None
 
     def _process_message(self, msg: dict, connector):
         """Full pipeline: parse → validate → execute."""
@@ -388,7 +382,10 @@ class SignalEngine:
                 logger.info(f"Signal SL updated: {signal.pair} → ${signal.stop_loss:,.2f}")
             return
 
-        if signal.action != SignalAction.OPEN_LONG:
+        if signal.action == SignalAction.OPEN_SHORT:
+            if not self._futures_mode:
+                return
+        elif signal.action != SignalAction.OPEN_LONG:
             return
 
         # Fill missing stop-loss using ATR-based default
@@ -536,6 +533,21 @@ class SignalEngine:
         if amount <= 0:
             return
 
+        # Re-check risk guard immediately before placing the order. The initial
+        # check in _process_message (line 415) may have been seconds ago due to
+        # DeepSeek latency or queue depth; the risk state could have changed
+        # (daily limit hit, cooldown expired) in the meantime.
+        risk_block = self._risk.block_reason()
+        if risk_block:
+            logger.info(f"Signal blocked by risk guard (pre-order re-check): {signal.pair} — {risk_block}")
+            self._notify_dedupe(
+                f"blocked_risk_preorder:{signal.pair}",
+                f"🚫 Signal blocked (risk re-check): {signal.pair}\n"
+                f"Reason: {risk_block}\n" + _signal_detail(signal, channel_name),
+            )
+            self._log_audit_trade(signal, channel_name, "blocked_risk_preorder", fill_price, risk_block)
+            return
+
         # Place MARKET buy via strategy callback
         order_id = None
         if self._buy_fn:
@@ -622,6 +634,15 @@ class SignalEngine:
         qty = (usdt_notional / entry) if entry else 0.0
         if usdt_notional <= 0 or qty <= 0:
             self._notify_dedupe(f"no_budget:{sym}", f"🚫 Futures skip (no budget): {sym}"); return
+        risk_block = self._risk.block_reason()
+        if risk_block:
+            self._notify_dedupe(
+                f"blocked_risk_preorder:{sym}",
+                f"🚫 Futures blocked (risk re-check): {sym}\n"
+                f"Reason: {risk_block}\n" + _signal_detail(signal, channel_name),
+            )
+            self._log_audit_trade(signal, channel_name, "blocked_risk_preorder", entry, risk_block)
+            return
         try:
             self._futures_connector.set_leverage(sym, self._leverage)
             self._futures_connector.set_margin_type(sym, "ISOLATED")
@@ -648,18 +669,19 @@ class SignalEngine:
 
             # Stop-loss check
             if current_price <= pos.stop_loss:
-                if not self._audit_mode:
-                    self._execute_close(pos, current_price, "stop_loss")
+                if not self._audit_mode and not self._execute_close(pos, current_price, "stop_loss"):
+                    logger.warning(f"SL close FAILED for {pos.symbol} — tracker NOT updated")
+                    continue
                 pnl = self._position_mgr.close_position(pos.symbol, current_price, "stop_loss")
                 self._record_close(pos, current_price, "stop_loss", pnl)
                 continue
 
             # TP1 hit
             if not pos.tp1_hit and len(pos.take_profits) >= 1 and current_price >= pos.take_profits[0]:
-                pos.tp1_hit = True
                 tp1_slice = pos.remaining_amount * pos.tp1_close_pct
-                if not self._audit_mode:
-                    self._execute_close(pos, pos.take_profits[0], "tp1", amount=tp1_slice)
+                if not self._audit_mode and not self._execute_close(pos, pos.take_profits[0], "tp1", amount=tp1_slice):
+                    logger.warning(f"TP1 close FAILED for {pos.symbol} — tracker NOT updated")
+                    continue
                 _, tp1_pnl = self._position_mgr.partial_close(pos.symbol, pos.tp1_close_pct, pos.take_profits[0], "tp1")
                 self._risk.record_trade_closed(tp1_pnl)
                 self._position_mgr.update_stop_loss(pos.symbol, pos.entry_price)
@@ -668,10 +690,10 @@ class SignalEngine:
 
             # TP2 hit
             if not pos.tp2_hit and len(pos.take_profits) >= 2 and current_price >= pos.take_profits[1]:
-                pos.tp2_hit = True
                 tp2_slice = pos.remaining_amount * pos.tp2_close_pct
-                if not self._audit_mode:
-                    self._execute_close(pos, pos.take_profits[1], "tp2", amount=tp2_slice)
+                if not self._audit_mode and not self._execute_close(pos, pos.take_profits[1], "tp2", amount=tp2_slice):
+                    logger.warning(f"TP2 close FAILED for {pos.symbol} — tracker NOT updated")
+                    continue
                 _, tp2_pnl = self._position_mgr.partial_close(pos.symbol, pos.tp2_close_pct, pos.take_profits[1], "tp2")
                 self._risk.record_trade_closed(tp2_pnl)
                 self._position_mgr.update_stop_loss(pos.symbol, pos.take_profits[0])
@@ -680,12 +702,11 @@ class SignalEngine:
 
             # TP3 hit
             if not pos.tp3_hit and len(pos.take_profits) >= 3 and current_price >= pos.take_profits[2]:
-                pos.tp3_hit = True
-                if not self._audit_mode:
-                    self._execute_close(pos, pos.take_profits[2], "tp3")
+                if not self._audit_mode and not self._execute_close(pos, pos.take_profits[2], "tp3"):
+                    logger.warning(f"TP3 close FAILED for {pos.symbol} — tracker NOT updated")
+                    continue
                 pnl = self._position_mgr.close_position(pos.symbol, pos.take_profits[2], "tp3")
                 self._record_close(pos, pos.take_profits[2], "tp3", pnl)
-
     def _manage_futures_positions(self, connector):
         """Direction-aware TP scale + SL→breakeven for futures, closing via the
         connector's reduce-only close. Long: price>=TP hits, price<=SL stops.
@@ -706,44 +727,49 @@ class SignalEngine:
 
             def close_partial(pct, reason):
                 qty_to_close = pos.remaining_amount * pct
+                if qty_to_close <= 0:
+                    return False
+                try:
+                    self._futures_connector.close(pos.symbol, side, qty_to_close)
+                except Exception as e:
+                    logger.error(f"Futures reduce-only close failed {pos.symbol}: {e}")
+                    return False
                 _, pnl_slice = self._position_mgr.partial_close(pos.symbol, pct, price, reason)
-                if qty_to_close > 0:
-                    try:
-                        self._futures_connector.close(pos.symbol, side, qty_to_close)
-                    except Exception as e:
-                        logger.error(f"Futures reduce-only close failed {pos.symbol}: {e}")
                 self._record_close(pos, price, reason, pnl_slice)
+                return True
 
             def close_full(reason):
                 # Full exit (TP3 / SL): capture qty BEFORE close_position mutates
                 # remaining_amount to ~0, else the reduce-only order is zero-qty.
                 qty_to_close = pos.remaining_amount
+                if qty_to_close <= 0:
+                    return False
+                try:
+                    self._futures_connector.close(pos.symbol, side, qty_to_close)
+                except Exception as e:
+                    logger.error(f"Futures full close failed {pos.symbol}: {e}")
+                    return False
                 pnl = self._position_mgr.close_position(pos.symbol, price, reason)
-                if qty_to_close > 0:
-                    try:
-                        self._futures_connector.close(pos.symbol, side, qty_to_close)
-                    except Exception as e:
-                        logger.error(f"Futures full close failed {pos.symbol}: {e}")
                 self._record_close(pos, price, reason, pnl)
-
+                return True
             if side == "long":
                 if not pos.tp1_hit and len(tps) >= 1 and price >= tps[0]:
-                    close_partial(pos.tp1_close_pct, "tp1")
-                    pos.tp1_hit = True; self._position_mgr.update_stop_loss(pos.symbol, pos.entry_price)
+                    if close_partial(pos.tp1_close_pct, "tp1"):
+                        self._position_mgr.update_stop_loss(pos.symbol, pos.entry_price)
                 elif not pos.tp2_hit and len(tps) >= 2 and price >= tps[1]:
-                    close_partial(pos.tp2_close_pct, "tp2"); pos.tp2_hit = True
+                    close_partial(pos.tp2_close_pct, "tp2")
                 elif not pos.tp3_hit and len(tps) >= 3 and price >= tps[2]:
-                    close_full("tp3"); pos.tp3_hit = True
+                    close_full("tp3")
                 if price <= pos.stop_loss:
                     close_full("stop_loss")
             else:  # short — inverted comparisons
                 if not pos.tp1_hit and len(tps) >= 1 and price <= tps[0]:
-                    close_partial(pos.tp1_close_pct, "tp1")
-                    pos.tp1_hit = True; self._position_mgr.update_stop_loss(pos.symbol, pos.entry_price)
+                    if close_partial(pos.tp1_close_pct, "tp1"):
+                        self._position_mgr.update_stop_loss(pos.symbol, pos.entry_price)
                 elif not pos.tp2_hit and len(tps) >= 2 and price <= tps[1]:
-                    close_partial(pos.tp2_close_pct, "tp2"); pos.tp2_hit = True
+                    close_partial(pos.tp2_close_pct, "tp2")
                 elif not pos.tp3_hit and len(tps) >= 3 and price <= tps[2]:
-                    close_full("tp3"); pos.tp3_hit = True
+                    close_full("tp3")
                 if price >= pos.stop_loss:
                     close_full("stop_loss")
 
@@ -756,8 +782,9 @@ class SignalEngine:
             return
 
         close_price = signal.entry_low or pos.entry_price
-        if not self._audit_mode:
-            self._execute_close(pos, close_price, "trader_close")
+        if not self._audit_mode and not self._execute_close(pos, close_price, "trader_close"):
+            logger.warning(f"Trader close FAILED for {signal.pair} — tracker NOT updated")
+            return
 
         pnl = self._position_mgr.close_position(signal.pair, close_price, "trader_close")
         self._record_close(pos, close_price, "trader_close", pnl)
@@ -991,25 +1018,24 @@ class SignalEngine:
             logger.warning(f"Decision-state capture failed: {e}")
 
     def _execute_close(self, pos: SignalPosition, price: float, reason: str,
-                       amount: Optional[float] = None):
+                       amount: Optional[float] = None) -> bool:
         """Place a MARKET sell to close (part of) a signal position.
 
-        MARKET guarantees the exit fills — a LIMIT sell at the stop/TP price can
-        fail to fill during fast moves, leaving the position open while the
-        tracker believes it's closed.
+        Returns True if the order was placed successfully, False otherwise.
+        Callers MUST gate position-tracker updates on this return value to
+        prevent phantom closes (tracker shows closed, exchange position still
+        open because the order failed).
 
-        amount: slice to sell; defaults to the full remaining position (used for
-        full closes — stop_loss, tp3, trader_close). Partial TP closes pass only
-        their slice so the exchange sell matches the booked accounting.
+        amount: slice to sell; defaults to the full remaining position.
         """
         if not self._sell_fn or pos.remaining_amount <= 0:
-            return
+            return False
 
         sell_amount = amount if amount is not None else pos.remaining_amount
         try:
             amount_to_sell = round(sell_amount, 6)
             if amount_to_sell <= 0:
-                return
+                return False
             order_id = self._sell_fn(
                 symbol=pos.symbol,
                 amount=Decimal(str(amount_to_sell)),
@@ -1019,9 +1045,11 @@ class SignalEngine:
             if order_id:
                 logger.info(f"Signal close order placed: {pos.symbol} {amount_to_sell} "
                             f"@ ${price:,.2f} ({reason}, MARKET)")
+                return True
+            return False
         except Exception as e:
             logger.error(f"Signal close failed for {pos.symbol}: {e}")
-
+            return False
     def _refresh_available_pairs(self):
         """Fetch available Gate.io USDT pairs."""
         try:

@@ -16,6 +16,8 @@ class RegimeClassifier:
         self.model = None
         self.calibrated_model = None
         self.is_trained = False
+        self.feature_columns = None
+        self.feature_schema_version = None
 
     def _create_default_model(self):
         if self.model_type == 'xgboost':
@@ -92,7 +94,9 @@ class RegimeClassifier:
         data = {
             'model': self.model,
             'model_type': self.model_type,
-            'version': 4,
+            'version': 5,
+            'feature_columns': self.feature_columns,
+            'feature_schema_version': self.feature_schema_version,
         }
         if self.calibrated_model is not None:
             data['calibrated_model'] = self.calibrated_model
@@ -110,6 +114,8 @@ class RegimeClassifier:
             self.model = data['model']
             self.model_type = data.get('model_type', 'random_forest')
             self.calibrated_model = data.get('calibrated_model', None)
+            self.feature_columns = data.get('feature_columns', None)
+            self.feature_schema_version = data.get('feature_schema_version', None)
         else:
             # Legacy format: raw sklearn model
             self.model = data

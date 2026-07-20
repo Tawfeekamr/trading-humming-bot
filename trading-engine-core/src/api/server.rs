@@ -9,6 +9,7 @@ use crate::strategy::status_cache::StrategyStatusCache;
 use crate::strategy::regime_cache::RegimeCache;
 use crate::strategy::routing_cache::RoutingCache;
 use crate::capital::CapitalManager;
+use super::order_command::EngineCommandBus;
 
 use super::handlers;
 
@@ -21,11 +22,12 @@ pub struct AppState {
     pub regime_cache: RegimeCache,
     pub routing_cache: RoutingCache,
     pub capital: CapitalManager,
+    pub order_commands: EngineCommandBus,
 }
 
 impl AppState {
-    pub fn new(connector: Arc<dyn Connector>, bars: BarCache, strategies: StrategyStatusCache, regime_cache: RegimeCache, routing_cache: RoutingCache, capital: CapitalManager) -> Self {
-        Self { connector, bars, strategies, regime_cache, routing_cache, capital }
+    pub fn new(connector: Arc<dyn Connector>, bars: BarCache, strategies: StrategyStatusCache, regime_cache: RegimeCache, routing_cache: RoutingCache, capital: CapitalManager, order_commands: EngineCommandBus) -> Self {
+        Self { connector, bars, strategies, regime_cache, routing_cache, capital, order_commands }
     }
 }
 

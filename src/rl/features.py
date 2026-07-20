@@ -16,30 +16,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from src.data.feature_contract import FEATURE_COLS, MARKET_FEATURE_COLS, TIME_FEATURE_COLS
 from src.data.feature_engineering import calculate_technical_features
-
-# The 14 market features consumed by the supervised regime classifier.
-# Order matters: the trained classifier weights expect features in this exact column order.
-MARKET_FEATURE_COLS: list[str] = [
-    "returns",
-    "volatility_ratio",
-    "normalized_atr",
-    "trend_strength",
-    "rsi_14",
-    "volume_ratio",
-    "close_location_value",
-    "adx_14",
-    "macd_histogram",
-    "distance_to_vwap",
-    "obv_roc_14",
-    "choppiness_index",
-    "fractal_dimension_index",
-    "aroon_oscillator",
-]
-
-TIME_FEATURE_COLS: list[str] = ["hour_sin", "hour_cos", "day_of_week"]
-
-FEATURE_COLS: list[str] = MARKET_FEATURE_COLS + TIME_FEATURE_COLS
 
 
 def compute_features(df: pd.DataFrame) -> pd.DataFrame:

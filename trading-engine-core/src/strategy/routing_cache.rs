@@ -88,7 +88,7 @@ impl RoutingCache {
                 .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
                 .duration_since(std::time::SystemTime::UNIX_EPOCH)
                 .unwrap_or_default()
-                .as_secs())
+                .as_nanos() as u64)
             .unwrap_or(0);
 
         // Fast path under a read lock: skip if nothing changed.
@@ -135,7 +135,7 @@ impl RoutingCache {
                 .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
                 .duration_since(std::time::SystemTime::UNIX_EPOCH)
                 .unwrap_or_default()
-                .as_secs())
+                .as_nanos() as u64)
             .unwrap_or(0);
         let mut state = self.state.write().await;
         state.entry = Some(entry);
@@ -144,10 +144,19 @@ impl RoutingCache {
 
     /// Persist current state to file (called after HTTP push as backup).
     pub async fn persist(&self) {
-        let state = self.state.read().await;
-        if let Some(e) = &state.entry {
+        let entry = { self.state.read().await.entry.clone() };
+        if let Some(e) = &entry {
             if let Ok(json) = serde_json::to_string_pretty(e) {
-                let _ = std::fs::write(&self.file_path, json);
+                if std::fs::write(&self.file_path, json).is_ok() {
+                    let mtime = std::fs::metadata(&self.file_path)
+                        .map(|m| m.modified()
+                            .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+                            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_nanos() as u64)
+                        .unwrap_or(0);
+                    self.state.write().await.last_mtime = mtime;
+                }
             }
         }
     }
@@ -211,6 +220,20 @@ mod tests {
         assert_eq!(r.active_engine, "trend");
         assert_eq!(r.size_mult, 1.5);
 
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn test_routing_persist_refreshes_mtime() {
+        let path = "/tmp/test_routing_persist_mtime.json";
+        let _ = std::fs::remove_file(path);
+        let cache = RoutingCache::new(path, 0);
+        cache.update(RoutingUpdate {
+            active_engine: "swing".into(), size_mult: 1.0, flat: false,
+        }).await;
+
+        let state = cache.state.read().await;
+        assert!(state.last_mtime > 0, "persist must refresh last_mtime after write");
         let _ = std::fs::remove_file(path);
     }
 

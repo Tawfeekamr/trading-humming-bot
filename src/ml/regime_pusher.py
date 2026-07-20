@@ -30,9 +30,9 @@ from typing import Optional
 import pandas as pd
 import requests
 
+from src.data.feature_contract import MARKET_FEATURE_COLS, assert_market_feature_contract
 from src.data.feature_engineering import calculate_technical_features
 from src.ml.regime_classifier import RegimeClassifier
-from src.rl.features import MARKET_FEATURE_COLS
 
 logging.basicConfig(
     level=logging.INFO,
@@ -55,6 +55,19 @@ def model_path_for(pair: str, model_dir: str) -> str:
     return os.path.join(model_dir, f"regime_{pair}_clean.pkl")
 
 
+def _declared_feature_contract_ok(clf: RegimeClassifier) -> bool:
+    """True when a model's embedded feature manifest is absent or matches."""
+    columns = getattr(clf, "feature_columns", None)
+    if columns is None:
+        return True
+    try:
+        assert_market_feature_contract(columns)
+    except ValueError as exc:
+        log.error("Model feature contract rejected: %s", exc)
+        return False
+    return True
+
+
 def load_models(pairs: list[str], model_dir: str) -> dict[str, RegimeClassifier]:
     """Load one reproducible RF classifier per pair that has a model file.
 
@@ -69,6 +82,8 @@ def load_models(pairs: list[str], model_dir: str) -> dict[str, RegimeClassifier]
             continue
         clf = RegimeClassifier(model_path=path, model_type="random_forest")
         clf.load_model()
+        if not _declared_feature_contract_ok(clf):
+            continue
         models[pair] = clf
         log.info("Loaded model for %s from %s", pair, path)
     return models
@@ -89,6 +104,8 @@ def compute_regime(df: pd.DataFrame, clf: RegimeClassifier) -> Optional[tuple[in
     bad data returns None (→ skipped) instead of killing the whole cycle.
     Production always passes ≥500 bars, so this is purely defensive.
     """
+    if not _declared_feature_contract_ok(clf):
+        return None
     try:
         feats = calculate_technical_features(df.copy())
     except Exception:

@@ -58,6 +58,7 @@ impl SignalPositionManager {
         signal_confidence: &str,
         raw_message: &str,
         channel_name: &str,
+        side: &str,
     ) -> Result<(), String> {
         let open_count = self.positions.values().filter(|p| !p.is_closed).count();
         if open_count >= self.max_positions as usize {
@@ -91,6 +92,7 @@ impl SignalPositionManager {
             entry_timestamp: now,
             tp1_close_pct: self.tp1_close_pct,
             tp2_close_pct: self.tp2_close_pct,
+            side: side.to_string(),
             ..Default::default()
         };
         self.positions.insert(symbol.to_string(), pos);
@@ -102,7 +104,8 @@ impl SignalPositionManager {
         if let Some(pos) = self.positions.get_mut(symbol) {
             if pos.is_closed { return 0.0; }
             let close_amount = pos.remaining_amount() * close_pct;
-            let pnl = (price - pos.entry_price) * close_amount;
+            let side_mult = if pos.side == "short" { -1.0 } else { 1.0 };
+            let pnl = (price - pos.entry_price) * close_amount * side_mult;
             pos.amount_closed += close_amount;
             pos.realized_pnl += pnl;
             info!("Signal partial close {}: {:.0}% @ ${:.2} ({}, PnL: ${:.2})",
@@ -118,7 +121,8 @@ impl SignalPositionManager {
         if let Some(pos) = self.positions.get_mut(symbol) {
             if pos.is_closed { return None; }
             let remaining = pos.remaining_amount();
-            let pnl = (price - pos.entry_price) * remaining;
+            let side_mult = if pos.side == "short" { -1.0 } else { 1.0 };
+            let pnl = (price - pos.entry_price) * remaining * side_mult;
             pos.amount_closed = pos.amount;
             pos.realized_pnl += pnl;
             pos.is_closed = true;
@@ -283,6 +287,7 @@ impl Default for SignalPosition {
             tp1_close_pct: 0.33,
             tp2_close_pct: 0.50,
             order_id: String::new(),
+            side: "long".to_string(),
         }
     }
 }
@@ -302,4 +307,68 @@ fn disk_more_advanced(disk: &serde_json::Value, pos: &SignalPosition) -> bool {
         if disk_hit && !py_hit { return true; }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::SignalConfig;
+
+    fn config() -> SignalConfig {
+        SignalConfig {
+            enabled: true,
+            audit_mode: false,
+            ai_model: "test".to_string(),
+            max_positions: 3,
+            per_trade_risk_pct: 3.0,
+            capital_pct: 10.0,
+            max_capital_usdt: 1000.0,
+            min_rr_ratio: 0.0,
+            max_sl_distance_pct: 10.0,
+            default_sl_atr_multiplier: 2.0,
+            max_entry_zone_pct: 3.0,
+            min_quality_score: 5,
+            tp1_close_pct: 33.0,
+            tp2_close_pct: 50.0,
+            daily_loss_limit_pct: 5.0,
+            max_trades_per_day: 10,
+            cooldown_minutes: 5,
+            use_btc_correlation_gate: false,
+            blacklisted_pairs: Vec::new(),
+            session_name: "test".to_string(),
+        }
+    }
+
+    fn unique_symbol(prefix: &str) -> String {
+        format!(
+            "{}-{}",
+            prefix,
+            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+        )
+    }
+
+    #[test]
+    fn short_partial_close_pnl_is_inverted() {
+        let mut mgr = SignalPositionManager::new(&config());
+        mgr.positions.clear();
+        let symbol = unique_symbol("SHORT-PARTIAL");
+        mgr.open_position(&symbol, 3000.0, 2.0, 3150.0, vec![2900.0], "high", "x", "c", "short").unwrap();
+
+        mgr.partial_close(&symbol, 0.5, 2940.0, "tp1");
+
+        let pos = mgr.positions.get(&symbol).unwrap();
+        assert!((pos.realized_pnl - 60.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn short_full_close_pnl_is_inverted() {
+        let mut mgr = SignalPositionManager::new(&config());
+        mgr.positions.clear();
+        let symbol = unique_symbol("SHORT-FULL");
+        mgr.open_position(&symbol, 3000.0, 2.0, 3150.0, vec![2900.0], "high", "x", "c", "short").unwrap();
+
+        let pnl = mgr.close_position(&symbol, 2850.0, "tp").unwrap();
+
+        assert!((pnl - 300.0).abs() < 1e-6);
+    }
 }
