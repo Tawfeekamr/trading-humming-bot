@@ -291,3 +291,35 @@ async fn test_restored_position_skips_catchup_exit_burst() {
     // cleanup the isolated state file
     let _ = std::fs::remove_file(format!("data/{}_trend_position.json", pair.replace("-", "_")));
 }
+
+/// Step 1: the Chandelier trail MUST read `trailing_stop_atr_mult` (not the old
+/// unread `atr_trailing_mult` default). Two configs differing ONLY in that field
+/// must produce different trails — proving the knob binds. Before the fix the
+/// code reads `atr_trailing_mult` (=3.0 in default_trend_config) for both, so the
+/// trails are identical and `tight > loose` fails.
+#[tokio::test]
+async fn test_trailing_stop_binds_to_atr_mult_field() {
+    async fn trail_for(mult: f64) -> f64 {
+        let mut cfg = default_trend_config();
+        cfg.trailing_stop_atr_mult = mult;
+        let telegram = trading_engine_core::notifications::TelegramBot::new("", "");
+        let mut s = TrendStrategy::new("BTCUSDT", &cfg, telegram);
+        warmup(&mut s, 50000.0);
+        enter_position(&mut s, 50000.0, 0.1).await;
+        let mut bars = Vec::new();
+        for p in [50500.0, 51000.0, 51500.0, 52000.0] {
+            s.update_indicators(&make_bar(p));
+            s.on_tick(&make_tick(p, &mut bars)).await.unwrap();
+        }
+        s.position().unwrap().trailing_stop.expect("trail set after up-move")
+    }
+
+    // smaller mult ⇒ higher (tighter) trail for a long; larger mult ⇒ lower (looser)
+    let tight = trail_for(2.0).await;
+    let loose = trail_for(4.0).await;
+    assert!(tight > loose,
+        "tighter mult must produce a higher trail for a long: tight={} loose={}", tight, loose);
+    // trail = highest - mult·ATR with identical highest/ATR ⇒ gap = (4-2)·ATR ≫ 0
+    assert!(tight - loose > 1.0,
+        "trail gap must reflect Δmult·ATR (ATR>0 in this setup), got {}", tight - loose);
+}

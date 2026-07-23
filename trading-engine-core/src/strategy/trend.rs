@@ -700,7 +700,14 @@ impl Strategy for TrendStrategy {
             }
 
             // 2. Update trailing stop (Chandelier Exit from highest/lowest).
-            let atr_mult = if self.config.atr_trailing_mult > 0.0 { self.config.atr_trailing_mult } else { 3.0 };
+            // Chandelier multiplier: the one knob the operator edits in the yaml.
+            // Fallback 2.0 only binds if the field is missing/zero; Task 4 makes
+            // AppConfig::load reject <= 0 so this never silently falls back in prod.
+            let atr_mult = if self.config.trailing_stop_atr_mult > 0.0 {
+                self.config.trailing_stop_atr_mult
+            } else {
+                2.0
+            };
             let atr_val = self.atr.value();
             let new_trail = match pos.side {
                 OrderSide::Buy => pos.highest_since_entry - atr_mult * atr_val,
