@@ -395,7 +395,7 @@ impl AppConfig {
 }
 
 impl TrendConfig {
-    /// Step 1 hardening: the Chandelier multiplier must be > 0. A missing/zero
+    /// Step 1 hardening: the Chandelier multiplier must be > 0. A zero/negative
     /// value would otherwise silently fall back to the hardcoded 2.0 in
     /// trend.rs and mislead the operator. Called from AppConfig::load so boot,
     /// validate_config (CI), and backtest_replay all enforce it.

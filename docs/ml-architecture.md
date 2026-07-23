@@ -173,7 +173,7 @@
 | **volume_ratio_threshold** | `trend.volume_ratio_threshold` | `1.2` | Volume must exceed 1.2× avg |
 | **rsi_long_max** | `trend.rsi_long_max` | `65.0` | Don't buy above RSI 65 |
 | **rsi_short_min** | `trend.rsi_short_min` | `35.0` | Don't sell below RSI 35 |
-| **atr_trailing_mult** | `trend.atr_trailing_mult` | `3.0` | Chandelier exit multiplier |
+| **trailing_stop_atr_mult** | `trend.trailing_stop_atr_mult` | `2.0` | Chandelier exit multiplier |
 | **ema_fast** | `trend.ema_fast` | `12` | Fast EMA period |
 | **ema_slow** | `trend.ema_slow` | `40` | Slow EMA period |
 
@@ -206,7 +206,7 @@ All 14 features ranked by importance (averaged across pairs):
   "Grid deploying in trends"     → ADX_RANGE_MAX, CHOP_RANGE_MIN
   "Trend bot entering fakes"     → volume_ratio_threshold (↑ = stricter)
   "Trend bot missing moves"      → adx_gate_threshold (↓ = enter sooner)
-  "Trend bot holding too long"   → atr_trailing_mult (↓ = tighter trail)
+  "Trend bot holding too long"   → trailing_stop_atr_mult (↓ = tighter trail)
   "ML confidence too low"        → Retrain with more data / candles
   "ML wrong about regime"        → Check feature engineering, retrain
   "Bot trades in danger zone"    → ML regime feeds grid gate, tune ADX/CHOP

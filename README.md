@@ -287,8 +287,7 @@ trend:
   risk_per_trade_pct: 2.0
   max_position_pct: 25.0
   max_positions: 2
-  trailing_stop_pct: 1.5
-  trailing_activation_pct: 1.5
+  trailing_stop_atr_mult: 2.0   # Chandelier exit multiplier (ATR multiples)
   rr_ratio: 2.0
 
 # ── Fee Optimization ───────────────────────────────────────────
