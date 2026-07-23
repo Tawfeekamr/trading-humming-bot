@@ -177,7 +177,6 @@ class SignalEngine:
     def tick(self, connector=None):
         """Called from on_tick(). Processes queued messages and manages positions."""
         if not self._enabled or self._manual_pause:
-            self._write_status()
             return
 
         # Refresh available pairs every hour
@@ -195,9 +194,6 @@ class SignalEngine:
         # Manage open positions
         if connector:
             self._manage_positions(connector)
-
-        # Write status to shared file for Rust engine to read
-        self._write_status()
 
     def get_status(self) -> dict:
         # Sync with Rust before reporting — catches positions closed by Rust engine
@@ -223,59 +219,6 @@ class SignalEngine:
                     self._position_mgr.close_position(pos.symbol, pos.entry_price, "rust_sync")
         except Exception:
             pass  # File may not exist yet
-
-    def _write_status(self):
-        """Write current status to shared JSON file for Rust engine to read."""
-        try:
-            self._sync_closed_from_rust()
-            positions = self._position_mgr.get_open_positions()
-            risk_status = self._risk.get_status()
-
-            # Merge latest state from Rust-managed signal_positions.json
-            # (Rust tracks TP/SL hits in real-time; Python may have stale in-memory state)
-            rust_positions = {}
-            try:
-                with open("data/signal_positions.json", "r") as f:
-                    rust_data = json.load(f)
-                    for sym, pdata in rust_data.items():
-                        if not pdata.get("is_closed", False):
-                            rust_positions[sym] = pdata
-            except Exception:
-                pass
-
-            pos_list = []
-            for p in positions:
-                # Use Rust's TP/SL state if available (more up-to-date)
-                rp = rust_positions.get(p.symbol, {})
-                pos_list.append({
-                    "symbol": p.symbol,
-                    "entry_price": p.entry_price,
-                    "amount": p.amount,
-                    "stop_loss": rp.get("stop_loss", p.stop_loss),
-                    "take_profits": p.take_profits,
-                    "channel_name": getattr(p, 'channel_name', ''),
-                    "entry_time": str(getattr(p, 'entry_time', '')),
-                    "tp1_hit": rp.get("tp1_hit", p.tp1_hit),
-                    "tp2_hit": rp.get("tp2_hit", p.tp2_hit),
-                    "tp3_hit": rp.get("tp3_hit", p.tp3_hit),
-                })
-            status = {
-                "state": self.state.value,
-                "audit_mode": self._audit_mode,
-                "open_positions": len(positions),
-                "positions": pos_list,
-                "trades_today": risk_status.get("trades_today", 0),
-                "max_trades": risk_status.get("max_trades", 10),
-                "daily_pnl": risk_status.get("daily_pnl", 0.0),
-                "halted": risk_status.get("halted", False),
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            }
-            tmp_path = "data/signal_status.json.tmp"
-            with open(tmp_path, "w") as f:
-                json.dump(status, f, indent=2)
-            os.replace(tmp_path, "data/signal_status.json")
-        except Exception as e:
-            logger.debug(f"Failed to write signal status: {e}")
 
     def pause(self):
         self._manual_pause = True
