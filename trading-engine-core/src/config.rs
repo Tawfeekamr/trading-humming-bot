@@ -229,12 +229,8 @@ pub struct TrendConfig {
     pub risk_per_trade_pct: f64,
     #[serde(default = "default_25")]
     pub max_position_pct: f64,
-    #[serde(default = "default_1_5")]
-    pub trailing_stop_pct: f64,
     #[serde(default = "default_2_5")]
     pub trailing_stop_atr_mult: f64,
-    #[serde(default = "default_1_5")]
-    pub trailing_activation_pct: f64,
     #[serde(default = "default_2_u8")]
     pub exit_signal_threshold: u8,
     #[serde(default = "default_0_2")]
@@ -253,8 +249,6 @@ pub struct TrendConfig {
     pub rsi_long_max: f64,
     #[serde(default = "default_35")]
     pub rsi_short_min: f64,
-    #[serde(default = "default_3")]
-    pub atr_trailing_mult: f64,
     /// Allow short trades. Default false (long-only). When true, Direction::Down generates sell entries.
     #[serde(default)]
     pub trade_shorts: bool,

@@ -20,9 +20,7 @@ fn default_trend_config() -> TrendConfig {
         capital: 10000.0,
         risk_per_trade_pct: 2.0,
         max_position_pct: 25.0,
-        trailing_stop_pct: 1.5,
         trailing_stop_atr_mult: 2.5,
-        trailing_activation_pct: 1.5,
         exit_signal_threshold: 2,
         sl_buffer_pct: 0.2,
         adx_gate_threshold: 25.0,
@@ -32,7 +30,6 @@ fn default_trend_config() -> TrendConfig {
         entry_score_threshold: 5,
         rsi_long_max: 65.0,
         rsi_short_min: 35.0,
-        atr_trailing_mult: 3.0,
         trade_shorts: false,
         perp_mark_source: None,
         funding_accrual: false,
@@ -213,8 +210,8 @@ async fn test_trailing_stop_chandelier_exit() {
         strategy.on_tick(&ctx).await.unwrap();
     }
 
-    // Trailing stop = highest - atr_trailing_mult * ATR
-    // With default atr_trailing_mult=3.0, trail ≈ 52000 - 3.0*ATR
+    // Trailing stop = highest - trailing_stop_atr_mult * ATR
+    // With default trailing_stop_atr_mult=2.5, trail ≈ 52000 - 2.5*ATR
     // ATR after big moves should be at least 10+
     // Drop price far below trailing stop
     let drop_price = 50000.0; // well below peak at 52000
