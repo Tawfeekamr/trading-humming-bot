@@ -389,7 +389,24 @@ impl AppConfig {
     pub fn load(path: &str) -> Result<Self> {
         let content = std::fs::read_to_string(path)?;
         let config: AppConfig = serde_yaml::from_str(&content)?;
+        config.trend.validate()?;
         Ok(config)
+    }
+}
+
+impl TrendConfig {
+    /// Step 1 hardening: the Chandelier multiplier must be > 0. A missing/zero
+    /// value would otherwise silently fall back to the hardcoded 2.0 in
+    /// trend.rs and mislead the operator. Called from AppConfig::load so boot,
+    /// validate_config (CI), and backtest_replay all enforce it.
+    pub fn validate(&self) -> Result<()> {
+        if self.trailing_stop_atr_mult <= 0.0 {
+            anyhow::bail!(
+                "trend.trailing_stop_atr_mult must be > 0 (got {})",
+                self.trailing_stop_atr_mult
+            );
+        }
+        Ok(())
     }
 }
 
@@ -631,5 +648,24 @@ mod regime_gate_config_tests {
         let yaml_set = "trend:\n  ema_fast: 20\n  enabled_pairs: [\"BNB-USDT\", \"DOGE-USDT\"]\n";
         let w: Wrap = serde_yaml::from_str(yaml_set).unwrap();
         assert_eq!(w.trend.enabled_pairs, vec!["BNB-USDT".to_string(), "DOGE-USDT".to_string()]);
+    }
+}
+
+#[cfg(test)]
+mod trailing_stop_config_tests {
+    use super::*;
+
+    #[test]
+    fn trend_trailing_stop_atr_mult_must_be_positive() {
+        // Zero and negative must be rejected (would otherwise silently hit the
+        // 2.0 fallback in trend.rs and mislead the operator).
+        let bad_zero = TrendConfig { trailing_stop_atr_mult: 0.0, ..Default::default() };
+        assert!(bad_zero.validate().is_err(), "0.0 must be rejected");
+
+        let bad_neg = TrendConfig { trailing_stop_atr_mult: -1.0, ..Default::default() };
+        assert!(bad_neg.validate().is_err(), "negative must be rejected");
+
+        let good = TrendConfig { trailing_stop_atr_mult: 2.0, ..Default::default() };
+        assert!(good.validate().is_ok(), "2.0 must be accepted");
     }
 }
