@@ -167,7 +167,9 @@ trend:
   max_total_positions: 2        # Claude: 3×2%=6% > 5% daily limit — reduced to 2
   exit_signal_threshold: 2      # Close position when signal score drops below this
   entry_score_threshold: 4      # Was 5 — lowered to allow entries with moderate signals
-  trailing_stop_atr_mult: 2.5   # ATR-based Chandelier Exit
+  trailing_stop_atr_mult: 2.0   # Chandelier Exit multiplier. WAS 2.5 (dead field,
+                                # never read); live trail was actually 3.0 via the
+                                # atr_trailing_mult serde default. Tightened to 2.0.
   trailing_activation_pct: 3.0  # Claude: must be > trail distance to avoid immediate stop-out
   rr_ratio: 2.0
   sl_buffer_pct: 0.2
