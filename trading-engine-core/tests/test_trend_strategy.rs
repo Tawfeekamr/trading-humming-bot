@@ -68,7 +68,10 @@ fn test_stop_loss_and_take_profit_calculation() {
 fn test_indicators_not_ready_initially() {
     let config = default_trend_config();
     let telegram = trading_engine_core::notifications::TelegramBot::new("", "");
-    let mut strategy = TrendStrategy::new("BTCUSDT", &config, telegram);
+    // Fresh pair (no persisted position file) — else a parallel test writing
+    // data/BTCUSDT_trend_position.json loads a position here and makes this
+    // non-deterministic under parallel test scheduling (recurring CI flake).
+    let mut strategy = TrendStrategy::new("FRESH-INDICATORS-USDT", &config, telegram);
 
     // Feed only a few bars — not enough to fully warm all indicators
     for _i in 0..5 {
@@ -95,7 +98,10 @@ fn test_realized_pnl_accessor_default_zero() {
 #[test]
 fn test_deployed_capital_zero_when_flat() {
     let config = default_trend_config();
+    // Fresh pair (no persisted position file) — else a parallel test writing
+    // data/BTCUSDT_trend_position.json loads a position and deployed_capital > 0
+    // (recurring CI flake under parallel test scheduling).
     let strategy = TrendStrategy::new(
-        "BTCUSDT", &config, trading_engine_core::notifications::TelegramBot::new("", ""));
+        "FRESH-DEPCAP-USDT", &config, trading_engine_core::notifications::TelegramBot::new("", ""));
     assert!(strategy.deployed_capital() < 1e-9, "flat trend has no deployed capital");
 }
