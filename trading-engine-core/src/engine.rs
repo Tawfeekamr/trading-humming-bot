@@ -101,11 +101,7 @@ impl Engine {
     pub async fn run(&mut self) -> Result<()> {
         // Startup notification
         let engines = format!(
-            "Grid/Trend/MR | Swing {} | Signal {}",
-            self.config.swing.as_ref()
-                .filter(|s| s.enabled)
-                .map(|s| format!("\u{2713} ({})", s.enabled_pairs.join(",")))
-                .unwrap_or_else(|| "\u{2717}".into()),
+            "Grid/Trend | Signal {}",
             self.config.signal.as_ref()
                 .filter(|s| s.enabled)
                 .map(|_| "\u{2713}".to_string())
