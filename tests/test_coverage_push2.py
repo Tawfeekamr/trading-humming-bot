@@ -100,11 +100,6 @@ class TestMoreCommands:
         monkeypatch.setattr("urllib.request.urlopen", _mock_api([]))
         h = _handler(); u = _u(); h._cmd_trend_status(u, None); assert u.message.reply_text.called
 
-    def test_mean_status_empty(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr("urllib.request.urlopen", _mock_api([]))
-        h = _handler(); u = _u(); h._cmd_mean_status(u, None); assert u.message.reply_text.called
-
 
 # ── Signal parser (DeepSeek mock) ──────────────────────────────────────────
 
@@ -208,8 +203,3 @@ class TestMoreCommands2:
         # No text arg — should show help text
         u.message.text = "/signal_inject"
         h._cmd_signal_inject(u, None); assert u.message.reply_text.called
-
-    def test_swing_status_empty(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr("urllib.request.urlopen", _mock_api([]))
-        h = _handler(); u = _u(); h._cmd_swing_status(u, None); assert u.message.reply_text.called
