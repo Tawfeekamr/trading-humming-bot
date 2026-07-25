@@ -53,11 +53,17 @@ The observation layout is byte-identical in *semantics* to
 """
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import numpy as np
 
 from src.rl.action_map import ACTION_TO_ENGINE_SIZE
+
+# Module logger — used by run_loop to announce the one-time initial_capital
+# anchor. Must be defined at import time so the first live bar doesn't raise
+# NameError (which would silently skip that bar's routing POST).
+logger = logging.getLogger(__name__)
 
 # Engine names in canonical one-hot order — must match ``src.rl.env.ENGINES``.
 # Hardcoded here (rather than imported) so this module does not pull gymnasium
@@ -181,6 +187,7 @@ def run_loop(
         initial_capital = 10_000.0
 
     router = PPORouter(model_path)
+    initial_capital = None
 
     while True:
         try:
@@ -196,6 +203,10 @@ def run_loop(
             row = feats.iloc[-1]
 
             equity = _get_equity(rust_url)
+            if initial_capital is None:
+                initial_capital = equity if equity > 0 else 10_000.0
+                logger.info(f"Live router reference initial_capital set to ${initial_capital:.2f}")
+
             obs = build_observation(
                 row,
                 {"equity": equity, "initial_equity": initial_capital},

@@ -99,30 +99,6 @@ pub fn grid_for(kind: EngineKind) -> Grid {
             }
             g // 3*3 = 9
         }
-        EngineKind::Swing => {
-            let mut g: Grid = Vec::new();
-            for &min_score in &[2usize, 3] {
-                for &adx_entry in &[22.0_f64, 25.0, 28.0] {
-                    let deltas = vec![
-                        ("min_score".into(), min_score.to_string()),
-                        ("adx_entry".into(), adx_entry.to_string()),
-                    ];
-                    let label = format!("min_score={},adx_entry={}", min_score, adx_entry);
-                    g.push((
-                        label,
-                        deltas,
-                        Box::new(move |rc: &mut ReplayConfig| {
-                            if let Some(s) = rc.swing.as_mut() {
-                                s.min_score = min_score;
-                                s.adx_range_entry = adx_entry;
-                            }
-                        }),
-                    ));
-                }
-            }
-            g // 2*3 = 6
-        }
-        EngineKind::MeanReversion => panic!("MR is not swept (tick-resolution, no-edge)"),
     }
 }
 
@@ -266,11 +242,6 @@ pub async fn run_sweep(
     oos_frac: f64,
     bar_hours: f64,
 ) -> anyhow::Result<SweepResult> {
-    if matches!(kind, EngineKind::Swing) && rc.swing.is_none() {
-        anyhow::bail!(
-            "EngineKind::Swing requires rc.swing to be Some — refusing to sweep a no-op grid"
-        );
-    }
     let baseline = run_validation(kind, rc, bars.clone(), oos_frac, bar_hours).await?;
     let (is_b, _oos_b) = crate::backtest::validation::split_is_oos(&bars, oos_frac);
     let swept = sweep_is(kind, rc, &is_b, bar_hours).await?;

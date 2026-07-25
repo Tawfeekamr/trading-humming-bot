@@ -306,23 +306,42 @@ impl Engine {
         // tick; None (no entry yet, or stale per TTL) ⇒ leave strategies as-is
         // so a cold start or router outage doesn't accidentally pause everything.
         if let Some(r) = self.routing_cache.get().await {
-            for s in self.strategies.iter_mut() {
-                let is_active = s.name() == r.active_engine;
-                s.set_paused(!is_active);
-                if r.flat {
-                    s.force_flat();
+            // Guard: only apply when `active_engine` names an instantiated
+            // strategy (or it's an explicit GO_FLAT). An unknown name — e.g.
+            // "swing" after its strategy was removed while the on-disk PPO
+            // policy can still emit swing actions — would match no strategy,
+            // pause every engine, and freeze the whole fleet. Ignore unknown
+            // names so strategies keep running under their own regime/capital
+            // gates, exactly as if no routing decision had been pushed.
+            let engine_known = r.flat
+                || self.strategies.iter().any(|s| s.name() == r.active_engine);
+            if engine_known {
+                for s in self.strategies.iter_mut() {
+                    let is_active = s.name() == r.active_engine;
+                    s.set_paused(!is_active);
+                    if r.flat {
+                        s.force_flat();
+                    }
                 }
-            }
-            // PPO size signal: scale the active engine's capital grant ceiling
-            // (0.5 / 1.0 / 1.5). Defense-in-depth (I2): clear every OTHER
-            // engine's mult to 0.0 first so a paused engine whose on_tick still
-            // runs (e.g. managing exits) can't draw capital it shouldn't have.
-            for s in self.strategies.iter() {
-                if s.name() != r.active_engine {
-                    self.capital.set_size_mult(s.name(), 0.0);
+                // PPO size signal: scale the active engine's capital grant ceiling
+                // (0.5 / 1.0 / 1.5). Defense-in-depth (I2): clear every OTHER
+                // engine's mult to 0.0 first so a paused engine whose on_tick still
+                // runs (e.g. managing exits) can't draw capital it shouldn't have.
+                for s in self.strategies.iter() {
+                    if s.name() != r.active_engine {
+                        self.capital.set_size_mult(s.name(), 0.0);
+                    }
                 }
+                self.capital.set_size_mult(&r.active_engine, r.size_mult);
+            } else {
+                let known: Vec<&str> =
+                    self.strategies.iter().map(|s| s.name()).collect();
+                warn!(
+                    "Routing active_engine='{}' matches no instantiated strategy \
+                     (known: {:?}); ignoring to avoid freezing the fleet",
+                    r.active_engine, known
+                );
             }
-            self.capital.set_size_mult(&r.active_engine, r.size_mult);
         }
 
         let mut all_orders = Vec::new();
@@ -950,6 +969,40 @@ mod tests {
             "active engine must still be force_flat'd when flat=true");
         assert!(trend_log.lock().flat_called,
             "non-active engine must be force_flat'd when flat=true");
+    }
+
+    #[tokio::test]
+    async fn test_routing_unknown_engine_does_not_freeze_fleet() {
+        // Regression: "swing" was removed from the fleet (swing.rs deleted) but
+        // the on-disk PPO policy can still emit swing actions. An unknown
+        // active_engine must NOT pause every strategy (which would freeze the
+        // whole fleet) — it must be ignored so strategies keep running under
+        // their own gates, exactly as if no routing decision had been pushed.
+        let grid_log = Arc::new(Mutex::new(CallLog::default()));
+        let trend_log = Arc::new(Mutex::new(CallLog::default()));
+
+        let routing = RoutingCache::new("/tmp/test_engine_routing_unknown.json", 0);
+        routing.update(crate::strategy::routing_cache::RoutingUpdate {
+            active_engine: "swing".into(), // not instantiated in this engine
+            size_mult: 1.0,
+            flat: false,
+        }).await;
+
+        let mut engine = minimal_engine(
+            vec![
+                Box::new(MockStrategy::new("grid", grid_log.clone())),
+                Box::new(MockStrategy::new("trend", trend_log.clone())),
+            ],
+            routing,
+        );
+
+        engine.tick_strategies().await.expect("tick must complete");
+
+        assert_eq!(grid_log.lock().paused, None,
+            "unknown engine must not pause any strategy (would freeze the fleet)");
+        assert_eq!(trend_log.lock().paused, None);
+        assert!(!grid_log.lock().flat_called);
+        assert!(!trend_log.lock().flat_called);
     }
 
     #[tokio::test]

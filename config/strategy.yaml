@@ -234,7 +234,7 @@ mean_reversion:
 # live. Caveat: live uses Market entry (= sweep Mode A → ~breakeven OOS); the
 # positive OOS needs maker entries (Mode B), not yet wired. Capital modest for paper.
 swing:
-  enabled: true
+  enabled: false
   enabled_pairs: ["ETH-USDT"]  # ETH-only: corrected sweep (#38/#39) — BNB/DOGE/XRP lose full-period
   runner_exit: "band_or_chandelier"   # serde rename_all=snake_case on RunnerExitMode
   htf_period: "4h"                  # aggregate the 1h feed → 4h regime/band

@@ -186,25 +186,7 @@ class TestEngineStatus:
         _handler(tmp_path)._cmd_trend_status(u, None)
         assert u.message.reply_text.called
 
-    def test_swing_status(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr("urllib.request.urlopen", self._api_mock([
-            {"name": "swing", "pair": "BNB-USDT", "state": "SEARCHING", "pnl": -44,
-             "open_orders": 0, "details": "Capital: 4955"},
-        ]))
-        u = _mock_update()
-        _handler(tmp_path)._cmd_swing_status(u, None)
-        assert u.message.reply_text.called
 
-    def test_mean_status(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr("urllib.request.urlopen", self._api_mock([
-            {"name": "mr", "pair": "BNB-USDT", "state": "Scanning", "pnl": 1.31,
-             "open_orders": 0, "details": "Trades: 0"},
-        ]))
-        u = _mock_update()
-        _handler(tmp_path)._cmd_mean_status(u, None)
-        assert u.message.reply_text.called
 
 
 # ── Signal commands ────────────────────────────────────────────────────────

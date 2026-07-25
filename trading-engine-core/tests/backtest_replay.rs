@@ -186,41 +186,6 @@ fn ranging_bars(n: usize) -> Vec<Bar> {
         .collect()
 }
 
-#[tokio::test]
-async fn swing_runs_on_synthetic_range() {
-    let path = format!("{}/../config/strategy.yaml", env!("CARGO_MANIFEST_DIR"));
-    let app_cfg = AppConfig::load(&path).expect("strategy.yaml must load");
-    let rc = ReplayConfig {
-        symbol: "ETHUSDT".into(),
-        init_cash: 100_000.0,
-        warmup_bars: 220,
-        bar_hours: 1.0,
-        engine: EngineKind::Swing,
-        tick_size: 0.01,
-        step_size: 0.0001,
-        taker_fee_bps: app_cfg.paper.taker_fee_bps,
-        maker_fee_bps: app_cfg.paper.maker_fee_bps,
-        slippage_bps: app_cfg.paper.slippage_bps,
-        grid: app_cfg.grid.clone(),
-        trend: app_cfg.trend.clone(),
-        perp_bars: None,
-        funding_rate: None,
-        swing: app_cfg.swing.clone(),
-        mean_reversion: app_cfg.mean_reversion.clone(),
-        regime: None,
-    };
-    let bars = ranging_bars(300);
-    let res = run_engine_on_bars(EngineKind::Swing, &rc, bars)
-        .await
-        .expect("swing replay must complete without error");
-    assert!(!res.equity_curve.is_empty(), "equity curve should be non-empty");
-    // Smoke: completes without panic/error; entries depend on the min_score
-    // gate firing on this synthetic series, which is not asserted (same
-    // caveat as Phase-1 grid and Task-3 trend). `res.trades.len()` is
-    // intentionally not asserted.
-    let _ = res.trades.len();
-}
-
 // ── Task 4 follow-up: on_fill chaining regression ─────────────────────────
 //
 // Proves `run_loop` SUBMITS the `OrderRequest`s returned by `on_fill` (rather
@@ -385,77 +350,4 @@ async fn on_fill_returned_orders_are_submitted_not_discarded() {
     );
 }
 
-// ── Task 5: MeanReversion dispatch smoke test ──────────────────────────────
-//
-// Proves the real long-only `MeanReversionStrategy` runs end-to-end against
-// the replay driver (EngineKind::MeanReversion arm) verbatim — same engine
-// the live Rust binary drives. MR's `on_fill` returns empty (exits decided
-// in `on_tick`), so the Task-4 on_fill-chaining fix is a no-op for it; this
-// test exercises the dispatcher's construct + drive path without panic.
-//
-// The drop_thr gate may not fire on synthetic data, so the assertion is
-// "completes + produces an equity curve", not "trades N times" (same caveat
-// as Phase-1 grid, Task-3 trend, and Task-4 swing smokes). Note also the
-// bid_depth fidelity gap: build_ctx synthesizes a mid-only order book, so
-// MR's calculate_bid_depth signal is degenerate in replay regardless of the
-// series shape — MR may behave differently than live.
 
-/// 300-bar mean-reverting series: oscillating sharply around 100 with spikes
-/// that revert. Uses a sine with amplitude 8 plus alternating spike kicks to
-/// give MR's drop_thr / flush-detection gate something to chew on without
-/// being a clean trend (MR is a reversal strategy — a monotonic ramp would
-/// never trigger the flush gate).
-fn reverting_bars(n: usize) -> Vec<Bar> {
-    (0..n)
-        .map(|i| {
-            let phase = (i as f64) * 0.35;
-            // Sharp oscillation around 100 ± 8 with a spike-revert pattern:
-            // every 7th bar spikes hard, then snaps back the next bar.
-            let base = 100.0 + 8.0 * phase.sin();
-            let spike = if i % 7 == 0 {
-                -6.0 // sharp drop on the spike bar
-            } else if i % 7 == 1 {
-                4.0 // partial reversion
-            } else {
-                0.0
-            };
-            let p = (base + spike).max(80.0);
-            Bar::new(p, p + 1.5, p - 1.5, p, 20.0, (i as i64) * 3_600_000)
-        })
-        .collect()
-}
-
-#[tokio::test]
-async fn mr_runs_on_synthetic_reverting_series() {
-    let path = format!("{}/../config/strategy.yaml", env!("CARGO_MANIFEST_DIR"));
-    let app_cfg = AppConfig::load(&path).expect("strategy.yaml must load");
-    let rc = ReplayConfig {
-        symbol: "ETHUSDT".into(),
-        init_cash: 100_000.0,
-        warmup_bars: 220,
-        bar_hours: 1.0,
-        engine: EngineKind::MeanReversion,
-        tick_size: 0.01,
-        step_size: 0.0001,
-        taker_fee_bps: app_cfg.paper.taker_fee_bps,
-        maker_fee_bps: app_cfg.paper.maker_fee_bps,
-        slippage_bps: app_cfg.paper.slippage_bps,
-        grid: app_cfg.grid.clone(),
-        trend: app_cfg.trend.clone(),
-        perp_bars: None,
-        funding_rate: None,
-        swing: app_cfg.swing.clone(),
-        mean_reversion: app_cfg.mean_reversion.clone(),
-        regime: None,
-    };
-    let bars = reverting_bars(300);
-    let res = run_engine_on_bars(EngineKind::MeanReversion, &rc, bars)
-        .await
-        .expect("mr replay must complete without error");
-    assert!(!res.equity_curve.is_empty(), "equity curve should be non-empty");
-    // Smoke: completes without panic/error; entries depend on the drop_thr
-    // flush gate firing on this synthetic series (degenerate under the
-    // mid-only-book bid_depth gap), which is not asserted (same caveat as the
-    // grid/trend/swing smokes). `res.trades.len()` is intentionally not asserted.
-    let _ = res.trades.len();
-}

@@ -24,11 +24,33 @@ def load_config():
         return yaml.safe_load(f)
 
 
-def _signal_order(side, symbol, amount, price):
-    """Place a signal order via the Rust engine API. Returns a mock order_id."""
+def _signal_order(side, symbol, amount, price=None):
+    """Place a signal order via the Rust engine API after checking CapitalManager. Returns order_id."""
     try:
         import urllib.request, json
-        url = os.environ.get("RUST_ENGINE_URL", "http://localhost:3030") + "/api/v1/order"
+
+        rust_url = os.environ.get("RUST_ENGINE_URL", "http://localhost:3030")
+
+        # CapitalManager check for BUY orders
+        if side == "BUY":
+            try:
+                cap_url = f"{rust_url}/api/v1/capital"
+                cap_resp = urllib.request.urlopen(cap_url, timeout=5)
+                cap_data = json.loads(cap_resp.read())
+                free_cap = float(cap_data.get("free_capital", 0.0))
+
+                est_price = float(price) if price else float(_get_price(symbol) or 0.0)
+                req_notional = float(amount) * est_price
+
+                if req_notional > 0 and free_cap > 0 and req_notional > free_cap:
+                    logger.warning(
+                        f"Signal BUY rejected by CapitalManager: {symbol} notional ${req_notional:.2f} > free capital ${free_cap:.2f}"
+                    )
+                    return None
+            except Exception as cap_err:
+                logger.warning(f"CapitalManager pre-check warning for {symbol}: {cap_err}")
+
+        url = rust_url + "/api/v1/order"
         body = json.dumps({
             "symbol": symbol.replace("-", ""),
             "side": side,

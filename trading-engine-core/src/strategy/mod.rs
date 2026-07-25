@@ -1,8 +1,6 @@
 pub mod grid;
 pub mod trend;
-pub mod mean_reversion;
 pub mod trade_journal;
-pub mod swing;
 pub mod status_cache;
 pub mod regime_cache;
 pub mod routing_cache;

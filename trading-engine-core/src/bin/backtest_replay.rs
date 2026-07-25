@@ -38,8 +38,6 @@ fn parse_engine(s: &str) -> Option<EngineKind> {
     match s {
         "grid" => Some(EngineKind::Grid),
         "trend" => Some(EngineKind::Trend),
-        "swing" => Some(EngineKind::Swing),
-        "mean_reversion" => Some(EngineKind::MeanReversion),
         _ => None,
     }
 }

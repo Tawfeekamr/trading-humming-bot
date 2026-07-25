@@ -38,8 +38,6 @@ async fn async_main() -> Result<()> {
         .collect();
     let grid_cfg = config.grid.clone();
     let trend_cfg = config.trend.clone();
-    let mr_cfg = config.mean_reversion.clone();
-    let swing_cfg = config.swing.clone();
 
     let connector: Arc<dyn trading_engine_core::connector::Connector> = if config.exchange.testnet {
         info!(
@@ -148,38 +146,6 @@ async fn async_main() -> Result<()> {
                 trend = trend.with_perp(p.clone());
             }
             engine.add_strategy(Box::new(trend));
-        }
-
-        // Mean Reversion strategy per pair — gated by mean_reversion.enabled
-        // (grid/trend have no enabled flag and always run; MR is the only one
-        // that can be switched off via config.)
-        if mr_cfg.enabled {
-            let mean_reversion = trading_engine_core::strategy::mean_reversion::MeanReversionStrategy::new(
-                symbol,
-                &mr_cfg,
-                telegram.clone_for_signal(),
-            );
-            engine.add_strategy(Box::new(mean_reversion));
-        }
-
-        // Swing strategy — only on configured pairs (empty = all). The backtest
-        // showed edge concentrated on ETH (DOGE loses, XRP inconclusive, BNB needs
-        // maker entries), so production gates this explicitly via enabled_pairs.
-        if let Some(base) = &swing_cfg {
-            let sym_norm = symbol.replace('-', "");
-            let allowed = base.enabled_pairs.is_empty()
-                || base.enabled_pairs.iter().any(|p| p.replace('-', "") == sym_norm);
-            if allowed {
-                let mut cfg = base.clone();
-                cfg.tick_size = Some(pc.tick_size);
-                cfg.step_size = Some(pc.step_size);
-                let swing = trading_engine_core::strategy::swing::SwingStrategy::new(
-                    symbol,
-                    &cfg,
-                    telegram.clone_for_signal(),
-                );
-                engine.add_strategy(Box::new(swing));
-            }
         }
     }
 

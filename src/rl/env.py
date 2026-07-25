@@ -13,14 +13,13 @@ directionally correct (grid profits in ranges, trend profits in trends, swing
 profits on reversals) but do not match the production engines tick-for-tick.
 Speed matters: PPO calls ``step()`` millions of times during training.
 
-Observation (19-dim, ``Box(-inf, inf)``):
-    [0:11]   market+time features from ``compute_features`` (matches the
-             regime classifier's inputs column-for-column).
-    [11:15]  engine one-hot — flat / grid / trend / swing.
-    [15]     unrealized PnL %  = (equity - initial) / initial.
-    [16]     drawdown-from-peak = (peak - equity) / peak.
-    [17]     position notional ratio = |position_value| / initial_equity.
-    [18]     active bar count normalized = bars_in_engine / max_bars_per_engine.
+Observation (25-dim, ``Box(-inf, inf)``):
+    [0:17]   market+time features from ``compute_features`` (14 market + 3 time).
+    [17:21]  engine one-hot — flat / grid / trend / swing.
+    [21]     unrealized PnL %  = (equity - initial) / initial.
+    [22]     drawdown-from-peak = (peak - equity) / peak.
+    [23]     position notional ratio = |position_value| / initial_equity.
+    [24]     active bar count normalized = bars_in_engine / max_bars_per_engine.
 
 Action (``Discrete(10)``):
     0-2: GRID  at 0.5x / 1.0x / 1.5x size.

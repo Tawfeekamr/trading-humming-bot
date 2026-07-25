@@ -131,11 +131,9 @@ class TelegramCommandHandler:
             "<b>Capital:</b> /capital\n"
             "<b>Grid:</b> /grid_status\n"
             "<b>Trend:</b> /trend_status /trend_pnl /trend_history\n"
-            "<b>Swing:</b> /swing_status\n"
             "<b>Signal:</b> /signal_status /signal_pnl /signal_history "
             "/signal_channels /signal_pause /signal_resume /signal_close /signal_inject\n"
             "<b>Futures:</b> /futures_status /futures_pnl\n"
-            "<b>MR:</b> /mean_status /mean_pnl\n"
         )
 
     # ── HTTP helpers (plain http.client, no asyncio) ────────────────
@@ -249,14 +247,10 @@ class TelegramCommandHandler:
             # Engine status (Rust API)
             "grid_status": self._cmd_grid_status,
             "trend_status": self._cmd_trend_status,
-            "swing_status": self._cmd_swing_status,
-            "swing_pnl": self._cmd_swing_status,
             "signal_status": self._cmd_signal_status,
             "signal_pnl": self._cmd_signal_pnl,
             "futures_status": self._cmd_futures_status,
             "futures_pnl": self._cmd_futures_pnl,
-            "mean_status": self._cmd_mean_status,
-            "mean_pnl": self._cmd_mean_status,
             "capital": self._cmd_capital,
             # Signal engine control
             "signal_channels": self._cmd_signal_channels,
@@ -532,7 +526,7 @@ class TelegramCommandHandler:
             conn = sqlite3.connect("data/trades.db")
             totals = [0.0, 0.0, 0.0]
             body = ""
-            for eng in ("Grid", "Trend", "Swing", "MR", "Signal"):
+            for eng in ("Grid", "Trend", "Signal"):
                 per = []
                 for i, (_, cutoff) in enumerate(windows):
                     v = conn.execute(
@@ -670,7 +664,7 @@ class TelegramCommandHandler:
             engines = {}
             for s in strategies:
                 engines.setdefault(s.get("name", "?"), []).append(s)
-            for name in ["grid", "trend", "swing", "mean_reversion"]:
+            for name in ["grid", "trend", "signal"]:
                 bots = engines.get(name, [])
                 if not bots:
                     continue
@@ -1484,9 +1478,6 @@ class TelegramCommandHandler:
             "/futures_status — Futures engine status & positions\n"
             "/futures_pnl — Futures P&L report\n"
             "•••\n"
-            "<b>Mean-Reversion:</b>\n"
-            "/mean_status — Mean-reversion engine status\n"
-            "•••\n"
             "/help — This message",
             parse_mode="HTML"
         )
@@ -1852,61 +1843,7 @@ class TelegramCommandHandler:
         except Exception as e:
             update.message.reply_text(f"⚠️ Error: {e}")
 
-    def _cmd_mean_status(self, update, context):
-        """Show mean-reversion strategy status from Rust engine API."""
-        try:
-            logger.info("Telegram /mean_status received")
 
-            # Try to fetch from Rust engine API
-            try:
-                import urllib.request
-                import json
-                req = urllib.request.Request(os.environ.get("RUST_ENGINE_URL", "http://localhost:3030") + "/api/v1/strategies")
-                resp = urllib.request.urlopen(req, timeout=5)
-                data = json.loads(resp.read())
-
-                # Filter for mean-reversion strategies
-                mean_strategies = [s for s in data if s.get("name") == "mean_reversion"]
-
-                if mean_strategies:
-                    lines = ["📉 <b>Mean-Reversion Engine</b>", "•••"]
-                    total_pnl = 0.0
-
-                    for status in mean_strategies:
-                        symbol = status.get("pair", "UNKNOWN")
-                        state = status.get("state", "UNKNOWN")
-                        pnl = status.get("pnl", 0)
-                        details = status.get("details", "")
-                        total_pnl += pnl
-
-                        pair_display = symbol.replace("-", "/")
-                        sign = "+" if pnl >= 0 else ""
-                        lines.append(f"<b>{pair_display}:</b> {state}")
-                        if details:
-                            lines.append(f"  <i>{html.escape(details)}</i>")
-                        lines.append(f"  P&L: {sign}${pnl:.2f}")
-
-                    lines.append("•••")
-                    sign = "+" if total_pnl >= 0 else ""
-                    lines.append(f"<b>Total P&L: {sign}${total_pnl:.2f}</b>")
-
-                    update.message.reply_text("\n".join(lines), parse_mode="HTML")
-                    return
-            except Exception as e:
-                logger.debug(f"Rust engine API unavailable: {e}")
-
-            # Fallback message with known config
-            update.message.reply_text(
-                "📉 <b>Mean-Reversion Engine</b>\n"
-                "•••\n"
-                "Status: Scanning for flash dips (≥2% in 30s)\n"
-                "Config: TP +2% | SL -3% | Gates: relaxed\n"
-                "Waiting for flush events (~1 every 10 days on average)",
-                parse_mode="HTML"
-            )
-        except Exception as e:
-            logger.error(f"Error in /mean_status: {e}")
-            update.message.reply_text(f"⚠️ Error getting mean-reversion status: {e}")
 
     def _cmd_trades(self, update, context):
         """Show recent individual trades across all bots from trades.db.
@@ -1991,48 +1928,4 @@ class TelegramCommandHandler:
             logger.error(f"Error in /{engine_name}_status: {e}")
             update.message.reply_text(f"⚠️ Error: {e}")
 
-    def _cmd_swing_status(self, update, context):
-        """Show swing strategy status from Rust engine API."""
-        try:
-            logger.info("Telegram /swing_status received")
 
-            try:
-                import urllib.request
-                import json
-                req = urllib.request.Request(os.environ.get("RUST_ENGINE_URL", "http://localhost:3030") + "/api/v1/strategies")
-                resp = urllib.request.urlopen(req, timeout=5)
-                data = json.loads(resp.read())
-
-                swing_strategies = [s for s in data if s.get("name") == "swing"]
-
-                if swing_strategies:
-                    lines = ["🎣 <b>Swing Engine</b>", "•••"]
-                    total_pnl = 0.0
-
-                    for status in swing_strategies:
-                        symbol = status.get("pair", "UNKNOWN")
-                        state = status.get("state", "UNKNOWN")
-                        pnl = status.get("pnl", 0)
-                        details = status.get("details", "")
-                        total_pnl += pnl
-
-                        pair_display = symbol.replace("-", "/")
-                        sign = "+" if pnl >= 0 else ""
-                        lines.append(f"<b>{pair_display}:</b> {state}")
-                        if details:
-                            lines.append(f"  <i>{html.escape(details)}</i>")
-                        lines.append(f"  P&L: {sign}${pnl:.2f}")
-
-                    lines.append("•••")
-                    sign = "+" if total_pnl >= 0 else ""
-                    lines.append(f"<b>Total P&L: {sign}${total_pnl:.2f}</b>")
-
-                    update.message.reply_text("\n".join(lines), parse_mode="HTML")
-                    return
-            except Exception as e:
-                logger.debug(f"Rust engine API unavailable: {e}")
-
-            update.message.reply_text("Swing Engine not active or unavailable.", parse_mode="HTML")
-        except Exception as e:
-            logger.error(f"Error in /swing_status: {e}")
-            update.message.reply_text(f"⚠️ Error getting swing status: {e}")
