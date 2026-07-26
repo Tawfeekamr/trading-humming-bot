@@ -4,12 +4,17 @@ import { usePositions } from '../lib/positions'
 import { money } from '../lib/format'
 import { ago } from '../lib/time'
 
-export function Rail({ onSelectPair }: { onSelectPair?: (pair: string) => void }) {
-  const { trades, live } = useTrades()
+export function Rail({
+  onSelectPair,
+  onOpenHistory,
+}: {
+  onSelectPair?: (pair: string) => void
+  onOpenHistory?: () => void
+}) {
+  const { trades: _raw, live } = useTrades()
+  const trades = _raw.filter(t => t.engine !== 'mr' && t.engine !== 'swing')
   const positions = usePositions()
   const openPos = positions.filter(p => !p.is_closed)
-  const spotOpen = openPos.filter(p => p.book !== 'futures').length
-  const futOpen = openPos.filter(p => p.book === 'futures').length
   const recent = [...trades]
     .sort((a, b) => +new Date(b.timestamp) - +new Date(a.timestamp))
     .slice(0, 8)
@@ -35,9 +40,18 @@ export function Rail({ onSelectPair }: { onSelectPair?: (pair: string) => void }
     <aside className="rail">
       {/* 1. RECENT TRADES */}
       <div className="panel">
-        <div className="panel-hdr" onClick={() => toggle('trades')}>
-          <div className="eyebrow">Recent trades <span className="cnt">{live ? 'live' : 'sample'}</span></div>
-          <button className="panel-toggle" aria-label="Toggle panel">{collapsed.trades ? '+' : '−'}</button>
+        <div className="panel-hdr">
+          <div className="eyebrow" onClick={() => toggle('trades')}>Recent trades <span className="cnt">{live ? 'live' : 'sample'}</span></div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            {onOpenHistory && (
+              <button className="view-all-btn" onClick={onOpenHistory} title="Open full trade history & audit log">
+                View All ↗
+              </button>
+            )}
+            <button className="panel-toggle" onClick={() => toggle('trades')} aria-label="Toggle panel">
+              {collapsed.trades ? '+' : '−'}
+            </button>
+          </div>
         </div>
         {!collapsed.trades && (
           <table className="trades">

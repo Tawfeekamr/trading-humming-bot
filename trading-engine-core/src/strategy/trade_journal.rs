@@ -252,8 +252,6 @@ impl UnifiedTradeJournal {
         let sources: &[(&str, &str, &str, &str, &str, &str, &str)] = &[
             ("grid",   "grid_journal.db",            "grid_trades",   "realized_pnl", "pair",   "exit_reason", ""),
             ("trend",  "trend_journal.db",           "trend_trades",  "pnl",          "pair",   "exit_reason", ""),
-            ("swing",  "swing_journal.db",           "swing_trades",  "pnl",          "pair",   "exit_reason", ""),
-            ("mr",     "mean_reversion_journal.db",  "mr_trades",     "pnl",          "pair",   "exit_reason", ""),
             ("signal", "signal_journal.db",          "signal_trades", "realized_pnl", "symbol", "exit_reason", "WHERE action LIKE 'CLOSE_%'"),
         ];
         let mut total = 0usize;

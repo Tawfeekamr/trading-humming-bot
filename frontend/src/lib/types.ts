@@ -2,7 +2,7 @@
 export type Trade = {
   id: number
   timestamp: string // RFC3339, e.g. 2026-07-25T19:26:06+00:00
-  engine: string    // grid | trend | swing | mr | signal
+  engine: string    // grid | trend | signal
   pair: string      // "ETH-USDT"
   side: 'buy' | 'sell' | null
   entry_price: number | null

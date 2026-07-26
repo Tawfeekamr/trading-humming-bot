@@ -10,12 +10,13 @@ import { useTrades } from '../lib/trades'
 import { useBuyHold, type Point } from '../lib/buyhold'
 import { money } from '../lib/format'
 
-const ENGINES = ['grid', 'trend', 'swing', 'mr']
+const ENGINES = ['grid', 'trend']
 const BASKET = ['ETHUSDT', 'BNBUSDT', 'XRPUSDT', 'DOGEUSDT']
 const START_EQUITY = 100000
 
 export function Pnl() {
-  const { trades, live } = useTrades()
+  const { trades: _raw, live } = useTrades()
+  const trades = _raw.filter(t => t.engine !== 'mr' && t.engine !== 'swing')
   const net = trades.reduce((a, t) => a + t.pnl, 0)
   const count = trades.length
   const winTrades = trades.filter(t => t.pnl > 0)

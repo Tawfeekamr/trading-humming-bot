@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useTrades } from '../lib/trades'
 import { money } from '../lib/format'
+import { HummingbotLogo } from './HummingbotLogo'
 
 export type View = 'desk' | 'pnl' | 'mlrl' | 'hypotheses'
 
@@ -8,7 +9,8 @@ const START_EQUITY = 100000 // paper account seed
 
 export function Masthead({ view, setView }: { view: View; setView: (v: View) => void }) {
   const [clock, setClock] = useState('--:--:--')
-  const { trades } = useTrades()
+  const { trades: _raw } = useTrades()
+  const trades = _raw.filter(t => t.engine !== 'mr' && t.engine !== 'swing')
 
   // Equity = seed + all-time realized; day = realized on today's UTC date.
   const net = trades.reduce((a, t) => a + t.pnl, 0)
@@ -36,6 +38,7 @@ export function Masthead({ view, setView }: { view: View; setView: (v: View) => 
   return (
     <header className="masthead">
       <div className="brand">
+        <HummingbotLogo size={22} />
         <span className="wordmark">HUMMINGBOT <span className="dim">· DESK</span></span>
       </div>
       <nav className="nav">
