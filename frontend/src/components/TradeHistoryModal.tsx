@@ -35,8 +35,9 @@ export function TradeHistoryModal({
     return Array.from(s).sort()
   }, [trades])
 
+  const ALL_CORE_ENGINES = ['signal', 'grid', 'trend']
   const uniqueEngines = useMemo(() => {
-    const s = new Set<string>()
+    const s = new Set<string>(ALL_CORE_ENGINES)
     trades.forEach(t => s.add(t.engine))
     return Array.from(s).sort()
   }, [trades])
@@ -51,7 +52,7 @@ export function TradeHistoryModal({
       if (outcomeFilter === 'LOSS' && t.pnl >= 0) return false
       if (search.trim()) {
         const q = search.toLowerCase()
-        const text = `${t.pair} ${t.engine} ${t.side} ${t.exit_reason || ''}`.toLowerCase()
+        const text = `${t.pair} ${t.engine} ${t.side} ${t.exit_reason || ''} ${t.entry_reason || ''} ${t.entry_price ?? ''} ${t.exit_price ?? ''} ${t.pnl}`.toLowerCase()
         if (!text.includes(q)) return false
       }
       return true
