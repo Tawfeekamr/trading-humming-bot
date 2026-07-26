@@ -1,0 +1,9 @@
+node_modules
+dist
+dist-ssr
+*.local
+
+# tsc -b emits these from vite.config.ts (composite project) — regenerate locally.
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts
