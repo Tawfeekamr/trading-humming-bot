@@ -6,7 +6,7 @@ import { FocusOverlay } from './FocusOverlay'
 
 const PAIRS = ['ETH-USDT', 'BNB-USDT', 'XRP-USDT', 'DOGE-USDT']
 
-export function Desk({ interval }: { interval: string }) {
+export function Desk({ interval, onOpenHistory }: { interval: string; onOpenHistory?: () => void }) {
   const [focusPair, setFocusPair] = useState<string | null>(null)
 
   return (
@@ -18,7 +18,7 @@ export function Desk({ interval }: { interval: string }) {
             <CoinCard key={p} pair={p} interval={interval} onOpen={() => setFocusPair(p)} />
           ))}
         </section>
-        <Rail onSelectPair={(p) => setFocusPair(p)} />
+        <Rail onSelectPair={(p) => setFocusPair(p)} onOpenHistory={onOpenHistory} />
       </main>
       {focusPair && (
         <FocusOverlay pair={focusPair} interval={interval} onClose={() => setFocusPair(null)} />

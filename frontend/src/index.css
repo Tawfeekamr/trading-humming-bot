@@ -308,5 +308,44 @@ table.trades .t{color:var(--stone-2);text-align:right}
 .p-chip.closed-pos{color:var(--stone-2);background:rgba(236,233,226,.05);border:1px solid rgba(236,233,226,.12)}
 .p-chip.fut,.p-chip.closed-fut{color:var(--signal);background:rgba(232,163,61,.08);border:1px solid rgba(232,163,61,.18)}
 
+/* View All Trade History Button */
+.view-all-btn{background:rgba(74,157,138,.12);border:1px solid rgba(74,157,138,.3);color:var(--jade);font-family:var(--mono);font-size:10px;font-weight:600;padding:2px 7px;border-radius:3px;cursor:pointer;transition:all 0.15s ease}
+.view-all-btn:hover{background:rgba(74,157,138,.25);border-color:var(--jade);color:var(--paper)}
+
+/* Trade History Modal Styles */
+.modal-backdrop{background:rgba(10,12,16,.85);backdrop-filter:blur(8px);display:flex;align-items:center;justify-content:center;padding:20px}
+.hist-modal{background:var(--ink-panel);border:1px solid var(--line-light);border-radius:8px;width:100%;max-width:1120px;max-height:90vh;display:flex;flex-direction:column;padding:20px;box-shadow:0 20px 50px rgba(0,0,0,.6);overflow:hidden}
+.hist-hdr{display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);padding-bottom:14px;margin-bottom:16px}
+.hist-hdr h2{font-family:var(--display);font-size:16px;font-weight:700;color:var(--paper);letter-spacing:.04em;margin:0}
+.hist-hdr .title-grp{display:flex;align-items:baseline;gap:12px}
+.hist-hdr .cnt{font-family:var(--mono);font-size:11px;color:var(--stone-2)}
+
+.hist-filters{display:flex;flex-wrap:wrap;gap:12px;background:rgba(236,233,226,.02);border:1px solid var(--line);border-radius:6px;padding:12px;margin-bottom:14px;align-items:center}
+.hist-filters .filter-item{display:flex;flex-direction:column;gap:4px}
+.hist-filters label{font-family:var(--mono);font-size:9.5px;color:var(--stone-2);letter-spacing:.08em;text-transform:uppercase}
+.hist-filters select,.hist-filters input{background:var(--ink-bg);border:1px solid var(--line-light);color:var(--paper);font-family:var(--mono);font-size:11px;padding:5px 8px;border-radius:4px;outline:none}
+.hist-filters select:focus,.hist-filters input:focus{border-color:var(--jade)}
+.hist-filters .search-item{flex:1;min-width:200px}
+
+.hist-kpi-bar{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px}
+.hist-kpi-bar .kpi-card{background:rgba(236,233,226,.03);border:1px solid var(--line);border-radius:6px;padding:10px 14px;display:flex;flex-direction:column}
+.hist-kpi-bar .lbl{font-family:var(--mono);font-size:9.5px;color:var(--stone-2);letter-spacing:.08em;margin-bottom:3px}
+.hist-kpi-bar .val{font-family:var(--mono);font-size:16px;font-weight:700;color:var(--paper)}
+
+.hist-table-wrap{flex:1;overflow-y:auto;border:1px solid var(--line);border-radius:6px;margin-bottom:14px}
+.hist-table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:11px}
+.hist-table th{background:rgba(236,233,226,.04);color:var(--stone-2);font-size:9.5px;letter-spacing:.08em;text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:2}
+.hist-table td{padding:8px 12px;border-bottom:1px solid rgba(236,233,226,.04);color:var(--paper);white-space:nowrap}
+.hist-table tr:hover td{background:rgba(236,233,226,.03);cursor:pointer}
+.hist-table .eng-chip{background:rgba(236,233,226,.06);padding:2px 6px;border-radius:3px;font-size:10px;color:var(--stone)}
+.hist-table .pair-cell{font-weight:600}
+.hist-table .reason-cell{color:var(--stone-2);font-size:10.5px}
+.hist-table .inspect-btn{background:rgba(74,157,138,.12);border:1px solid rgba(74,157,138,.28);color:var(--jade);font-family:var(--mono);font-size:9.5px;padding:2px 6px;border-radius:3px;cursor:pointer}
+.hist-table .inspect-btn:hover{background:var(--jade);color:#0A0C10}
+
+.hist-page-bar{display:flex;align-items:center;justify-content:space-between;font-family:var(--mono);font-size:11px;color:var(--stone-2);padding-top:6px}
+.hist-page-bar button{background:rgba(236,233,226,.05);border:1px solid var(--line-light);color:var(--paper);font-family:var(--mono);font-size:11px;padding:4px 10px;border-radius:4px;cursor:pointer}
+.hist-page-bar button:disabled{opacity:0.3;cursor:not-allowed}
+
 @media (prefers-reduced-motion:reduce){.dot,.ticker .track{animation:none!important}}
 @media (max-width:1000px){.workspace{grid-template-columns:1fr}.grid{grid-template-columns:1fr;grid-template-rows:auto}.focus-body,.pnl-grid,.tiles,.rl-reasons,.drivers-grid,.stepper,.hypo-grid{grid-template-columns:1fr}}

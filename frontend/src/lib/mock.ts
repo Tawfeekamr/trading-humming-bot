@@ -28,10 +28,15 @@ export function mockTrades(): Trade[] {
   return [
     mk(14, 'grid', 'ETH-USDT', 'buy', 1872.50, 1888.20, 1.75, 27.47, 'tp1'),
     mk(41, 'grid', 'BNB-USDT', 'sell', 574.80, 568.20, 6.53, 43.10, 'tp2'),
+    mk(55, 'signal', 'CRO-USDT', 'buy', 0.0812, 0.0845, 29084.91, 95.98, 'tp1'),
     mk(122, 'grid', 'ETH-USDT', 'buy', 1865.00, 1856.50, 1.90, -16.15, 'stop_loss'),
+    mk(140, 'signal', 'ICP-USDT', 'buy', 8.42, 8.85, 763.97, 328.50, 'tp2'),
     mk(183, 'grid', 'BNB-USDT', 'buy', 566.50, 572.00, 5.20, 28.60, 'tp1'),
+    mk(210, 'signal', 'LINK-USDT', 'buy', 7.9545, 8.4500, 210.57, 104.33, 'tp2'),
     mk(305, 'grid', 'XRP-USDT', 'buy', 1.0720, 1.1080, 412, 14.83, 'tp2'),
+    mk(310, 'signal', 'AAVE-USDT', 'buy', 92.50, 96.96, 45.20, 201.59, 'tp1'),
     mk(366, 'grid', 'ETH-USDT', 'sell', 1912.40, 1895.00, 2.07, 36.02, 'tp2'),
+    mk(480, 'signal', 'RENDER-USDT', 'buy', 1.4120, 1.4810, 1250, 86.25, 'tp2'),
     mk(720, 'trend', 'BNB-USDT', 'buy', 564.10, 575.40, 4.10, 46.33, 'tp3'),
     mk(900, 'trend', 'DOGE-USDT', 'buy', 0.0695, 0.0745, 9000, 45.00, 'tp2'),
   ]
