@@ -1,0 +1,144 @@
+MSc AI Dissertation Project Proposal Form
+
+Student number
+202358755
+Date
+18 June 2026
+Student name
+Tawfiq Amro
+Supervisor name
+Dr. Ahmed Moustafa
+Project title:  
+Machine Learning Regime Dynamics in Multi-Asset Execution
+Project description – background, aims, objectives, research question(s), brief reflection on novelty/originality
+Background
+Cryptocurrency markets are strongly non-stationary: any single trading logic, mean-reversion (grid) or momentum (trend), is profitable only inside the regime it was designed for and bleeds capital outside it. Static single-strategy systems are structurally fragile, suffering from regime dependence, concept drift, systemic BTC–altcoin correlation, and fee drag. This fragility motivates regime-aware execution, where the system classifies the current market state and routes orders to the strategy best suited to that regime. Classical approaches model regimes as latent, unlabelled states via Hidden Markov Models (HMMs) or Gaussian Mixture Models (GMMs); this project instead uses a supervised Random Forest classifier on pre-labelled regimes, RANGING (mean-reverting / low-volatility), TRENDING (momentum / directional), and DANGER (crisis / high-volatility), a deliberate design choice that yields interpretable, confidence-calibrated routing signals. To the best of our knowledge, no existing open-source framework treats regime state as a first-class, machine-learned routing signal and benchmarks reinforcement learning (RL) execution policies against a supervised routing baseline under realistic transaction costs. The central research contribution is therefore not the trading framework itself, which serves as the experimental apparatus, but the rigorous empirical comparison of RL agents (DQN, PPO, and optionally a Decision Transformer) against the supervised regime-routing baseline, with profitability treated as a motivating domain constraint rather than a claimed result.
+Aims
+This project builds a multi-engine algorithmic trading framework as the experimental apparatus for a controlled comparison of reinforcement learning execution policies against a supervised regime-routing baseline. The framework integrates a calibrated Random Forest regime classifier with four specialised execution engines, routing capital to the strategy best matched to the predicted regime, RANGING (mean-reverting / low-volatility), TRENDING (momentum / directional), or DANGER (crisis / high-volatility), for each trading pair, supervised by a portfolio-level risk layer and a cross-asset BTC correlation gate. The supervised baseline, validated via walk-forward backtesting, serves as the control condition. The research contribution is the empirical benchmark: training DQN and PPO agents within a faithful simulation environment and measuring whether learned policies improve risk-adjusted return and maximum drawdown over the supervised baseline, with the Decision Transformer as an explicit stretch goal.
+Objectives
+Build and calibrate a per-pair Random Forest regime classifier (3 classes, 14 technical features, isotonic probability calibration, walk-forward validation), benchmarked against an HMM/GMM baseline to validate the supervised design choice.
+Implement four specialised execution engines, Grid, Trend, Swing, and Mean-Reversion, each gated by the classifier's regime prediction and confidence score; characterise strategy redundancy via pairwise return correlation as a standalone secondary finding.
+Engineer a hybrid Rust + Python production stack with CI/CD, Docker deployment on AWS EC2 (Tokyo), and a faithful Python simulation environment validated against the production Rust engine on deliberately off-baseline action sequences, not only the baseline path.
+Develop a cross-asset BTC correlation gate that suppresses altcoin exposure during systemic DANGER (crisis / high-volatility) states.
+Validate the supervised routing baseline via walk-forward out-of-sample backtesting as the central evaluation and guaranteed-complete core (Phase 0–1), reporting effective fold count, sample-size limits, and statistical-power constraints honestly.
+Train DQN and PPO agents as the deliverable RL comparisons within the simulation environment, building any offline dataset (for the Decision Transformer stretch chapter) from diverse trajectories, perturbed/ε-greedy baseline rollouts, random-policy rollouts, and DQN/PPO training logs, rather than baseline replays alone.
+Run must-do experiments on ETH-USDT and BNB-USDT; treat DOGE-USDT and XRP-USDT as no-edge stress tests if time allows. Apply Bonferroni correction across all RL-vs-baseline comparisons, pre-registering a non-significant result as a valid finding.
+Consider a pooled multi-pair RL agent (pair-ID in observation vector) as a data-efficiency comparison against per-pair agents.
+Research Question
+Can reinforcement learning agents (DQN, PPO) learn a regime-switched multi-engine execution policy that outperforms a calibrated supervised routing baseline on risk-adjusted return and maximum drawdown, when both operate within a shared execution environment under realistic transaction costs, and, if not, what does a non-significant result reveal about the sufficiency of supervised regime routing?
+Hypotheses:
+System-Level Hypotheses (validated by the supervised baseline):
+SH1: The regime-gated hybrid framework exhibits lower maximum drawdown than standalone Grid or Trend strategies.
+SH2: The BTC cross-asset risk gate reduces systemic exposure during DANGER (crisis / high-volatility) states.
+SH3: Confidence-weighted sizing (Kelly-like scaling) improves risk-adjusted return versus fixed sizing.
+Comparison-Level Hypotheses (central thesis):
+CH1: At least one RL agent (DQN or PPO) achieves a statistically higher risk-adjusted return (Sharpe ratio) than the supervised routing baseline on walk-forward out-of-sample data, after Bonferroni correction for multiple comparisons.
+CH2: RL agents exhibit lower maximum drawdown than the supervised baseline during regime transitions.
+CH3: A non-significant result across all RL-vs-baseline comparisons, after correction, is a valid finding documenting where supervised routing suffices.
+Novelty and Originality
+The project’s originality lies in two areas: (1) the use of regime classification as a first-class, calibrated routing signal, not a post-hoc filter, for multi-engine execution, with an HMM/GMM baseline validating the supervised design choice and honest documentation of both positive and negative results; and (2) a rigorous supervised-vs-RL benchmark, measuring whether DQN and PPO agents can learn policies that outperform the supervised baseline within the same execution environment, with pre-registered non-significant results treated as valid findings. The three-regime taxonomy (ranging, trending, danger) follows established market-microstructure convention; the contribution is the calibrated routing mechanism and the controlled empirical comparison, not the taxonomy itself.
+Methodology – rationale, data selection and collection, recruitment of participants, analytical process 
+Rationale
+This project follows a design-science research methodology: the primary artefact is a multi-engine trading framework that serves as the experimental apparatus for a controlled RL-vs-supervised comparison. Evaluation is quantitative (risk-adjusted return, drawdown, Sharpe ratio), measured first against static single-strategy baselines (system-level validation) and then as a head-to-head RL-vs-supervised-baseline comparison under realistic transaction-cost assumptions.
+Data Selection and Collection
+Historical OHLCV candlestick data (1-hour resolution) from Binance for BTC-USDT, ETH-USDT, BNB-USDT, XRP-USDT, and DOGE-USDT, spanning January 2025 to May 2026 (~12,360 bars per pair).
+Real-time WebSocket price feeds and order-book snapshots from Binance and Gate.io during paper-trading deployment.
+No human participants are involved; all data is publicly available market data and social-media trade calls.
+Feature Engineering
+Fourteen technical indicators are computed in Rust from raw OHLCV data: returns, volatility ratio, normalised ATR, trend strength, RSI-14, volume ratio, close-location value, ADX-14, MACD histogram, distance to VWAP, OBV rate of change, Choppiness Index, Fractal Dimension Index, and Aroon Oscillator. These serve as input features for the regime classifier.
+Regime Labelling and Model Training
+Regime labels, RANGING (mean-reverting / low-volatility), TRENDING (momentum / directional), DANGER (crisis / high-volatility), are assigned using a forward-looking dynamic threshold (k·ATR/close), adapting to each asset's volatility rather than a fixed percentage move. A Random Forest classifier is trained per pair with class-weighting to up-sample the rare DANGER class. Probability calibration uses CalibratedClassifierCV (isotonic for n≥500, else sigmoid, 5-fold).
+Validation Methodology
+Chronological 80/20 train–test split (standard k-fold is invalid on overlapping, label-leaking financial time series).
+TimeSeriesSplit cross-validation for hyperparameter selection.
+Walk-forward backtesting (January 2025–May 2026, 1-hour bars) with transaction costs modelled at 0.2% round-trip.
+Live paper-trading validation on Binance testnet and Gate.io paper since 8 May 2026, collecting realised PnL per engine.
+Statistical benchmarking: Sharpe ratio, maximum drawdown, and win rate versus HODL and single-strategy baselines. Walk-forward out-of-sample validation is the central test of the thesis and is prioritised accordingly. Effective fold count and sample-size limits will be reported honestly, with statistical-power constraints stated rather than concealed.
+Diebold–Mariano significance tests for pairwise comparisons (supervised vs. each RL agent), with Bonferroni correction across 12 planned comparisons (4 agents × 3 metrics). A non-significant result is pre-registered as a valid finding.
+Analytical Process
+Evaluation follows a three-stage pipeline: (1) held-out classification metrics (accuracy, per-class F1, feature importances) to assess the regime classifier; (2) backtest PnL simulation with realistic fees to measure each engine's edge; and (3) live paper-trading PnL collection to bridge the backtest-to-live realism gap (instant-fill bias, slippage). An August go/no-go decision gates any live micro-stake deployment.
+
+Theoretical framework and intended tools/technologies
+Theoretical Framework The project is grounded in two complementary theoretical frames:
+Regime-switching models of financial markets. Market microstructure theory holds that asset returns are generated by latent regimes (trending, mean-reverting, crisis) whose transitions are non-stationary. Hidden Markov Models (HMMs) and Gaussian Mixture Models (GMMs) are the classical probabilistic approach, learning latent unlabelled states from observed data. This project makes a deliberate, different design choice: a supervised Random Forest classifier trained on pre-labelled regimes where the labels are defined by a forward-looking dynamic threshold. The supervised approach sacrifices HMMs’ ability to discover novel regimes in exchange for interpretable, calibrated routing signals; isotonic probability calibration ensures confidence scores are well-calibrated for downstream position sizing. An HMM/GMM baseline is included to validate this trade-off empirically.
+Markov Decision Process (MDP) formulation for optimal execution. The regime-switched execution problem is formally cast as an MDP: state sₜ = (14-feature regime vector + inventory + unrealised PnL + time); action aₜ = (engine selection + position size); reward rₜ = (realised PnL − fees − slippage − λ·drawdown penalty + β·shaping bonus, following Ng, Harada & Russell 1999). The supervised hybrid policy approximates π(a|s) with deterministic rules modulated by the calibrated classifier and serves as the control baseline. DQN and PPO agents are trained online within the simulation environment to learn π directly; the Decision Transformer (stretch goal) is trained offline, with its dataset built from diverse trajectories, perturbed/ε-greedy baseline rollouts, random-policy rollouts, and DQN/PPO training logs, to avoid imitating the baseline alone.
+Intended Tools and Technologies
+Rust (trading-engine-core): low-latency indicator computation, Connector trait (Binance REST/WS, Gate.io, paper), Strategy trait and four engine implementations, Circuit Breaker, Position Guard, Axum REST API.
+Python (ML + integration): scikit-learn (RandomForestClassifier, CalibratedClassifierCV, TimeSeriesSplit), pandas, NumPy for feature engineering and model training pipeline.
+AWS EC2 (ap-northeast-1, Tokyo): production hosting, chosen for low latency to Asian exchange matching engines.
+Docker + Docker Compose: containerised deployment of Rust engine and Python services.
+GitHub Actions CI/CD: automated build, test, Docker image publish to ghcr.io, and EC2 deployment via AWS SSM.
+Binance testnet and Gate.io paper trading: execution venues for validation phase.
+RL training stack: Stable Baselines3 or CleanRL (DQN, PPO), d3rlpy (offline RL / Decision Transformer stretch); Gymnasium-compatible simulation environment wrapping the validated Rust engine.
+
+Key literature identified for literature review (include references)
+The literature review spans five strands:
+Algorithm primary sources: Mnih, V. et al. (2015) Human-level control through deep reinforcement learning, Nature 518(7540), pp. 529–533 (DQN); Schulman, J. et al. (2017) Proximal Policy Optimization Algorithms, arXiv:1707.06347 (PPO).
+Offline RL and data-coverage risk: Levine, S. et al. (2020) Offline Reinforcement Learning: Tutorial, Review, and Perspectives on Open Problems, arXiv:2005.01643; Fujimoto, S., Meger, D. and Precup, D. (2019) Off-Policy Deep Reinforcement Learning without Exploration, ICML (BCQ ,  addresses the extrapolation error relevant to Decision Transformer data coverage).
+RL for trading and portfolio management: Moody, J. and Saffell, M. (2001) Learning to Trade via Direct Reinforcement, IEEE Transactions on Neural Networks 12(4), pp. 875–889; Jiang, Z., Xu, D. and Liang, J. (2017) A Deep Reinforcement Learning Framework for the Financial Portfolio Management Problem, arXiv:1706.10059 (closest prior work in crypto portfolio RL).
+Reward shaping and calibration: Ng, A.Y., Harada, D. and Russell, S. (1999) Policy Invariance under Reward Transformations, ICML (theoretical basis for the β shaping bonus); Zadrozny, B. and Elkan, C. (2002) Transforming Classifier Scores into Accurate Multiclass Probability Estimates, KDD (isotonic calibration).
+Evaluation methodology: Bailey, D.H. and López de Prado, M. (2014) The Deflated Sharpe Ratio, Journal of Portfolio Management 40(5), pp. 94–107 (multiple-comparisons correction); Diebold, F.X. and Mariano, R.S. (1995) Comparing Predictive Accuracy, Journal of Business & Economic Statistics 13(3), pp. 253–263 (significance test for pairwise strategy comparison).
+Industrial partner (if appropriate)
+N/A, independent research project (no industrial partner)
+Project management
+Table: Project timeline and key outputs (expand table as needed)
+Week
+Activity
+Weeks 1–3
+Literature review (regime-switching, ML for finance, RL for execution); research design; feature-engineering pipeline (14 technical indicators in Rust).
+Weeks 4–6
+Regime classifier development: Random Forest training per pair, isotonic probability calibration, forward-looking dynamic labelling, TimeSeriesSplit cross-validation; HMM/GMM baseline comparison to validate supervised design choice.
+Weeks 7–9
+Multi-engine strategy implementation (Grid, Trend, Swing, Mean-Reversion); Rust Strategy/Connector trait architecture; Gymnasium-compatible Python simulation environment.
+Weeks 10–12
+System integration and deployment: hybrid Rust + Python Docker stack, AWS EC2 (Tokyo), GitHub Actions CI/CD, MLOps hot-reload pipeline; simulation-environment validation against Rust engine on off-baseline action sequences; paper-trading launch. Phase 0–1 (faithful env + validated supervised baseline) must be complete by end of Week 12.
+Weeks 13–15
+Walk-forward out-of-sample validation (central test, highest priority). DQN and PPO training on ETH-USDT and BNB-USDT (must-do); DOGE-USDT and XRP-USDT stress tests if time allows. Paper-trading data collection; go/no-go for live micro-stake.
+Weeks 16–18
+RL results analysis (Sharpe, drawdown, Diebold–Mariano tests, Bonferroni correction); Decision Transformer stretch chapter if time allows. Dissertation writing and final submission.
+
+Resources and Research Data Management Plan (Describe the resources required and the data you expect to acquire or generate during this research project, how you will manage, describe, analyse, and store the data and what mechanisms you will use to share and preserve your data.)
+Resources Required
+AWS EC2 instance (ap-northeast-1, Tokyo): t3.medium (4 GB RAM), hosting the Docker-containerised trading stack. Selected for low latency to Binance and Gate.io matching engines in Asia.
+Binance API (testnet) and Gate.io API (paper-trading mode): execution venues providing real-time WebSocket price feeds, order-book data, and simulated order matching.
+GitHub (private repository) with GitHub Actions CI/CD: source control, automated testing (~45 tests across Rust and Python), Docker image builds, and deployment pipeline.
+Personal development hardware: local machine for Rust/Python development, backtesting, and model training.
+Data Acquired and Generated
+Historical OHLCV candlestick data (1-hour resolution) for BTC-USDT, ETH-USDT, BNB-USDT, XRP-USDT, and DOGE-USDT from Binance (January 2025–May 2026, ~12,360 bars per pair). Publicly available; stored as CSV/Parquet in the project repository.
+Trained regime-classifier model artefacts (scikit-learn .pkl files, one per pair) stored in models/ directory, version-controlled and hot-reloadable.
+Paper-trading execution logs: per-engine order fills, PnL records, regime predictions, and confidence scores. Stored as structured JSON logs on the EC2 instance.
+Data Management, Storage, and Sharing
+All market data is publicly available and does not contain personal or sensitive information. No human participants are recruited; all data sources are publicly available. Code, models, and configuration are stored in a private GitHub repository with branch-protection rules. Training data and backtest results are version-tagged alongside the model artefacts. Paper-trading logs are retained on the EC2 instance and backed up locally. The dissertation will include anonymised performance data sufficient for reproducibility; raw exchange API keys and deployment credentials are excluded from the repository via .gitignore and environment-variable injection.
+
+Planned outputs/publications/research datasets/impact/dissemination 
+Planned Outputs Engineering Outputs
+A production-grade hybrid Rust + Python multi-engine algorithmic trading framework with CI/CD, Docker deployment, hot-reloadable ML models, and portfolio-grade risk controls, deployed and continuously paper-trading on AWS.
+A reproducible ML regime-classification pipeline (feature engineering, forward-looking labelling, isotonic calibration, walk-forward validation) with per-pair trained models.
+Scientific Outputs
+Empirical evidence (including honest negative results) on where supervised regime gating improves risk-adjusted returns and where it does not.
+A rigorous MDP reformulation of the regime-switched execution problem, with the supervised hybrid policy serving as the validated control baseline for the RL comparison.
+Empirical RL benchmark results (DQN, PPO vs. supervised baseline) with Diebold–Mariano significance tests and Bonferroni correction; Decision Transformer results if the stretch chapter is completed.
+Dissemination
+MSc dissertation (primary output), structured as a single-file project summary with thesis chapter cross-references.
+Open-source release of the non-proprietary components (indicator library, regime-classification pipeline, backtesting harness) is under consideration, subject to intellectual-property review.
+Potential conference submission targeting venues such as the ACM International Conference on AI in Finance (ICAIF) or the AAAI Workshop on AI in FinTech, focusing on the supervised-vs-RL benchmark methodology and honest reporting of both positive and non-significant results.
+
+
+
+If successful, I undertake to carry out the research according to the University’s Ethics code of Practice. I realise that I will not proceed into data collection without an ethical approval in place
+
+(Applicant’s signature required)
+
+
+
+
+
+
+
+
+Date and signature of Supervisor approval
+
+
+
+2026/06/18
+

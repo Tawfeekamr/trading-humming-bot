@@ -1,0 +1,101 @@
+
+Title
+being a dissertation submitted in partial fulfilment of the  requirements for the degree of  Master of Science
+Click or tap here to enter text.
+in the University of Hull
+by
+Click or tap here to enter text. Month Year
+You will find explanatory notes throughout this template in dark blue, accompanied by a red line (left). Please ensure you delete all of these out of your document before submission. Any writing you do over explanatory notes needs changing back to the normal style. 
+This cover sheet is based on the guidance for a thesis and will require adaptation for undergraduate and masters dissertations, where you may need to delete this page and replace it with the template from your faculty, school or department. 
+ COPYRIGHT STATEMENT GOES HERE – Get guidance
+Below this line is a hidden Section Break (Next Page). DO NOT DELETE THIS! You can see hidden elements by using the Show/Hide option on the home ribbon.
+
+
+Dedication
+If you wish to dedicate your work to someone, you write a brief statement on this ‘dedication page’. If you do not wish to do this, delete this page.
+
+Acknowledgements
+2-3 paragraphs those who supported you. If you only acknowledge one person, change the heading to Acknowledgement.
+
+You may need to acknowledge the rights holder of any copyrighted materials you have used in your thesis. This does not need to be included in this acknowledgements page, but should be asserted as part of the caption for any figure or other relevant reproduction that this would apply to. Guidelines for this are available on the Copyright LibGuide.
+
+Publications and Conferences
+If you have published any of your thesis research or presented it at a conference, you should also include a ‘Publications and Conferences’ page where you can put details of peer reviewed papers, conference papers or posters. Your supervisor can advise you on this further. Delete this page if it is irrelevant. 
+
+Abstract
+Insert your abstract here
+Contents
+Dedication	i
+Acknowledgements	ii
+Publications and Conferences	iii
+Abstract	iv
+Contents	v
+List of Figures	vi
+List of Tables	vii
+Other frontmatter sample heading	viii
+Chapter 1 Insert text here	1
+Chapter 2 Insert text here	2
+Chapter 3 Insert text here	3
+Chapter 4 Insert text here	4
+Chapter 5 Insert text here	5
+Chapter 6 Insert text here	6
+Reference list / Bibliography	7
+Appendix 1	I
+
+
+This contents page is automated based on your heading styles. It will bring in the heading and page number of any content using the Heading 1, Heading 2 or Heading 3 styles. To update the table, you need to right click on this table and choose update field. 
+
+
+List of Figures
+No table of figures entries found.
+This list of figures is automated based on your use of captions (found in the references ribbon). It will bring in any caption that uses the ‘Figure’ label. To update the list above, you need to right click on this list and choose update field. 
+
+This page can be deleted if you have no figures.
+
+List of Tables
+No table of figures entries found.
+This list of tables is automated based on your use of captions (found in the references ribbon). It will bring in any caption that uses the ‘Table’ label. To update the list above, you need to right click on this list and choose update field. 
+
+This page can be deleted if you have no tables.
+
+Other frontmatter sample heading
+The frontmatter above applies to most theses and dissertations. Depending on the subject of your thesis and/or your disciplinary area, there may be other required frontmatter. These should each be given their own page with a heading that uses the ‘Heading no number’ style.
+ Other possible list/tables you may need to include: 
+	•	Abbreviations
+	•	Authorities
+	•	Cases
+	•	Equations/Formulae 
+	•	Symbols
+
+Other possible frontmatter pages you may need to include: 
+	•	Definitions/Glossary 
+	•	Epigraph/Frontispiece (this should not have a title, nor appear in your table of contents)
+	•	Funding (only if your research was externally funded)
+
+Your supervisors will be able to provide you further guidance on whether any of these are required  
+
+
+
+Below this line is a hidden Section Break (Next Page). DO NOT DELETE THIS! You can see hidden elements by using the Show/Hide option () on the home ribbon.
+
+
+Insert text here
+Insert text here
+Insert text here
+Insert text here
+Insert text here
+Insert text here
+Insert text here
+Additional chapters can be added using the Heading 1 style. You can also delete out these placeholder chapters if there are too many. 
+Reference list / Bibliography
+You should include your reference list or bibliography at the end of your thesis, but before the appendix. You must ensure you use the appropriate format for your subject area. Full guidance can be found on the Skills Team website. 
+
+
+
+Below this line is a hidden Section Break (Next Page). DO NOT DELETE THIS! You can see hidden elements by using the Show/Hide option () on the home ribbon.
+
+
+Appendix 1
+Insert your appendixes here. Additional chapters can be added using the Heading back matter style. You can also delete out these placeholder chapters if there are too many. 
+
+
