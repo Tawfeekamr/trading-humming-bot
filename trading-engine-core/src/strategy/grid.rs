@@ -795,9 +795,14 @@ impl Strategy for GridStrategy {
                 let msg = grid_sell_message(&self.pair, &level_key, fill.price, realized, self.total_pnl);
                 tokio::spawn(async move { let _ = tg.send(&msg).await; });
                 // Only the SELL (a realized round-trip) is journaled — like other engines.
+                // Grid audit: which ladder level closed (no single SL/TP — it's a ladder).
+                let grid_ctx = crate::strategy::trade_journal::TradeContext {
+                    entry_reason: Some(level_key.clone()),
+                    ..Default::default()
+                };
                 crate::strategy::trade_journal::log_unified(
                     "grid", &self.pair, Some("BUY"), Some(avg_cost), Some(fill.price),
-                    Some(fill.quantity), realized, Some("grid_sell"), None);
+                    Some(fill.quantity), realized, Some("grid_sell"), None, &grid_ctx);
             }
         }
         self.save_state_internal();

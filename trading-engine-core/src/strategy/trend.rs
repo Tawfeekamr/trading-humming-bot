@@ -245,7 +245,16 @@ impl TrendStrategy {
     ) {
         let duration = duration_minutes(now_ts, entry_time);
         let side_str = match side { OrderSide::Buy => "BUY", OrderSide::Sell => "SELL" };
-        crate::strategy::trade_journal::log_unified("trend", &self.pair, Some(side_str), Some(entry_price), Some(exit_price), Some(amount), pnl, Some(exit_reason), Some(duration));
+        // Real audit context: the actual stop/take-profit used + realized R.
+        let risk = (entry_price - stop_loss).abs() * amount;
+        let r_multiple = if risk > 0.0 { Some(pnl / risk) } else { None };
+        let ctx = crate::strategy::trade_journal::TradeContext {
+            sl_price: Some(stop_loss),
+            tp_price: Some(take_profit),
+            r_multiple,
+            ..Default::default()
+        };
+        crate::strategy::trade_journal::log_unified("trend", &self.pair, Some(side_str), Some(entry_price), Some(exit_price), Some(amount), pnl, Some(exit_reason), Some(duration), &ctx);
     }
 
     pub fn update_indicators(&mut self, bar: &Bar) {
@@ -623,6 +632,7 @@ impl Strategy for TrendStrategy {
                         crate::strategy::trade_journal::log_unified(
                             "trend", &self.pair, Some("SELL"),
                             None, None, Some(0.0), funding_pnl, Some("funding"), None,
+                            &crate::strategy::trade_journal::TradeContext::default(),
                         );
                         debug!("funding accrued on {}: rate={} pnl={}", self.pair, rate, funding_pnl);
                     }

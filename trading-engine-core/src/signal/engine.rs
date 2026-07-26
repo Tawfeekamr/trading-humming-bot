@@ -258,9 +258,26 @@ impl SignalEngine {
             parse_reasoning: String::new(),
             is_audit: if self.config.audit_mode { 1 } else { 0 },
         });
+        // Full audit context: real SL, TP1, the signal's reasoning, and the
+        // complete TP ladder + hit flags + raw channel message in context_json.
+        let sig_qty = pos.remaining_amount();
+        let sig_risk = (pos.entry_price - pos.stop_loss).abs() * sig_qty;
+        let sig_ctx = crate::strategy::trade_journal::TradeContext {
+            sl_price: Some(pos.stop_loss),
+            tp_price: pos.take_profits.first().copied(),
+            entry_reason: Some(pos.signal_confidence.clone()),
+            r_multiple: if sig_risk > 0.0 { Some(pnl.unwrap_or(0.0) / sig_risk) } else { None },
+            context_json: Some(serde_json::json!({
+                "take_profits": pos.take_profits,
+                "tp_hits": [pos.tp1_hit, pos.tp2_hit, pos.tp3_hit],
+                "channel": pos.channel_name,
+                "raw_message": pos.raw_message.chars().take(500).collect::<String>(),
+            }).to_string()),
+            ..Default::default()
+        };
         crate::strategy::trade_journal::log_unified(
             "signal", &pos.symbol, Some("BUY"), Some(pos.entry_price), Some(price),
-            Some(pos.remaining_amount()), pnl.unwrap_or(0.0), Some(reason), None,
+            Some(sig_qty), pnl.unwrap_or(0.0), Some(reason), None, &sig_ctx,
         );
         self.notify(&format!(
             "[{}] Closed: {} ({}) @ ${:.2}, PnL: ${:.2}",

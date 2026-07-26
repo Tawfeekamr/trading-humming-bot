@@ -66,6 +66,31 @@ pub struct TradeRow {
     pub pnl: f64,
     pub exit_reason: Option<String>,
     pub duration_mins: Option<i64>,
+    // ── audit payload (additive; NULL for rows logged before this migration) ──
+    pub sl_price: Option<f64>,
+    pub tp_price: Option<f64>,
+    pub signal_score: Option<f64>,
+    pub regime_at_entry: Option<String>,
+    pub entry_reason: Option<String>,
+    pub fees: Option<f64>,
+    pub r_multiple: Option<f64>,
+    pub context_json: Option<String>,
+}
+
+/// The full context around one trade, persisted for auditability. Each engine
+/// fills what it has; the rest stay `None`. `context_json` is the escape hatch
+/// for engine-specific detail (indicator snapshots, signal factors, raw message)
+/// so a new field never needs a migration.
+#[derive(Debug, Default, Clone)]
+pub struct TradeContext {
+    pub sl_price: Option<f64>,
+    pub tp_price: Option<f64>,
+    pub signal_score: Option<f64>,
+    pub regime_at_entry: Option<String>,
+    pub entry_reason: Option<String>,
+    pub fees: Option<f64>,
+    pub r_multiple: Option<f64>,
+    pub context_json: Option<String>,
 }
 
 fn migrations() -> Migrations<'static> {
@@ -89,6 +114,17 @@ fn migrations() -> Migrations<'static> {
             CREATE UNIQUE INDEX IF NOT EXISTS idx_trades_dedup ON trades(engine, timestamp, pair, pnl);",
         ),
         M::up("ALTER TABLE trades ADD COLUMN is_backfilled INTEGER DEFAULT 0;"),
+        // Audit payload — additive, nullable. Old rows stay NULL.
+        M::up(
+            "ALTER TABLE trades ADD COLUMN sl_price REAL;
+             ALTER TABLE trades ADD COLUMN tp_price REAL;
+             ALTER TABLE trades ADD COLUMN signal_score REAL;
+             ALTER TABLE trades ADD COLUMN regime_at_entry TEXT;
+             ALTER TABLE trades ADD COLUMN entry_reason TEXT;
+             ALTER TABLE trades ADD COLUMN fees REAL;
+             ALTER TABLE trades ADD COLUMN r_multiple REAL;
+             ALTER TABLE trades ADD COLUMN context_json TEXT;",
+        ),
     ])
 }
 
@@ -144,25 +180,31 @@ impl UnifiedTradeJournal {
         pnl: f64,
         exit_reason: Option<&str>,
         duration_mins: Option<i64>,
+        ctx: &TradeContext,
     ) {
         // Subtract round-trip fees (0.1% maker each side = 0.2%) from the
         // gross P&L so /pnl_all and /trades show NET profit. The paper engine
         // already deducts fees from the balance; this makes the reporting match.
         const FEE_RATE: f64 = 0.001; // per side
-        let net_pnl = if let (Some(ep), Some(xp), Some(qty)) = (entry_price, exit_price, quantity) {
+        let (net_pnl, computed_fees) = if let (Some(ep), Some(xp), Some(qty)) = (entry_price, exit_price, quantity) {
             let notional = (ep * qty) + (xp * qty); // entry + exit notional
-            pnl - (notional * FEE_RATE) // subtract round-trip fee
+            (pnl - (notional * FEE_RATE), Some(notional * FEE_RATE))
         } else {
-            pnl // no notional info → log as-is (rare)
+            (pnl, None) // no notional info → log as-is (rare)
         };
+        let fees = ctx.fees.or(computed_fees);
         let conn = self.conn.lock().unwrap();
         if let Err(e) = conn.execute(
             "INSERT OR IGNORE INTO trades
-             (timestamp, engine, pair, side, entry_price, exit_price, quantity, pnl, exit_reason, duration_mins)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+             (timestamp, engine, pair, side, entry_price, exit_price, quantity, pnl, exit_reason,
+              duration_mins, sl_price, tp_price, signal_score, regime_at_entry, entry_reason,
+              fees, r_multiple, context_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
             rusqlite::params![
                 Utc::now().to_rfc3339(), engine, pair, side, entry_price, exit_price, quantity,
                 net_pnl, exit_reason, duration_mins,
+                ctx.sl_price, ctx.tp_price, ctx.signal_score, ctx.regime_at_entry, ctx.entry_reason,
+                fees, ctx.r_multiple, ctx.context_json,
             ],
         ) {
             error!("Unified journal write failed: {}", e);
@@ -277,7 +319,9 @@ impl UnifiedTradeJournal {
         // unused named params).
         let mut stmt = conn.prepare(
             "SELECT id, timestamp, engine, pair, side, entry_price, exit_price,
-                    quantity, pnl, exit_reason, duration_mins
+                    quantity, pnl, exit_reason, duration_mins,
+                    sl_price, tp_price, signal_score, regime_at_entry, entry_reason,
+                    fees, r_multiple, context_json
              FROM trades
              WHERE is_backfilled = 0
                AND (?1 IS NULL OR engine = ?1)
@@ -298,6 +342,14 @@ impl UnifiedTradeJournal {
                 pnl: r.get(8)?,
                 exit_reason: r.get(9)?,
                 duration_mins: r.get(10)?,
+                sl_price: r.get(11)?,
+                tp_price: r.get(12)?,
+                signal_score: r.get(13)?,
+                regime_at_entry: r.get(14)?,
+                entry_reason: r.get(15)?,
+                fees: r.get(16)?,
+                r_multiple: r.get(17)?,
+                context_json: r.get(18)?,
             }),
         )?;
         let mut out: Vec<TradeRow> = rows.collect::<Result<_, _>>()?;
@@ -422,10 +474,11 @@ pub fn log_unified(
     pnl: f64,
     exit_reason: Option<&str>,
     duration_mins: Option<i64>,
+    ctx: &TradeContext,
 ) {
     let journal = JOURNAL.get_or_init(|| UnifiedTradeJournal::new().ok());
     if let Some(j) = journal.as_ref() {
-        j.log_trade(engine, pair, side, entry_price, exit_price, quantity, pnl, exit_reason, duration_mins);
+        j.log_trade(engine, pair, side, entry_price, exit_price, quantity, pnl, exit_reason, duration_mins, ctx);
     }
 }
 
@@ -503,7 +556,7 @@ mod tests {
         j.log_trade(
             "signal", "ADA-USDT", Some("BUY"),
             Some(0.65), Some(0.62), Some(5830.9), -84.716,
-            Some("stop_loss"), None,
+            Some("stop_loss"), None, &TradeContext::default(),
         );
         // 2. Same close is also in the per-engine journal (raw PnL, ~ms apart).
         make_signal_journal(tmp.path(), &[(Utc::now().to_rfc3339(), "ADA-USDT".into(), -82.8)]);
@@ -652,5 +705,36 @@ mod tests {
         assert_eq!(limited.len(), 2);
         assert_eq!(limited[0].engine, "trend");   // 07-19 (older of the two latest)
         assert_eq!(limited[1].engine, "grid");    // 07-20
+    }
+
+    #[test]
+    fn log_trade_persists_audit_context_and_round_trips() {
+        let tmp = tempfile::tempdir().unwrap();
+        let j = UnifiedTradeJournal::new_at(tmp.path().join("trades.db")).unwrap();
+        let ctx = TradeContext {
+            sl_price: Some(1790.0),
+            tp_price: Some(1850.0),
+            signal_score: Some(4.0),
+            regime_at_entry: Some("ranging@0.97".into()),
+            entry_reason: Some("ema_cross+rsi+regime".into()),
+            fees: Some(0.62),
+            r_multiple: Some(1.0),
+            context_json: Some(r#"{"factors":["ema30>40","rsi58"]}"#.into()),
+        };
+        j.log_trade(
+            "trend", "ETH-USDT", Some("buy"), Some(1800.0), Some(1850.0), Some(2.0),
+            100.0, Some("tp1"), Some(60), &ctx,
+        );
+        let rows = j.recent_trades(None, None, 10).unwrap();
+        assert_eq!(rows.len(), 1);
+        let r = &rows[0];
+        assert_eq!(r.sl_price, Some(1790.0));
+        assert_eq!(r.tp_price, Some(1850.0));
+        assert_eq!(r.signal_score, Some(4.0));
+        assert_eq!(r.regime_at_entry.as_deref(), Some("ranging@0.97"));
+        assert_eq!(r.entry_reason.as_deref(), Some("ema_cross+rsi+regime"));
+        assert_eq!(r.fees, Some(0.62));
+        assert_eq!(r.r_multiple, Some(1.0));
+        assert_eq!(r.context_json.as_deref(), Some(r#"{"factors":["ema30>40","rsi58"]}"#));
     }
 }
