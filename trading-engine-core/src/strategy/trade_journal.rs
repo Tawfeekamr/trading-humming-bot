@@ -357,6 +357,39 @@ impl UnifiedTradeJournal {
         Ok(out)
     }
 
+    /// Copy signal trades' real SL / TP1 / reasoning / TP-ladder from
+    /// signal_journal.db into the trades.db audit columns (for rows where they're
+    /// still NULL — logged before the audit migration, or backfilled rows).
+    /// Idempotent: only fills NULLs, so it's safe to run every startup.
+    pub fn enrich_signal_audit(&self) -> Result<usize> {
+        let db = self.data_dir.join("signal_journal.db");
+        if !db.exists() { return Ok(0); }
+        let mut conn = self.conn.lock().unwrap();
+        let _ = conn.execute("DETACH DATABASE sig;", []); // ignore "no such database" if not attached
+        conn.execute("ATTACH DATABASE ?1 AS sig;", rusqlite::params![db.to_string_lossy()])?;
+        let updated = conn.execute(
+            "UPDATE trades AS t
+             SET sl_price     = COALESCE(t.sl_price, s.stop_loss),
+                 tp_price     = COALESCE(t.tp_price, json_extract(s.take_profits, '$[0]')),
+                 entry_reason = COALESCE(t.entry_reason, s.signal_confidence),
+                 context_json = COALESCE(t.context_json, json_object(
+                    'take_profits', s.take_profits,
+                    'tp_hits', json_object('tp1', s.tp1_hit, 'tp2', s.tp2_hit, 'tp3', s.tp3_hit),
+                    'channel', s.channel_name,
+                    'raw_message', substr(s.raw_message, 1, 500)
+                 ))
+             FROM sig.signal_trades AS s
+             WHERE t.engine = 'signal'
+               AND s.symbol = t.pair
+               AND ABS(strftime('%s', s.timestamp) - strftime('%s', t.timestamp)) < 60
+               AND (t.sl_price IS NULL OR t.tp_price IS NULL OR t.entry_reason IS NULL OR t.context_json IS NULL)",
+            [],
+        )?;
+        let _ = conn.execute("DETACH DATABASE sig;", []);
+        info!("Signal audit enrichment: updated {} rows from signal_journal.db", updated);
+        Ok(updated)
+    }
+
     pub fn promotion_report_since(
         &self,
         statuses: &[crate::strategy::StrategyStatus],
@@ -487,6 +520,15 @@ pub fn log_unified(
 pub fn backfill_unified_if_empty() {
     match UnifiedTradeJournal::new() {
         Ok(j) => { let _ = j.backfill_from_engine_journals(); }
+        Err(e) => error!("Unified journal init failed: {}", e),
+    }
+}
+
+/// On startup: backfill signal trades' audit fields (SL/TP/reasoning/TP-ladder)
+/// from signal_journal.db into trades.db. Idempotent — safe every boot.
+pub fn enrich_signal_audit_if_present() {
+    match UnifiedTradeJournal::new() {
+        Ok(j) => { let _ = j.enrich_signal_audit(); }
         Err(e) => error!("Unified journal init failed: {}", e),
     }
 }
@@ -736,5 +778,47 @@ mod tests {
         assert_eq!(r.fees, Some(0.62));
         assert_eq!(r.r_multiple, Some(1.0));
         assert_eq!(r.context_json.as_deref(), Some(r#"{"factors":["ema30>40","rsi58"]}"#));
+    }
+
+    #[test]
+    fn enrich_signal_audit_copies_levels_from_signal_journal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let j = UnifiedTradeJournal::new_at(tmp.path().join("trades.db")).unwrap();
+        // A signal trade in trades.db with NULL audit fields.
+        {
+            let c = j.conn.lock().unwrap();
+            c.execute(
+                "INSERT INTO trades (timestamp, engine, pair, side, entry_price, exit_price, quantity, pnl, exit_reason, is_backfilled)
+                 VALUES ('2026-07-22T07:37:00Z','signal','CRO-USDT','BUY',0.0576,0.0580,29084.0,16.85,'tp1',0)",
+                [],
+            ).unwrap();
+        }
+        // The matching rich row in signal_journal.db (full schema).
+        let s = Connection::open(tmp.path().join("signal_journal.db")).unwrap();
+        s.execute_batch(
+            "CREATE TABLE signal_trades (id INTEGER PRIMARY KEY, timestamp TEXT, symbol TEXT,
+             channel_name TEXT, action TEXT, entry_price REAL, current_price REAL, quantity REAL,
+             realized_pnl REAL, exit_reason TEXT, signal_confidence TEXT, stop_loss REAL,
+             take_profits TEXT, tp1_hit INTEGER, tp2_hit INTEGER, tp3_hit INTEGER, raw_message TEXT);",
+        ).unwrap();
+        s.execute(
+            "INSERT INTO signal_trades (timestamp,symbol,channel_name,action,entry_price,current_price,quantity,realized_pnl,exit_reason,signal_confidence,stop_loss,take_profits,tp1_hit,tp2_hit,tp3_hit,raw_message)
+             VALUES ('2026-07-22T07:37:05Z','CRO-USDT','BK','CLOSE_tp1',0.0576,0.0580,29084.0,16.85,'tp1','HIGH',0.0550,'[0.058,0.060,0.063]',1,0,0,'buy CRO here')",
+            [],
+        ).unwrap();
+
+        let n = j.enrich_signal_audit().unwrap();
+        assert_eq!(n, 1, "one signal row should be enriched");
+        let row: (Option<f64>, Option<f64>, Option<String>, Option<String>) = {
+            let c = j.conn.lock().unwrap();
+            c.query_row(
+                "SELECT sl_price, tp_price, entry_reason, context_json FROM trades WHERE engine='signal'",
+                [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            ).unwrap()
+        };
+        assert_eq!(row.0, Some(0.0550));            // sl_price <- stop_loss
+        assert_eq!(row.1, Some(0.058));             // tp_price <- take_profits[0]
+        assert_eq!(row.2.as_deref(), Some("HIGH")); // entry_reason <- signal_confidence
+        assert!(row.3.as_deref().unwrap().contains("\"tp1\":1")); // context_json has tp-hit
     }
 }

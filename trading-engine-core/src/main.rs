@@ -162,6 +162,9 @@ async fn async_main() -> Result<()> {
     // Backfill the unified analytics table from the per-engine journals (once, when
     // empty) so /pnl_all has history before any new trades close.
     trading_engine_core::strategy::trade_journal::backfill_unified_if_empty();
+    // Surface signal trades' real SL/TP/reasoning from signal_journal.db into the
+    // unified trades.db audit columns (idempotent — fills only NULLs).
+    trading_engine_core::strategy::trade_journal::enrich_signal_audit_if_present();
 
     tokio::select! {
         result = engine.run() => {
