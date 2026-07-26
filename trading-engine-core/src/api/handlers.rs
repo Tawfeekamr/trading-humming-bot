@@ -245,6 +245,32 @@ pub async fn get_trades(
     }
 }
 
+/// Open signal positions from `data/signal_positions.json` — backs the
+/// dashboard's "Active Positions" panel. Each position's entry/sl/tp live in
+/// its `raw_message` text (the signal call), surfaced as-is for the client to
+/// parse. (`/api/v1/trades` only has CLOSED round-trips, not open positions.)
+pub async fn get_positions() -> impl IntoResponse {
+    match std::fs::read_to_string("data/signal_positions.json") {
+        Ok(s) => {
+            let v: serde_json::Value = serde_json::from_str(&s).unwrap_or_else(|_| serde_json::json!({}));
+            let arr: Vec<serde_json::Value> = v.as_object().map(|o| {
+                o.iter().map(|(k, val)| {
+                    let mut e = val.clone();
+                    if let Some(obj) = e.as_object_mut() {
+                        obj.insert("symbol".into(), serde_json::json!(k));
+                    }
+                    e
+                }).collect()
+            }).unwrap_or_default();
+            (axum::http::StatusCode::OK, Json(serde_json::json!({ "positions": arr }))).into_response()
+        }
+        Err(e) => (
+            axum::http::StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "positions": [], "error": e.to_string() })),
+        ).into_response(),
+    }
+}
+
 // ── Regime update (pushed by Python ML) ───────────────────────────────
 
 pub async fn update_regime(

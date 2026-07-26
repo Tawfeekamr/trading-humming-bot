@@ -6,6 +6,7 @@ import { LwChart, type PriceLine } from './LwChart'
 import { RegimeChip } from './RegimeChip'
 import { baseOf, pairToSymbol, px, fmtPct, money } from '../lib/format'
 import { ago } from '../lib/time'
+import { usePositions, findPosition, parseSignalLevels } from '../lib/positions'
 
 export function FocusOverlay({ pair, interval, onClose }: {
   pair: string
@@ -19,19 +20,32 @@ export function FocusOverlay({ pair, interval, onClose }: {
   const sorted = [...trades].sort((a, b) => +new Date(b.timestamp) - +new Date(a.timestamp))
   const latest = sorted[0]
 
-  // Real levels only — ENTRY + the bot's actual SL / TP / EXIT (when the audit
-  // migration has populated them). Old trades (null) render no level lines.
-  // No more fabricated percentages.
+  // Open position for this pair (from signal_positions.json via /api/v1/positions).
+  // Its entry/targets/stop live in the signal's raw_message text.
+  const positions = usePositions()
+  const pos = findPosition(positions, pair)
+  const posLevels = useMemo(() => parseSignalLevels(pos?.raw_message), [pos])
+
+  // Price lines: open-position levels (parsed from the signal call) + the latest
+  // closed trade's real audit levels. No fabrication.
   const priceLines: PriceLine[] = useMemo(() => {
-    if (!latest || latest.entry_price == null) return []
-    const out: PriceLine[] = [{ price: latest.entry_price, color: '#E8A33D', title: 'ENTRY' }]
-    if (latest.sl_price != null) out.push({ price: latest.sl_price, color: '#C2523F', title: 'STOP LOSS', dashed: true })
-    if (latest.tp_price != null) out.push({ price: latest.tp_price, color: '#4A9D8A', title: 'TAKE PROFIT', dashed: true })
-    if (latest.exit_price != null) {
-      out.push({ price: latest.exit_price, color: '#3498DB', title: `FILLED (${(latest.exit_reason || 'EXIT').toUpperCase()})`, dashed: true })
+    const out: PriceLine[] = []
+    if (pos) {
+      const entry = pos.entry_price ?? posLevels.entry
+      if (entry != null) out.push({ price: entry, color: '#E8A33D', title: 'POSITION ENTRY' })
+      if (posLevels.stop != null) out.push({ price: posLevels.stop, color: '#C2523F', title: 'STOP LOSS', dashed: true })
+      posLevels.targets.slice(0, 3).forEach((t, i) => out.push({ price: t, color: '#4A9D8A', title: `TP${i + 1}`, dashed: true }))
+    }
+    if (latest && latest.entry_price != null) {
+      out.push({ price: latest.entry_price, color: '#E8A33D', title: pos ? 'CLOSED ENTRY' : 'ENTRY' })
+      if (latest.sl_price != null) out.push({ price: latest.sl_price, color: '#C2523F', title: 'STOP LOSS', dashed: true })
+      if (latest.tp_price != null) out.push({ price: latest.tp_price, color: '#4A9D8A', title: 'TAKE PROFIT', dashed: true })
+      if (latest.exit_price != null) {
+        out.push({ price: latest.exit_price, color: '#3498DB', title: `FILLED (${(latest.exit_reason || 'EXIT').toUpperCase()})`, dashed: true })
+      }
     }
     return out
-  }, [latest])
+  }, [latest, pos, posLevels])
 
   useEffect(() => {
     const h = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
@@ -116,6 +130,25 @@ export function FocusOverlay({ pair, interval, onClose }: {
                 <span><i className="sw sw-entry" />Entry {px(latest.entry_price)}</span>
                 {latest.sl_price != null && <span><i className="sw sw-sl" />SL {px(latest.sl_price)}</span>}
                 {latest.tp_price != null && <span><i className="sw sw-tp" />TP {px(latest.tp_price)}</span>}
+              </div>
+            </div>
+          )}
+
+          {pos && (
+            <div className="panel">
+              <div className="eyebrow">Open position <span className="cnt">{pos.is_closed ? 'closed' : 'open'} · signal</span></div>
+              <div className="tdetail">
+                <div className="head">
+                  <span className="side-tag side-long">LONG</span>
+                  <span className="num" style={{ color: 'var(--stone)', fontSize: 11 }}>{baseOf(pair)} · {(pos.channel_name || 'signal').slice(0, 18)}</span>
+                </div>
+                <span className="k">ENTRY</span><span className="v">{px(pos.entry_price ?? posLevels.entry)}</span>
+                <span className="k">STOP LOSS</span>
+                <span className="v" style={{ color: posLevels.stop != null ? 'var(--ox)' : 'var(--stone-2)' }}>{px(posLevels.stop)}</span>
+                <span className="k">TP1 / TP2</span>
+                <span className="v" style={{ color: 'var(--jade)' }}>{px(posLevels.targets[0])} / {px(posLevels.targets[1])}</span>
+                <span className="k">TARGETS</span>
+                <span className="v" style={{ color: 'var(--jade)', fontSize: 11 }}>{posLevels.targets.map(px).join(' · ') || '—'}</span>
               </div>
             </div>
           )}
