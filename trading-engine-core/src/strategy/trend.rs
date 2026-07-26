@@ -666,13 +666,16 @@ impl Strategy for TrendStrategy {
         // ── If in position: check exits ──
         // Snapshot entry metadata for journaling (all fields Copy; fixed at entry,
         // so valid for the whole tick). Captured before the mutable borrow below.
-        let snap = self.position.as_ref().map(|p| (
-            p.side,
-            p.entry_price,
-            p.stop_loss,
-            p.tp_levels.last().map(|t| t.price).unwrap_or(p.entry_price),
-            p.entry_time,
-        ));
+        let snap = self.position.as_ref().map(|p| {
+            let risk = (p.entry_price - p.stop_loss).abs();
+            let sign = if p.side == OrderSide::Buy { 1.0 } else { -1.0 };
+            // TP1 (nearest target) for the audit log. If tp_levels is empty
+            // (e.g. restored from disk), compute it from entry + 1× risk so
+            // we never log TP = entry (which looked nonsensical on the DOGE trade).
+            let tp_target = p.tp_levels.first().map(|t| t.price)
+                .unwrap_or_else(|| p.entry_price + sign * risk * 1.0);
+            (p.side, p.entry_price, p.stop_loss, tp_target, p.entry_time)
+        });
         // Restore reconciliation: a position just loaded from disk may have TP
         // levels already below the current price (they "happened" while we were
         // down). Mark those TPs filled WITHOUT re-firing notifications/orders,
