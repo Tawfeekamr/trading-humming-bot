@@ -296,12 +296,17 @@ table.trades .t{color:var(--stone-2);text-align:right}
 .h-exp{font-size:10.5px;color:var(--stone-2);line-height:1.4}
 
 /* Active Positions & Resting Orders Rail Panels */
+.panel-hdr{display:flex;align-items:center;justify-content:space-between;cursor:pointer;user-select:none;margin-bottom:6px}
+.panel-hdr .eyebrow{margin-bottom:0}
+.panel-toggle{background:rgba(236,233,226,.04);border:1px solid rgba(236,233,226,.15);color:var(--stone-2);font-family:var(--mono);font-size:12px;font-weight:700;line-height:1;width:18px;height:18px;border-radius:3px;display:flex;align-items:center;justify-content:center;cursor:pointer;transition:all 0.15s ease}
+.panel-hdr:hover .panel-toggle,.panel-toggle:hover{background:rgba(236,233,226,.12);color:var(--paper);border-color:rgba(236,233,226,.3)}
 .pos-sub-hdr{font-size:10px;color:var(--stone-2);margin-bottom:8px;font-family:var(--mono)}
 .pos-chips-wrap{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:4px}
 .p-chip{font-family:var(--mono);font-size:9.5px;font-weight:600;padding:2px 6px;border-radius:3px;white-space:nowrap;cursor:pointer;transition:transform 0.1s ease,opacity 0.1s ease}
 .p-chip:hover{opacity:0.85;transform:scale(1.04)}
-.p-chip.spot{color:var(--jade);background:var(--jade-tint);border:1px solid rgba(74,157,138,.28)}
-.p-chip.fut{color:var(--signal);background:var(--amb-tint);border:1px solid rgba(232,163,61,.28)}
+.p-chip.spot,.p-chip.open-pos{color:var(--jade);background:var(--jade-tint);border:1px solid rgba(74,157,138,.35);box-shadow:0 0 8px rgba(74,157,138,.15)}
+.p-chip.closed-pos{color:var(--stone-2);background:rgba(236,233,226,.05);border:1px solid rgba(236,233,226,.12)}
+.p-chip.fut,.p-chip.closed-fut{color:var(--signal);background:rgba(232,163,61,.08);border:1px solid rgba(232,163,61,.18)}
 
 @media (prefers-reduced-motion:reduce){.dot,.ticker .track{animation:none!important}}
 @media (max-width:1000px){.workspace{grid-template-columns:1fr}.grid{grid-template-columns:1fr;grid-template-rows:auto}.focus-body,.pnl-grid,.tiles,.rl-reasons,.drivers-grid,.stepper,.hypo-grid{grid-template-columns:1fr}}
