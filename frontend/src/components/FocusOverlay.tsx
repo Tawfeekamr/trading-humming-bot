@@ -26,26 +26,41 @@ export function FocusOverlay({ pair, interval, onClose }: {
   const pos = findPosition(positions, pair)
   const posLevels = useMemo(() => parseSignalLevels(pos?.raw_message), [pos])
 
-  // Price lines: open-position levels (parsed from the signal call) + the latest
-  // closed trade's real audit levels. No fabrication.
+  // Price lines: open-position levels + latest trade levels.
+  // Filters out ancient historical signal levels (>25% away from live price)
+  // so the 24-hour candlestick chart scale stays tight, readable, and clear!
   const priceLines: PriceLine[] = useMemo(() => {
     const out: PriceLine[] = []
+    const isRelevant = (p: number | null | undefined) => {
+      if (p == null || Number.isNaN(p)) return false
+      if (last == null || Number.isNaN(last) || last <= 0) return true
+      return Math.abs(p - last) / last <= 0.25
+    }
+
     if (pos) {
       const entry = pos.entry_price ?? posLevels.entry
-      if (entry != null) out.push({ price: entry, color: '#E8A33D', title: 'POSITION ENTRY' })
-      if (posLevels.stop != null) out.push({ price: posLevels.stop, color: '#C2523F', title: 'STOP LOSS', dashed: true })
-      posLevels.targets.slice(0, 3).forEach((t, i) => out.push({ price: t, color: '#4A9D8A', title: `TP${i + 1}`, dashed: true }))
+      if (isRelevant(entry)) out.push({ price: entry!, color: '#E8A33D', title: 'POSITION ENTRY' })
+      if (isRelevant(posLevels.stop)) out.push({ price: posLevels.stop!, color: '#C2523F', title: 'STOP LOSS', dashed: true })
+      posLevels.targets.slice(0, 3).forEach((t, i) => {
+        if (isRelevant(t)) out.push({ price: t, color: '#4A9D8A', title: `TP${i + 1}`, dashed: true })
+      })
     }
     if (latest && latest.entry_price != null) {
-      out.push({ price: latest.entry_price, color: '#E8A33D', title: pos ? 'CLOSED ENTRY' : 'ENTRY' })
-      if (latest.sl_price != null) out.push({ price: latest.sl_price, color: '#C2523F', title: 'STOP LOSS', dashed: true })
-      if (latest.tp_price != null) out.push({ price: latest.tp_price, color: '#4A9D8A', title: 'TAKE PROFIT', dashed: true })
-      if (latest.exit_price != null) {
+      if (isRelevant(latest.entry_price)) {
+        out.push({ price: latest.entry_price, color: '#E8A33D', title: pos ? 'CLOSED ENTRY' : 'ENTRY' })
+      }
+      if (isRelevant(latest.sl_price)) {
+        out.push({ price: latest.sl_price!, color: '#C2523F', title: 'STOP LOSS', dashed: true })
+      }
+      if (isRelevant(latest.tp_price)) {
+        out.push({ price: latest.tp_price!, color: '#4A9D8A', title: 'TAKE PROFIT', dashed: true })
+      }
+      if (latest.exit_price != null && isRelevant(latest.exit_price)) {
         out.push({ price: latest.exit_price, color: '#3498DB', title: `FILLED (${(latest.exit_reason || 'EXIT').toUpperCase()})`, dashed: true })
       }
     }
     return out
-  }, [latest, pos, posLevels])
+  }, [latest, pos, posLevels, last])
 
   useEffect(() => {
     const h = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
@@ -136,7 +151,12 @@ export function FocusOverlay({ pair, interval, onClose }: {
 
           {pos && (
             <div className="panel">
-              <div className="eyebrow">Open position <span className="cnt">{pos.is_closed ? 'closed' : 'open'} · signal</span></div>
+              <div className="eyebrow">
+                {pos.is_closed ? 'Closed position' : 'Open position'}&nbsp;
+                <span className="cnt" style={{ color: pos.is_closed ? 'var(--stone-2)' : 'var(--jade)', fontWeight: 700 }}>
+                  {pos.is_closed ? '● CLOSED' : '● OPEN'}{pos.exit_reason ? ` · ${pos.exit_reason}` : ''} · signal
+                </span>
+              </div>
               <div className="tdetail">
                 <div className="head">
                   <span className="side-tag side-long">LONG</span>
