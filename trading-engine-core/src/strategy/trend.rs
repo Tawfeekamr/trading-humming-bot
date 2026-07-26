@@ -3,6 +3,28 @@ use crate::indicators::{Ema, Rsi, Atr, Adx, Choppiness, Macd, VolumeSma};
 use crate::models::bar::Bar;
 use crate::models::order::OrderSide;
 use crate::strategy::{Strategy, TickContext, StrategyStatus, MarketRegime};
+
+/// Anti-whipsaw guard. The regime-aware relaxation (looser RSI entry cap, wider
+/// Chandelier trail) fires ONLY when ML is confidently trending AND there is real
+/// trend strength (ADX ≥ 25). The ADX leg is what prevents a repeat of the
+/// historical ETH −$1,243 whipsaw: a weak "trending" label in choppy conditions
+/// (low ADX) never relaxes the gates, so trend won't pile into a fakeout.
+fn strong_confirmed_trend(regime: Option<MarketRegime>, conf: f64, adx: f64) -> bool {
+    matches!(regime, Some(MarketRegime::Trending)) && conf >= 0.85 && adx >= 25.0
+}
+
+/// Entry RSI cap. In a strong confirmed trend, allow buying into higher RSI
+/// (chase ML-confirmed momentum) instead of waiting for the cooldown — which on
+/// the DOGE pump meant entering the pullback that failed.
+fn effective_rsi_long_max(base: f64, strong_trending: bool) -> f64 {
+    if strong_trending { (base + 7.0).max(72.0) } else { base }
+}
+
+/// Chandelier trail multiplier. Widen in a strong confirmed trend so the trail
+/// survives a normal pullback instead of whipsawing out before the move resumes.
+fn effective_trailing_mult(base: f64, strong_trending: bool) -> f64 {
+    if strong_trending { (base + 0.5).min(3.0) } else { base }
+}
 // Journal removed — trades go to the unified trades.db via log_unified.
 use crate::connector::types::{OrderRequest, Fill, OrderTypeReq, TimeInForceReq};
 use crate::notifications::TelegramBot;
@@ -282,7 +304,7 @@ impl TrendStrategy {
 
     /// Unified scoring — replaces binary gate + score with weighted 0–9 system.
     ///   ADX(0-3)  + CHOP(0-2) + VOL(0-2) + MACD(0-1) + RSI(0-1) = max 9
-    fn compute_score(&self, dir: Direction) -> SignalScores {
+    fn compute_score(&self, dir: Direction, regime: Option<MarketRegime>, conf: f64) -> SignalScores {
         // ADX: trend strength (higher ADX = stronger trend)
         let adx_val = self.adx.adx();
         let adx = if adx_val > 50.0 { 3 }
@@ -313,7 +335,8 @@ impl TrendStrategy {
 
         // RSI: entry timing (not overbought for longs, not oversold for shorts)
         let rsi_val = self.rsi.value();
-        let rsi_long_max = if self.config.rsi_long_max > 0.0 { self.config.rsi_long_max } else { 65.0 };
+        let rsi_base = if self.config.rsi_long_max > 0.0 { self.config.rsi_long_max } else { 65.0 };
+        let rsi_long_max = effective_rsi_long_max(rsi_base, strong_confirmed_trend(regime, conf, adx_val));
         let rsi = match dir {
             Direction::Up if rsi_val < rsi_long_max => 1,
             Direction::Down if rsi_val > 35.0 => 1,
@@ -337,7 +360,7 @@ impl TrendStrategy {
         }
     }
 
-    fn activation_block_reason(&self, price: f64) -> Option<String> {
+    fn activation_block_reason(&self, price: f64, regime: Option<MarketRegime>, conf: f64) -> Option<String> {
         let dir = self.direction(price);
         if self.config.trade_shorts {
             if dir == Direction::Flat {
@@ -362,7 +385,7 @@ impl TrendStrategy {
         }
 
         let threshold = if self.config.entry_score_threshold > 0 { self.config.entry_score_threshold } else { 5 };
-        let scores = self.compute_score(dir);
+        let scores = self.compute_score(dir, regime, conf);
         if scores.total < threshold {
             return Some(format!("score gate (need {} more)", threshold - scores.total));
         }
@@ -370,8 +393,8 @@ impl TrendStrategy {
     }
 
     /// Activate — enter when score meets threshold AND direction is clear.
-    fn should_activate(&self, price: f64) -> bool {
-        self.activation_block_reason(price).is_none()
+    fn should_activate(&self, price: f64, regime: Option<MarketRegime>, conf: f64) -> bool {
+        self.activation_block_reason(price, regime, conf).is_none()
     }
 
     /// Layer 5: EXIT — ADX dying OR direction flipped.
@@ -710,11 +733,15 @@ impl Strategy for TrendStrategy {
             // Chandelier multiplier: the one knob the operator edits in the yaml.
             // Fallback 2.0 only binds if the field is missing/zero; Task 4 makes
             // AppConfig::load reject <= 0 so this never silently falls back in prod.
-            let atr_mult = if self.config.trailing_stop_atr_mult > 0.0 {
+            let base_mult = if self.config.trailing_stop_atr_mult > 0.0 {
                 self.config.trailing_stop_atr_mult
             } else {
                 2.0
             };
+            let atr_mult = effective_trailing_mult(
+                base_mult,
+                strong_confirmed_trend(ctx.regime, ctx.regime_confidence, self.adx.adx()),
+            );
             let atr_val = self.atr.value();
             let new_trail = match pos.side {
                 OrderSide::Buy => pos.highest_since_entry - atr_mult * atr_val,
@@ -857,7 +884,7 @@ impl Strategy for TrendStrategy {
                 self.no_trade.suppressed += 1;
             } else if entry_blocked_by_regime {
                 self.no_trade.regime += 1;
-            } else if let Some(reason) = self.activation_block_reason(current_price) {
+            } else if let Some(reason) = self.activation_block_reason(current_price, ctx.regime, ctx.regime_confidence) {
                 if reason.starts_with("direction") {
                     self.no_trade.direction += 1;
                 } else if reason.starts_with("ADX") {
@@ -867,7 +894,7 @@ impl Strategy for TrendStrategy {
                 }
                 // Log WHY entry was skipped — score breakdown, direction, threshold
                 let dir = self.direction(current_price);
-                let scores = self.compute_score(dir);
+                let scores = self.compute_score(dir, ctx.regime, ctx.regime_confidence);
                 let threshold = if self.config.entry_score_threshold > 0 { self.config.entry_score_threshold } else { 5 };
                 debug!(
                     "[{}] Entry skipped: {} | dir={:?} score={}/{} need≥={} | ADX={:.1} CHOP={:.0} VOL={:.2} MACD={} RSI={:.1}",
@@ -989,10 +1016,10 @@ impl Strategy for TrendStrategy {
             ("WAITING".to_string(), "⏳ All indicators warming up".to_string(), 0.0)
         } else {
             let dir = self.direction(ref_price);
-            let scores = self.compute_score(dir);
+            let scores = self.compute_score(dir, None, 0.0);
             let threshold = if self.config.entry_score_threshold > 0 { self.config.entry_score_threshold } else { 5 };
             let dir_str = match dir { Direction::Up => "+1", Direction::Down => "-1", Direction::Flat => "0" };
-            let reason = self.activation_block_reason(ref_price).unwrap_or_else(|| "Ready".to_string());
+            let reason = self.activation_block_reason(ref_price, None, 0.0).unwrap_or_else(|| "Ready".to_string());
             let skips = &self.no_trade;
             let skip_summary = format!(
                 "skips w:{} q:{} r:{} p:{} m:{} d:{} a:{} s:{} c:{}",
@@ -1742,6 +1769,28 @@ mod tests {
         s.config.regime_gate = true;
         let orders = run_tick(&mut s, tick_at_regime(last, MarketRegime::Trending, 0.9));
         assert!(is_entry(&orders), "Trending is the trend-follower's regime → enter");
+    }
+
+    #[test]
+    fn strong_confirmed_trend_requires_ml_confidence_and_adx() {
+        // The anti-whipsaw guard: relaxation fires ONLY with both high ML
+        // confidence AND real trend strength (ADX). This is what stops a repeat
+        // of the ETH −$1,243 whipsaw — a weak "trending" label in chop never relaxes.
+        assert!(strong_confirmed_trend(Some(MarketRegime::Trending), 0.9, 30.0));
+        assert!(!strong_confirmed_trend(Some(MarketRegime::Trending), 0.7, 30.0), "low conf → no relax");
+        assert!(!strong_confirmed_trend(Some(MarketRegime::Trending), 0.9, 20.0), "weak ADX → no relax (anti-whipsaw)");
+        assert!(!strong_confirmed_trend(Some(MarketRegime::Ranging), 0.9, 30.0));
+        assert!(!strong_confirmed_trend(None, 0.9, 30.0), "no regime → no relax");
+    }
+
+    #[test]
+    fn effective_thresholds_relax_only_in_strong_confirmed_trend() {
+        // RSI entry cap: 65 → 72 (chase confirmed momentum), else unchanged.
+        assert_eq!(effective_rsi_long_max(65.0, true), 72.0);
+        assert_eq!(effective_rsi_long_max(65.0, false), 65.0);
+        // Chandelier trail: 2.0 → 2.5 (survive pullbacks), else unchanged.
+        assert_eq!(effective_trailing_mult(2.0, true), 2.5);
+        assert_eq!(effective_trailing_mult(2.0, false), 2.0);
     }
 
     #[test]
