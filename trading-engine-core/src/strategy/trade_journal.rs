@@ -52,6 +52,22 @@ pub struct PaperPromotionReport {
     pub candidates: Vec<PaperPromotionCandidate>,
 }
 
+/// One row of the unified trades table, serialized for `/api/v1/trades`.
+#[derive(Debug, Clone, Serialize)]
+pub struct TradeRow {
+    pub id: i64,
+    pub timestamp: String,
+    pub engine: String,
+    pub pair: String,
+    pub side: Option<String>,
+    pub entry_price: Option<f64>,
+    pub exit_price: Option<f64>,
+    pub quantity: Option<f64>,
+    pub pnl: f64,
+    pub exit_reason: Option<String>,
+    pub duration_mins: Option<i64>,
+}
+
 fn migrations() -> Migrations<'static> {
     Migrations::new(vec![
         M::up(
@@ -245,6 +261,50 @@ impl UnifiedTradeJournal {
         info!("Unified journal backfill: copied {} rows from per-engine journals", total);
         Ok(total)
     }
+    /// Live trades for the `/api/v1/trades` dashboard endpoint. Returns only
+    /// direct engine writes (is_backfilled=0), optionally filtered by engine /
+    /// pair, capped to the most recent `limit`, ordered oldest→newest so the
+    /// frontend can plot them left→right on the chart.
+    pub fn recent_trades(
+        &self,
+        engine: Option<&str>,
+        pair: Option<&str>,
+        limit: u32,
+    ) -> Result<Vec<TradeRow>> {
+        let conn = self.conn.lock().unwrap();
+        // (?N IS NULL OR col = ?N) lets one fixed SQL string cover all
+        // filter combinations — no dynamic param binding (rusqlite rejects
+        // unused named params).
+        let mut stmt = conn.prepare(
+            "SELECT id, timestamp, engine, pair, side, entry_price, exit_price,
+                    quantity, pnl, exit_reason, duration_mins
+             FROM trades
+             WHERE is_backfilled = 0
+               AND (?1 IS NULL OR engine = ?1)
+               AND (?2 IS NULL OR pair = ?2)
+             ORDER BY timestamp DESC LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(
+            rusqlite::params![engine, pair, limit],
+            |r| Ok(TradeRow {
+                id: r.get(0)?,
+                timestamp: r.get(1)?,
+                engine: r.get(2)?,
+                pair: r.get(3)?,
+                side: r.get(4)?,
+                entry_price: r.get(5)?,
+                exit_price: r.get(6)?,
+                quantity: r.get(7)?,
+                pnl: r.get(8)?,
+                exit_reason: r.get(9)?,
+                duration_mins: r.get(10)?,
+            }),
+        )?;
+        let mut out: Vec<TradeRow> = rows.collect::<Result<_, _>>()?;
+        out.reverse(); // picked DESC (most recent) → return ascending
+        Ok(out)
+    }
+
     pub fn promotion_report_since(
         &self,
         statuses: &[crate::strategy::StrategyStatus],
@@ -528,5 +588,69 @@ mod tests {
         assert_eq!(report.candidates[0].trades, 3);
         assert!((report.candidates[0].profit_factor - 4.5).abs() < 1e-9);
         assert!(report.candidates[0].promotable);
+    }
+
+    /// /api/v1/trades backing query — what the local dashboard polls. Must
+    /// return ONLY live rows (is_backfilled=0), honor engine/pair filters,
+    /// cap to the most recent `limit`, and expose entry/exit/qty/pnl/reason.
+    fn insert_full(
+        j: &UnifiedTradeJournal, ts: &str, engine: &str, pair: &str, side: Option<&str>,
+        entry: Option<f64>, exitp: Option<f64>, qty: Option<f64>, pnl: f64,
+        reason: Option<&str>, dur: Option<i64>, backfilled: bool,
+    ) {
+        let conn = j.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO trades (timestamp, engine, pair, side, entry_price, exit_price,
+                 quantity, pnl, exit_reason, duration_mins, is_backfilled)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+            rusqlite::params![ts, engine, pair, side, entry, exitp, qty, pnl, reason, dur, backfilled as i64],
+        ).unwrap();
+    }
+
+    #[test]
+    fn recent_trades_returns_live_rows_filtered_capped_and_ascending() {
+        let tmp = tempfile::tempdir().unwrap();
+        let j = UnifiedTradeJournal::new_at(tmp.path().join("trades.db")).unwrap();
+        // Three live rows inserted out of chronological order + one backfilled row.
+        insert_full(&j, "2026-07-20T10:00:00Z", "grid",  "ETH-USDT", Some("BUY"),
+            Some(1800.0), Some(1810.0), Some(1.0), 10.0, Some("tp1"), Some(60), false);
+        insert_full(&j, "2026-07-18T08:00:00Z", "grid",  "BNB-USDT", Some("BUY"),
+            Some(600.0),  Some(612.0),  Some(5.0), 60.0, Some("tp2"), Some(40), false);
+        insert_full(&j, "2026-07-19T09:00:00Z", "trend", "ETH-USDT", Some("BUY"),
+            Some(1790.0), Some(1850.0), Some(2.0), 120.0, Some("tp3"), Some(300), false);
+        insert_full(&j, "2026-07-17T00:00:00Z", "grid",  "ETH-USDT", None,
+            None, None, None, -5.0, Some("backfilled"), None, true);
+
+        // No filter → 3 live rows (backfill excluded), ordered ascending by time.
+        let all = j.recent_trades(None, None, 100).unwrap();
+        assert_eq!(all.len(), 3, "backfilled row must be excluded");
+        assert_eq!(all[0].pair, "BNB-USDT");               // 07-18
+        assert_eq!(all[1].pair, "ETH-USDT");               // 07-19 trend
+        assert_eq!(all[1].engine, "trend");
+        assert_eq!(all[2].engine, "grid");                 // 07-20 grid
+        // Fields round-trip.
+        assert_eq!(all[2].side.as_deref(), Some("BUY"));
+        assert_eq!(all[2].entry_price, Some(1800.0));
+        assert_eq!(all[2].exit_price, Some(1810.0));
+        assert_eq!(all[2].quantity, Some(1.0));
+        assert_eq!(all[2].pnl, 10.0);
+        assert_eq!(all[2].exit_reason.as_deref(), Some("tp1"));
+        assert_eq!(all[2].duration_mins, Some(60));
+
+        // Engine filter.
+        let grid = j.recent_trades(Some("grid"), None, 100).unwrap();
+        assert_eq!(grid.len(), 2);
+        assert!(grid.iter().all(|t| t.engine == "grid"));
+
+        // Pair filter.
+        let eth = j.recent_trades(None, Some("ETH-USDT"), 100).unwrap();
+        assert_eq!(eth.len(), 2);
+        assert!(eth.iter().all(|t| t.pair == "ETH-USDT"));
+
+        // Limit = most recent N, still returned ascending.
+        let limited = j.recent_trades(None, None, 2).unwrap();
+        assert_eq!(limited.len(), 2);
+        assert_eq!(limited[0].engine, "trend");   // 07-19 (older of the two latest)
+        assert_eq!(limited[1].engine, "grid");    // 07-20
     }
 }

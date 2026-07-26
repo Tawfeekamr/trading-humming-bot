@@ -41,6 +41,13 @@ pub struct PromotionReportQuery {
     pub min_win_rate_pct: Option<f64>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct TradesQuery {
+    pub engine: Option<String>,
+    pub pair: Option<String>,
+    pub limit: Option<u32>,
+}
+
 // ── Health check ─────────────────────────────────────────────────────
 
 pub async fn health() -> Json<serde_json::Value> {
@@ -210,6 +217,27 @@ pub async fn get_promotion_report(
             )
         }) {
         Ok(report) => (axum::http::StatusCode::OK, Json(report)).into_response(),
+        Err(e) => (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        ).into_response(),
+    }
+}
+
+/// Live trade history for the local dashboard (`GET /api/v1/trades`). Reads the
+/// unified journal (data/trades.db) — live rows only, backfilled excluded.
+/// Optional `?engine=&pair=&limit=` (limit defaults to 1000; most recent N,
+/// returned oldest→newest so the frontend can plot them left→right).
+pub async fn get_trades(
+    Query(q): Query<TradesQuery>,
+) -> impl IntoResponse {
+    match crate::strategy::trade_journal::UnifiedTradeJournal::new()
+        .and_then(|j| j.recent_trades(q.engine.as_deref(), q.pair.as_deref(), q.limit.unwrap_or(1000)))
+    {
+        Ok(trades) => (
+            axum::http::StatusCode::OK,
+            Json(serde_json::json!({ "trades": trades })),
+        ).into_response(),
         Err(e) => (
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": e.to_string() })),
@@ -409,6 +437,20 @@ mod tests {
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_get_trades() {
+        let app = test_app();
+        let req = Request::builder()
+            .uri("/api/v1/trades")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(json["trades"].is_array(), "response must be {{ trades: [...] }}");
     }
 
     #[tokio::test]
