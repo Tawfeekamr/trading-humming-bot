@@ -18,7 +18,7 @@ export function Desk({ interval }: { interval: string }) {
             <CoinCard key={p} pair={p} interval={interval} onOpen={() => setFocusPair(p)} />
           ))}
         </section>
-        <Rail />
+        <Rail onSelectPair={(p) => setFocusPair(p)} />
       </main>
       {focusPair && (
         <FocusOverlay pair={focusPair} interval={interval} onClose={() => setFocusPair(null)} />

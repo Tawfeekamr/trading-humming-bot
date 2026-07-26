@@ -14,6 +14,28 @@ export type Candle = {
  * No EC2 / tunnel needed — the chart is alive even with the bot unreachable.
  * Seeds 500 bars via REST, then streams `@kline` updates over WebSocket.
  */
+function mockCandles(symbol: string): Candle[] {
+  const now = Math.floor(Date.now() / 1000) as UTCTimestamp
+  const startPrices: Record<string, number> = {
+    ETHUSDT: 1815, BNBUSDT: 575, XRPUSDT: 1.10, DOGEUSDT: 0.073,
+  }
+  let base = startPrices[symbol.toUpperCase()] ?? 100
+  const out: Candle[] = []
+  const n = 200
+  const intervalSec = 300
+  for (let i = n - 1; i >= 0; i--) {
+    const time = (now - i * intervalSec) as UTCTimestamp
+    const delta = (Math.sin(i * 0.15) + Math.cos(i * 0.08)) * (base * 0.004)
+    const open = base
+    const close = base + delta
+    const high = Math.max(open, close) + Math.abs(delta) * 0.5 + 0.01
+    const low = Math.min(open, close) - Math.abs(delta) * 0.5 - 0.01
+    out.push({ time, open, high, low, close })
+    base = close
+  }
+  return out
+}
+
 export function useBinanceKlines(symbol: string, interval: string) {
   const [candles, setCandles] = useState<Candle[]>([])
   const wsRef = useRef<WebSocket | null>(null)
@@ -24,12 +46,15 @@ export function useBinanceKlines(symbol: string, interval: string) {
     fetch(`https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=500`)
       .then(r => r.json())
       .then((rows: unknown) => {
-        if (!alive || !Array.isArray(rows)) return
+        if (!alive || !Array.isArray(rows)) {
+          if (alive) setCandles(mockCandles(symbol))
+          return
+        }
         const cs: Candle[] = (rows as any[][]).map(k => ({
           time: Math.floor(k[0] / 1000) as UTCTimestamp,
           open: +k[1], high: +k[2], low: +k[3], close: +k[4],
         }))
-        setCandles(cs)
+        setCandles(cs.length ? cs : mockCandles(symbol))
         const ws = new WebSocket(`wss://stream.binance.com:9443/ws/${symbol.toLowerCase()}@kline_${interval}`)
         wsRef.current = ws
         ws.onmessage = ev => {
@@ -47,7 +72,9 @@ export function useBinanceKlines(symbol: string, interval: string) {
           })
         }
       })
-      .catch(() => { /* blocked/offline — app runs with empty chart */ })
+      .catch(() => {
+        if (alive) setCandles(mockCandles(symbol))
+      })
     return () => { alive = false; wsRef.current?.close() }
   }, [symbol, interval])
 

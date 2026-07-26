@@ -11,6 +11,15 @@ export type Trade = {
   pnl: number
   exit_reason: string | null
   duration_mins: number | null
+  // ── audit payload (additive; null for trades logged before the audit migration) ──
+  sl_price: number | null
+  tp_price: number | null
+  signal_score: number | null
+  regime_at_entry: string | null
+  entry_reason: string | null
+  fees: number | null
+  r_multiple: number | null
+  context_json: string | null
 }
 
 export type RegimeLabel = 'ranging' | 'trending' | 'danger'

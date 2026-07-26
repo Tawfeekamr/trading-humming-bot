@@ -21,16 +21,19 @@ export function mockTrades(): Trade[] {
     timestamp: new Date(now - minsAgo * 60000).toISOString(),
     engine, pair, side, entry_price: entry, exit_price: exit, quantity: qty,
     pnl, exit_reason: reason, duration_mins: 30,
+    // audit fields stay null in mock — real SL/TP/R arrive post-deploy.
+    sl_price: null, tp_price: null, signal_score: null, regime_at_entry: null,
+    entry_reason: null, fees: null, r_multiple: null, context_json: null,
   })
   return [
-    mk(14, 'grid', 'ETH-USDT', 'buy', 1819.68, 1821.40, 1.75, 3.0, 'tp1'),
-    mk(41, 'grid', 'BNB-USDT', 'sell', 610.20, 612.10, 6.53, 14.0, 'tp2'),
-    mk(122, 'grid', 'ETH-USDT', 'buy', 1805.25, 1803.10, 1.90, -2.0, 'stop_loss'),
-    mk(183, 'grid', 'BNB-USDT', 'buy', 605.50, 611.00, 5.20, 9.0, 'tp1'),
-    mk(305, 'grid', 'XRP-USDT', 'buy', 0.5110, null, 412, 0, 'open'),
-    mk(366, 'grid', 'ETH-USDT', 'sell', 1790.82, 1795.00, 2.07, 5.0, 'tp1'),
-    mk(720, 'trend', 'BNB-USDT', 'buy', 598.10, 612.40, 4.10, 58.5, 'tp3'),
-    mk(900, 'trend', 'DOGE-USDT', 'buy', 0.1572, 0.1601, 9000, 26.1, 'tp2'),
+    mk(14, 'grid', 'ETH-USDT', 'buy', 1872.50, 1888.20, 1.75, 27.47, 'tp1'),
+    mk(41, 'grid', 'BNB-USDT', 'sell', 574.80, 568.20, 6.53, 43.10, 'tp2'),
+    mk(122, 'grid', 'ETH-USDT', 'buy', 1865.00, 1856.50, 1.90, -16.15, 'stop_loss'),
+    mk(183, 'grid', 'BNB-USDT', 'buy', 566.50, 572.00, 5.20, 28.60, 'tp1'),
+    mk(305, 'grid', 'XRP-USDT', 'buy', 1.0720, 1.1080, 412, 14.83, 'tp2'),
+    mk(366, 'grid', 'ETH-USDT', 'sell', 1912.40, 1895.00, 2.07, 36.02, 'tp2'),
+    mk(720, 'trend', 'BNB-USDT', 'buy', 564.10, 575.40, 4.10, 46.33, 'tp3'),
+    mk(900, 'trend', 'DOGE-USDT', 'buy', 0.0695, 0.0745, 9000, 45.00, 'tp2'),
   ]
 }
 

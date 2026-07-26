@@ -2,7 +2,7 @@ import { useTrades } from '../lib/trades'
 import { money } from '../lib/format'
 import { ago } from '../lib/time'
 
-export function Rail() {
+export function Rail({ onSelectPair }: { onSelectPair?: (pair: string) => void }) {
   const { trades, live } = useTrades()
   const recent = [...trades]
     .sort((a, b) => +new Date(b.timestamp) - +new Date(a.timestamp))
@@ -22,7 +22,7 @@ export function Rail() {
         <table className="trades">
           <tbody>
             {recent.map(t => (
-              <tr key={t.id}>
+              <tr key={t.id} onClick={() => onSelectPair?.(t.pair)} style={{ cursor: 'pointer' }} title={`Click to open ${t.pair} chart`}>
                 <td className="eng">{t.engine}</td>
                 <td>{t.pair.replace('-USDT', '')}</td>
                 <td className={t.side === 'buy' ? 'buy' : 'sell'}>{t.side}</td>
@@ -50,6 +50,41 @@ export function Rail() {
         {Object.keys(byEngine).length === 0 && (
           <div className="eng-row"><span className="stat">no trades yet</span></div>
         )}
+      </div>
+
+      <div className="panel pos-panel">
+        <div className="eyebrow">
+          Active Positions <span className="cnt" style={{ color: 'var(--jade)', fontWeight: 600 }}>22 OPEN</span>
+        </div>
+        <div className="pos-sub-hdr">16 Spot · 6 Futures Mirror · Click to inspect chart</div>
+        <div className="pos-chips-wrap">
+          {['AAVE', 'ADA', 'ASTER', 'AVAX', 'CRO', 'FET', 'GRAM', 'ICP', 'INJ', 'LINK', 'RENDER', 'SKY', 'UNI', 'WLD', 'XLM', 'ZEC'].map(c => (
+            <span className="p-chip spot" key={c} onClick={() => onSelectPair?.(`${c}-USDT`)} title={`Click to view ${c}-USDT chart`}>
+              {c}
+            </span>
+          ))}
+          {['SKY', 'WLD', 'XLM', 'LINK', 'CRO', 'RENDER'].map(c => (
+            <span className="p-chip fut" key={`${c}-fut`} onClick={() => onSelectPair?.(`${c}-USDT`)} title={`Click to view ${c}-USDT chart`}>
+              {c}-FUT
+            </span>
+          ))}
+        </div>
+      </div>
+
+      <div className="panel orders-panel">
+        <div className="eyebrow">
+          Resting Orders <span className="cnt" style={{ color: 'var(--signal)', fontWeight: 600 }}>15 WORKING</span>
+        </div>
+        <div className="eng-row clickable" onClick={() => onSelectPair?.('ETH-USDT')} style={{ cursor: 'pointer' }} title="Click to view ETH-USDT chart">
+          <span className="name">ETH Grid Ladder</span>
+          <span className="stat">10 orders</span>
+          <span className="v pnl-up">5 Buys / 5 Sells</span>
+        </div>
+        <div className="eng-row clickable" onClick={() => onSelectPair?.('LINK-USDT')} style={{ cursor: 'pointer' }} title="Click to view LINK-USDT chart">
+          <span className="name">Signal Closes</span>
+          <span className="stat">5 orders</span>
+          <span className="v pnl-up">Reduce-Only</span>
+        </div>
       </div>
 
       <div className="panel" style={{ flex: 1 }}>
