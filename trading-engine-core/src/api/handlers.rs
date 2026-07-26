@@ -250,25 +250,29 @@ pub async fn get_trades(
 /// its `raw_message` text (the signal call), surfaced as-is for the client to
 /// parse. (`/api/v1/trades` only has CLOSED round-trips, not open positions.)
 pub async fn get_positions() -> impl IntoResponse {
-    match std::fs::read_to_string("data/signal_positions.json") {
-        Ok(s) => {
-            let v: serde_json::Value = serde_json::from_str(&s).unwrap_or_else(|_| serde_json::json!({}));
-            let arr: Vec<serde_json::Value> = v.as_object().map(|o| {
-                o.iter().map(|(k, val)| {
-                    let mut e = val.clone();
-                    if let Some(obj) = e.as_object_mut() {
-                        obj.insert("symbol".into(), serde_json::json!(k));
+    // Merge spot + futures signal positions, tagging each with its book so the
+    // dashboard can show "X spot · Y futures" and filter to truly-open ones.
+    let mut all: Vec<serde_json::Value> = Vec::new();
+    for (path, book) in [
+        ("data/signal_positions.json", "spot"),
+        ("data/signal_positions_futures.json", "futures"),
+    ] {
+        if let Ok(s) = std::fs::read_to_string(path) {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&s) {
+                if let Some(o) = v.as_object() {
+                    for (k, val) in o {
+                        let mut e = val.clone();
+                        if let Some(obj) = e.as_object_mut() {
+                            obj.insert("symbol".into(), serde_json::json!(k));
+                            obj.insert("book".into(), serde_json::json!(book));
+                        }
+                        all.push(e);
                     }
-                    e
-                }).collect()
-            }).unwrap_or_default();
-            (axum::http::StatusCode::OK, Json(serde_json::json!({ "positions": arr }))).into_response()
+                }
+            }
         }
-        Err(e) => (
-            axum::http::StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "positions": [], "error": e.to_string() })),
-        ).into_response(),
     }
+    (axum::http::StatusCode::OK, Json(serde_json::json!({ "positions": all }))).into_response()
 }
 
 // ── Regime update (pushed by Python ML) ───────────────────────────────

@@ -5,6 +5,7 @@ export type Position = {
   entry_price?: number | null
   raw_message?: string
   is_closed?: boolean
+  book?: 'spot' | 'futures'
   channel_name?: string
   exit_reason?: string
   amount?: number

@@ -1,9 +1,14 @@
 import { useTrades } from '../lib/trades'
+import { usePositions } from '../lib/positions'
 import { money } from '../lib/format'
 import { ago } from '../lib/time'
 
 export function Rail({ onSelectPair }: { onSelectPair?: (pair: string) => void }) {
   const { trades, live } = useTrades()
+  const positions = usePositions()
+  const openPos = positions.filter(p => !p.is_closed)
+  const spotOpen = openPos.filter(p => p.book !== 'futures').length
+  const futOpen = openPos.filter(p => p.book === 'futures').length
   const recent = [...trades]
     .sort((a, b) => +new Date(b.timestamp) - +new Date(a.timestamp))
     .slice(0, 8)
@@ -54,20 +59,26 @@ export function Rail({ onSelectPair }: { onSelectPair?: (pair: string) => void }
 
       <div className="panel pos-panel">
         <div className="eyebrow">
-          Active Positions <span className="cnt" style={{ color: 'var(--jade)', fontWeight: 600 }}>22 OPEN</span>
+          Active positions <span className="cnt" style={{ color: openPos.length ? 'var(--jade)' : 'var(--stone-2)', fontWeight: 600 }}>{openPos.length} OPEN</span>
         </div>
-        <div className="pos-sub-hdr">16 Spot · 6 Futures Mirror · Click to inspect chart</div>
+        <div className="pos-sub-hdr">
+          {openPos.length ? `${spotOpen} spot · ${futOpen} futures · click to inspect` : 'no open positions right now'}
+        </div>
         <div className="pos-chips-wrap">
-          {['AAVE', 'ADA', 'ASTER', 'AVAX', 'CRO', 'FET', 'GRAM', 'ICP', 'INJ', 'LINK', 'RENDER', 'SKY', 'UNI', 'WLD', 'XLM', 'ZEC'].map(c => (
-            <span className="p-chip spot" key={c} onClick={() => onSelectPair?.(`${c}-USDT`)} title={`Click to view ${c}-USDT chart`}>
-              {c}
-            </span>
-          ))}
-          {['SKY', 'WLD', 'XLM', 'LINK', 'CRO', 'RENDER'].map(c => (
-            <span className="p-chip fut" key={`${c}-fut`} onClick={() => onSelectPair?.(`${c}-USDT`)} title={`Click to view ${c}-USDT chart`}>
-              {c}-FUT
-            </span>
-          ))}
+          {openPos.length === 0 && (
+            <span style={{ color: 'var(--stone-2)', fontFamily: 'var(--mono)', fontSize: 11 }}>all signal positions closed</span>
+          )}
+          {openPos.map(p => {
+            const base = (p.symbol || '').replace(/-USDT$/i, '').replace(/USDT$/i, '')
+            const isFut = p.book === 'futures'
+            return (
+              <span key={`${p.book}-${p.symbol}`} className={`p-chip ${isFut ? 'fut' : 'spot'}`}
+                onClick={() => onSelectPair?.(p.symbol || `${base}-USDT`)}
+                title={`entry ${p.entry_price ?? '?'} · ${p.book}`}>
+                {base}{isFut ? '-FUT' : ''}
+              </span>
+            )
+          })}
         </div>
       </div>
 
