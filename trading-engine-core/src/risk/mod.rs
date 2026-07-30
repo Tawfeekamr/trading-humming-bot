@@ -106,3 +106,54 @@ pub fn load_state(cb: &mut CircuitBreaker, path: &str, current_equity: f64) {
     cb.set_halted_state(false, None);
     cb.set_last_reset_date(chrono::Utc::now().format("%Y-%m-%d").to_string());
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fresh_path(tag: &str) -> String {
+        let p = std::env::temp_dir().join(format!("risk_state_test_{tag}_{}.json",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()));
+        let _ = std::fs::remove_file(&p);
+        p.to_string_lossy().to_string()
+    }
+
+    #[test]
+    fn save_load_roundtrip_preserves_halted_and_timestamp() {
+        // Regression: the trip timestamp was discarded on load, so a halted
+        // state survived a restart in name only and re-armed a fresh 30-min
+        // cooldown from boot time.
+        let path = fresh_path("roundtrip");
+        let mut c = CircuitBreaker::new(10.0, 5.0);
+        c.set_peak_equity(100_000.0);
+        c.set_start_of_day_equity(100_000.0);
+        c.check(88_000.0); // trip
+        assert!(c.is_halted());
+        let trip_ts = c.halted_at_unix().unwrap();
+
+        save_state(&c, &path);
+
+        let mut loaded = CircuitBreaker::new(10.0, 5.0);
+        load_state(&mut loaded, &path, 88_000.0);
+        assert!(loaded.is_halted(), "halt must survive save/load across restart");
+        assert_eq!(
+            loaded.halted_at_unix(),
+            Some(trip_ts),
+            "trip timestamp must be preserved across save/load, not reset to now"
+        );
+        assert!((loaded.peak_equity() - 100_000.0).abs() < 1e-9);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn load_missing_file_initializes_unhalted() {
+        let path = fresh_path("missing");
+        let mut c = CircuitBreaker::new(10.0, 5.0);
+        load_state(&mut c, &path, 100_000.0);
+        assert!(!c.is_halted());
+        assert!((c.peak_equity() - 100_000.0).abs() < 1e-9);
+    }
+}

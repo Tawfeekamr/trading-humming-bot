@@ -453,6 +453,12 @@ impl Engine {
         if self.risk.circuit_breaker.last_reset_date() != today {
             self.risk.circuit_breaker.set_start_of_day_equity(equity);
             self.risk.circuit_breaker.set_last_reset_date(today);
+            // Release a latched halt at the UTC-midnight rollover so trading
+            // resumes against a fresh start-of-day baseline. A daily-loss trip
+            // clears cleanly (start-of-day was just rebased to current equity);
+            // a max-drawdown trip that is still in effect re-latches on the very
+            // next check() tick below, so drawdown protection is not weakened.
+            self.risk.circuit_breaker.clear_halt();
         }
         // Persist risk state at most every 5s, or immediately when the halt flag
         // changes. feed_breaker runs on every orderbook update (dozens/sec across
