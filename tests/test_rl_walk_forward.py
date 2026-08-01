@@ -29,6 +29,15 @@ def test_walk_forward_slices_train_strictly_before_test():
         assert ve <= 1000
 
 
+def test_walk_forward_slices_preserve_embargo_gap():
+    from src.rl.walk_forward import walk_forward_slices
+
+    slices = walk_forward_slices(600, 300, 100, 100, embargo_bars=24)
+    assert slices[0] == (0, 300, 324, 424)
+    for _, train_end, test_start, _ in slices:
+        assert test_start - train_end == 24
+
+
 def test_walk_forward_slices_empty_when_data_too_short():
     from src.rl.walk_forward import walk_forward_slices
 

@@ -62,3 +62,27 @@ defensible result; the raw-return dominance was an artifact of a weak baseline.
   Bonferroni-corrected panel.
 - **RF labeling lookahead is the supervised target** (correct); no feature
   leakage (features are current-bar; temporal train/test split enforced).
+
+
+## Reproducible evaluation artifacts
+
+`python -m src.rl.walk_forward` now emits a CI-friendly JSON summary and a
+concise operator summary. Each pair also writes
+`reports/rl_walk_forward_<PAIR>.json` with sorted keys, source commit, model
+SHA-256 checksums, feature-contract hash, date windows, fees/slippage, every
+walk-forward slice, and the promotion decision.
+
+Reports contain PnL, total return, profit factor, maximum drawdown,
+time-in-market, fees/slippage, trade count, and fixed-seed 95% bootstrap
+intervals for PPO, RF/ML, and the passive TA comparator. PPO-vs-RF and
+TA-vs-ML pooled return series are retained separately. Fewer than 100
+independent trades per strategy/regime is reported as `inconclusive_sample`;
+the gate never activates PPO or changes live routing. A candidate must also
+have multiple OOS windows and cannot increase drawdown or exposure. The
+`human_review_required` reason is included for every otherwise eligible
+candidate.
+
+Train windows remain strictly before test windows. `--embargo-bars` can
+preserve a non-zero gap between training and evaluation data; the training
+subprocess uses the test-start boundary so the provenance check cannot
+silently include the embargo or OOS bars.

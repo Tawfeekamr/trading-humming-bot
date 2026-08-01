@@ -235,12 +235,12 @@ def _check_oos_boundary(
 
 
 def _run_model(env: TradingEnv, router) -> dict:
-    """Run a router through the environment deterministically and return metrics."""
+    """Run a router deterministically while retaining legacy display keys."""
     obs, info = env.reset(seed=42)
 
     equity_curve = [info["equity"]]
     step_returns = []
-
+    turnover = []
     in_position_flags: list[bool] = []
     engine_flags: list[str] = []
 
@@ -249,44 +249,58 @@ def _run_model(env: TradingEnv, router) -> dict:
         action = router.predict(obs)
         obs, reward, term, trunc, info = env.step(action)
 
-        # PnL accounting
         bar_pnl = info["equity"] - equity_curve[-1]
         step_returns.append(
             bar_pnl / equity_curve[-1] if equity_curve[-1] > 0 else 0
         )
         equity_curve.append(info["equity"])
+        turnover.append(float(info.get("turnover", 0.0)))
         in_position_flags.append(bool(info.get("in_position", False)))
         engine_flags.append(str(info.get("engine", "flat")))
-
         done = term or trunc
 
-    # Round-trip win/loss accounting (trend / swing only — the grid engine has
-    # no in_position flag; see _count_round_trips).
-    trades, wins = _count_round_trips(equity_curve, in_position_flags)
+    exposure_array = np.asarray(
+        [engine != "flat" for engine in engine_flags], dtype=np.float64
+    )
 
+    trades, wins = _count_round_trips(equity_curve, in_position_flags)
     eq_array = np.array(equity_curve)
     returns = np.array(step_returns)
 
-    # Metrics
     total_return = (eq_array[-1] - eq_array[0]) / eq_array[0]
     peaks = np.maximum.accumulate(eq_array)
-    drawdowns = (peaks - eq_array) / peaks
-    max_dd = np.max(drawdowns)
-
-    # Annualized Sharpe (assuming 1h bars, ~8760 per year)
+    drawdowns = np.divide(
+        peaks - eq_array, peaks, out=np.zeros_like(eq_array), where=peaks > 0
+    )
+    max_dd = float(np.max(drawdowns, initial=0.0))
     ann_factor = np.sqrt(8760)
     sharpe = (
         (np.mean(returns) / np.std(returns)) * ann_factor
         if np.std(returns) > 0
         else 0
     )
-
     win_rate = wins / trades if trades > 0 else 0.0
     time_in_market = _time_in_market(engine_flags)
+    initial_equity = float(eq_array[0]) if len(eq_array) else 1.0
+    fee_rate = float(getattr(getattr(env, "config", None), "fee_rate", 0.0))
+    fees = float(np.sum(turnover) * fee_rate / initial_equity)
+    gains = float(np.sum(returns[returns > 0]))
+    losses = float(-np.sum(returns[returns < 0]))
+    profit_factor = gains / losses if losses > 0 else (float("inf") if gains > 0 else 0.0)
 
     return {
         "returns_array": returns,
         "equity_curve": eq_array,
+        "trade_count": trades,
+        "exposure_array": exposure_array,
+        "wins": wins,
+        "net_pnl": float(eq_array[-1] - eq_array[0]),
+        "total_return": float(total_return),
+        "profit_factor": float(profit_factor),
+        "max_drawdown": max_dd,
+        "time_in_market": float(time_in_market),
+        "fees": fees,
+        # Preserve the existing human-facing keys consumed by callers.
         "Total Return": f"{total_return * 100:.2f}%",
         "Max Drawdown": f"{max_dd * 100:.2f}%",
         "Sharpe Ratio": f"{sharpe:.2f}",

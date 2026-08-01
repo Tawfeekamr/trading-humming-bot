@@ -26,27 +26,23 @@ import numpy as np
 
 
 def walk_forward_slices(
-    series_len: int, train_bars: int, test_bars: int, step_bars: int
+    series_len: int,
+    train_bars: int,
+    test_bars: int,
+    step_bars: int,
+    embargo_bars: int = 0,
 ) -> list[tuple[int, int, int, int]]:
-    """Rolling train/test index splits over a bar series.
-
-    Returns a list of ``(train_start, train_end, test_start, test_end)`` tuples
-    where ``train_end == test_start`` (contiguous, no gap, no overlap) and each
-    slice's test window fits fully inside ``[0, series_len)``. The window
-    advances by ``step_bars`` each iteration.
-
-    Returns ``[]`` if the series is too short to fit even one train+test pair.
-    """
-    if train_bars <= 0 or test_bars <= 0 or step_bars <= 0:
-        raise ValueError("train_bars, test_bars, step_bars must be positive")
+    """Rolling chronological splits with an optional train/test embargo gap."""
+    if train_bars <= 0 or test_bars <= 0 or step_bars <= 0 or embargo_bars < 0:
+        raise ValueError("window sizes must be positive and embargo non-negative")
 
     slices: list[tuple[int, int, int, int]] = []
     start = 0
-    while start + train_bars + test_bars <= series_len:
-        train_start = start
+    while start + train_bars + embargo_bars + test_bars <= series_len:
         train_end = start + train_bars
-        test_end = train_end + test_bars
-        slices.append((train_start, train_end, train_end, test_end))
+        test_start = train_end + embargo_bars
+        test_end = test_start + test_bars
+        slices.append((start, train_end, test_start, test_end))
         start += step_bars
     return slices
 
@@ -140,6 +136,46 @@ def _evaluate_slice(test_df, ppo_model_path: str, rf_model_path: str):
     return ppo["returns_array"], rf["returns_array"], ppo, rf
 
 
+def _technical_analysis_returns(test_df, warmup: int) -> np.ndarray:
+    """Passive TA comparator: close-to-close returns after indicator warmup."""
+    closes = np.asarray(test_df["close"], dtype=np.float64)
+    start = min(max(0, warmup), len(closes))
+    closes = closes[start:]
+    if len(closes) < 2:
+        return np.array([], dtype=np.float64)
+    return np.diff(closes) / closes[:-1]
+
+
+def _report_metadata(pair: str, rf_model: str, ppo_models: list[str], **extra) -> dict:
+    import hashlib
+    import subprocess
+
+    def checksum(path: str) -> str | None:
+        try:
+            digest = hashlib.sha256()
+            with open(path, "rb") as handle:
+                for block in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(block)
+            return digest.hexdigest()
+        except OSError:
+            return None
+
+    try:
+        source_commit = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL
+        ).strip()
+    except (OSError, subprocess.CalledProcessError):
+        source_commit = "unknown"
+    return {
+        "source_commit": source_commit,
+        "pair": pair,
+        "rf_model": rf_model,
+        "rf_model_sha256": checksum(rf_model),
+        "ppo_model_sha256": [checksum(path) for path in ppo_models],
+        **extra,
+    }
+
+
 def run_walk_forward(
     pair: str,
     rf_model: str,
@@ -151,43 +187,54 @@ def run_walk_forward(
     step_bars: int,
     timesteps: int,
     warmup: int = 100,
+    embargo_bars: int = 0,
+    report_path: str | None = None,
+    feature_hash: str | None = None,
+    fees: float = 0.0,
+    slippage: float = 0.0,
 ) -> dict:
-    """Full walk-forward over one pair: slice, train, eval, aggregate.
-
-    ``warmup`` bars before each test slice are included in the eval frame so
-    indicators are warmed up; returns are taken over the full frame (aligned
-    across PPO/RF so pooling is fair).
-    """
+    """Full chronological walk-forward with PPO/RF and TA/ML comparisons."""
     from src.rl.data import load_klines
 
     print(f"[{pair}] loading history {history_start} -> {history_end}")
     df = load_klines(pair, history_start, history_end)
-    slices = walk_forward_slices(len(df), train_bars, test_bars, step_bars)
+    slices = walk_forward_slices(
+        len(df), train_bars, test_bars, step_bars, embargo_bars=embargo_bars
+    )
     if not slices:
         print(f"[{pair}] series too short for {train_bars}+{test_bars} slices")
         return {"pair": pair, "slices": 0}
 
     print(f"[{pair}] {len(slices)} walk-forward slices")
-    ppo_returns, rf_returns, per_slice, failed = [], [], [], []
+    ppo_returns, rf_returns, ta_returns = [], [], []
+    ppo_exposure, rf_exposure, ta_exposure = [], [], []
+    per_slice, failed, model_paths = [], [], []
     for i, (ts, te, vs, ve) in enumerate(slices):
         try:
             train_end_date = (
-                df.index[te].date() if hasattr(df.index[te], "date") else df.index[te]
+                df.index[vs].date() if hasattr(df.index[vs], "date") else df.index[vs]
             )
             model_path = f"models/rl/_wf_{pair}_slice{i}.zip"
-            _train_slice_subprocess(
-                pair, train_end_date, train_bars, timesteps, model_path
-            )
+            _train_slice_subprocess(pair, train_end_date, train_bars, timesteps, model_path)
             test_df = df.iloc[max(0, vs - warmup):ve]
             ppo_ret, rf_ret, ppo_sum, rf_sum = _evaluate_slice(
                 test_df, model_path, rf_model
             )
-            ppo_returns.append(np.asarray(ppo_ret, dtype=np.float64))
-            rf_returns.append(np.asarray(rf_ret, dtype=np.float64))
+            ppo_ret = np.asarray(ppo_ret, dtype=np.float64)
+            rf_ret = np.asarray(rf_ret, dtype=np.float64)
+            ta_ret = _technical_analysis_returns(test_df, warmup)
+            n = min(len(ppo_ret), len(rf_ret), len(ta_ret))
+            ppo_ret, rf_ret, ta_ret = ppo_ret[:n], rf_ret[:n], ta_ret[:n]
+            ppo_returns.append(ppo_ret)
+            rf_returns.append(rf_ret)
+            ta_returns.append(ta_ret)
+            ppo_exposure.append(np.asarray(ppo_sum.get("exposure_array", np.zeros(n)))[:n])
+            rf_exposure.append(np.asarray(rf_sum.get("exposure_array", np.zeros(n)))[:n])
+            ta_exposure.append(np.ones(n, dtype=np.float64))
+            model_paths.append(model_path)
             per_slice.append({"slice": i, "ppo": ppo_sum, "rf": rf_sum})
             print(
-                f"  slice {i}: PPO {ppo_sum['Total Return']} | "
-                f"RF {rf_sum['Total Return']}",
+                f"  slice {i}: PPO {ppo_sum['Total Return']} | RF {rf_sum['Total Return']}",
                 flush=True,
             )
         except Exception as e:  # noqa: BLE001 - isolate slice failures
@@ -195,20 +242,72 @@ def run_walk_forward(
             print(f"  slice {i}: FAILED ({e}); skipping", flush=True)
 
     stat, p, n = aggregate_dm(ppo_returns, rf_returns)
+    ta_all, ml_all = pool_returns(ta_returns, rf_returns)
+    ta_stat, ta_p = aggregate_dm(ta_returns, rf_returns)
     print(
         f"[{pair}] pooled DM (PPO vs RF): stat={stat:.3f} p={p:.4f} n={n} "
         f"({len(failed)} slices failed)",
         flush=True,
     )
+
+    from src.ml.evaluation_report import summarize_returns, write_report
+    from src.ml.promotion_gate import evaluate
+
+    def summarize(series, exposures):
+        values = pool_returns(series, exposures)[0]
+        exposure_values = pool_returns(exposures, series)[0]
+        return summarize_returns(values, exposure_values, fees=fees + slippage)
+
+    ppo_metrics = summarize(ppo_returns, ppo_exposure)
+    rf_metrics = summarize(rf_returns, rf_exposure)
+    ta_metrics = summarize(ta_returns, ta_exposure)
+    gate_metrics = {
+        "trade_count": sum(int(row["ppo"].get("trade_count", 0)) for row in per_slice),
+        "window_count": len(per_slice),
+        "ppo_profit_factor": ppo_metrics["profit_factor"],
+        "rf_profit_factor": rf_metrics["profit_factor"],
+        "ppo_max_drawdown": ppo_metrics["max_drawdown"],
+        "rf_max_drawdown": rf_metrics["max_drawdown"],
+        "ppo_exposure": ppo_metrics["time_in_market"],
+        "rf_exposure": rf_metrics["time_in_market"],
+        "ppo_total_return": ppo_metrics["total_return"],
+        "rf_total_return": rf_metrics["total_return"],
+    }
+    promotion = evaluate(gate_metrics)
+    report_slices = [
+        {
+            "slice": row["slice"],
+            "ppo": {key: value for key, value in row["ppo"].items() if key not in {"returns_array", "equity_curve", "exposure_array"}},
+            "rf": {key: value for key, value in row["rf"].items() if key not in {"returns_array", "equity_curve", "exposure_array"}},
+        }
+        for row in per_slice
+    ]
+    report = {
+        "ppo": ppo_metrics,
+        "rf": rf_metrics,
+        "ml": rf_metrics,
+        "ta": ta_metrics,
+        "promotion": promotion,
+        "ppo_vs_rf": {"dm_stat": stat, "dm_p": p, "n": n},
+        "ta_vs_ml": {"dm_stat": ta_stat, "dm_p": ta_p, "n": len(ta_all)},
+    }
+    if report_path:
+        metadata = _report_metadata(
+            pair, rf_model, model_paths,
+            history_start=str(history_start), history_end=str(history_end),
+            feature_hash=feature_hash, fees=fees, slippage=slippage,
+            embargo_bars=embargo_bars, train_bars=train_bars,
+            test_bars=test_bars, step_bars=step_bars,
+        )
+        write_report(report_path, metadata, report, report_slices)
     return {
-        "pair": pair,
-        "slices": len(slices),
-        "ok": len(per_slice),
-        "failed": failed,
-        "per_slice": per_slice,
-        "dm_stat": stat,
-        "dm_p": p,
-        "n": n,
+        "pair": pair, "slices": len(slices), "ok": len(per_slice),
+        "failed": failed, "per_slice": per_slice,
+        "ppo_returns": ppo_returns, "rf_returns": rf_returns,
+        "ml_returns": rf_returns, "ta_returns": ta_returns,
+        "dm_stat": stat, "dm_p": p, "n": n,
+        "ta_ml_dm_stat": ta_stat, "ta_ml_dm_p": ta_p,
+        "promotion": promotion, "report": report,
     }
 
 
@@ -225,8 +324,13 @@ def main() -> int:
     parser.add_argument("--train-bars", type=int, default=4320)   # ~6 months
     parser.add_argument("--test-bars", type=int, default=720)     # ~1 month
     parser.add_argument("--step-bars", type=int, default=2160)    # ~3 months
+    parser.add_argument("--embargo-bars", type=int, default=0)
     parser.add_argument("--timesteps", type=int, default=1_000_000)
     parser.add_argument("--months", type=int, default=24, help="Total history to load.")
+    parser.add_argument("--report-dir", default="reports")
+    parser.add_argument("--feature-hash", default=None)
+    parser.add_argument("--fees", type=float, default=0.0)
+    parser.add_argument("--slippage", type=float, default=0.0)
     args = parser.parse_args()
 
     history_end = date.today()
@@ -234,23 +338,53 @@ def main() -> int:
 
     results = []
     for pair in args.pairs:
-        rf = args.rf_model if len(args.pairs) == 1 else f"models/regime_{pair.replace('USDT','-USDT').replace('/', '-')}.pkl"
+        rf = (
+            args.rf_model
+            if len(args.pairs) == 1
+            else f"models/regime_{pair.replace('USDT', '-USDT').replace('/', '-')}.pkl"
+        )
+        report_path = f"{args.report_dir}/rl_walk_forward_{pair}.json"
         results.append(
             run_walk_forward(
                 pair, rf,
                 history_start=history_start, history_end=history_end,
                 train_bars=args.train_bars, test_bars=args.test_bars,
                 step_bars=args.step_bars, timesteps=args.timesteps,
+                embargo_bars=args.embargo_bars, report_path=report_path,
+                feature_hash=args.feature_hash, fees=args.fees,
+                slippage=args.slippage,
             )
         )
 
+    import json
+    ci_results = [
+        {
+            "pair": result["pair"],
+            "slices": result.get("slices", 0),
+            "ok": result.get("ok", 0),
+            "failed": result.get("failed", []),
+            "ppo_vs_rf": {
+                "dm_stat": result.get("dm_stat", 0.0),
+                "dm_p": result.get("dm_p", 1.0),
+                "n": result.get("n", 0),
+            },
+            "ta_vs_ml": {
+                "dm_stat": result.get("ta_ml_dm_stat", 0.0),
+                "dm_p": result.get("ta_ml_dm_p", 1.0),
+            },
+            "promotion": result.get("promotion", {"eligible": False, "reasons": ["no_slices"]}),
+        }
+        for result in results
+    ]
+    print(json.dumps({"results": ci_results}, sort_keys=True))
     print("\n=== Walk-Forward Summary ===")
-    for r in results:
-        if r.get("slices"):
-            print(
-                f"{r['pair']}: {r['slices']} slices, "
-                f"DM stat={r['dm_stat']:.3f} p={r['dm_p']:.4f} (n={r['n']})"
-            )
+    for result in ci_results:
+        print(
+            f"{result['pair']}: {result['slices']} slices, "
+            f"PPO-vs-RF p={result['ppo_vs_rf']['dm_p']:.4f}, "
+            f"TA-vs-ML p={result['ta_vs_ml']['dm_p']:.4f}, "
+            f"promotion={result['promotion']['eligible']}"
+        )
     return 0
 
 
