@@ -21,6 +21,23 @@ def test_summarize_returns_has_deterministic_metrics_and_confidence_intervals():
     assert result["confidence_intervals"]["total_return"]["low"] <= result["total_return"] <= result["confidence_intervals"]["total_return"]["high"]
 
 
+def test_summarize_uses_independent_trade_count_override():
+    from src.ml.evaluation_report import summarize_returns
+
+    result = summarize_returns([0.1, -0.1, 0.2], [1.0, 1.0, 1.0], fees=0.0, trade_count=2)
+    assert result["trade_count"] == 2
+
+
+def test_zero_loss_profit_factor_is_valid_json(tmp_path):
+    from src.ml.evaluation_report import summarize_returns, write_report
+
+    path = tmp_path / "zero-loss.json"
+    metrics = summarize_returns([0.1, 0.2], [1.0, 1.0], fees=0.0)
+    write_report(str(path), {}, metrics, [])
+    parsed = json.loads(path.read_text())
+    assert parsed["metrics"]["profit_factor"] is None
+
+
 def test_write_report_is_sorted_and_reproducible(tmp_path):
     from src.ml.evaluation_report import write_report
 

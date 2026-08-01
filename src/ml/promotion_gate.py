@@ -28,18 +28,45 @@ def _number(metrics: Mapping[str, Any], *keys: str) -> float | None:
 
 def _sample_counts(metrics: Mapping[str, Any]) -> list[float]:
     counts: list[float] = []
-    for key in ("trade_count", "ppo_trade_count", "ml_trade_count"):
+    for key in ("trade_count", "ppo_trade_count", "rf_trade_count", "ml_trade_count", "ta_trade_count"):
         value = _number(metrics, key)
         if value is not None:
             counts.append(value)
-    for key in ("trade_count_by_regime", "trade_counts_by_regime", "trades_by_regime"):
-        values = metrics.get(key)
-        if isinstance(values, Mapping):
-            for value in values.values():
+
+    strategy_map = next(
+        (metrics[key] for key in ("trade_counts_by_strategy", "trades_by_strategy")
+         if isinstance(metrics.get(key), Mapping)),
+        None,
+    )
+    if strategy_map is not None:
+        for strategy in ("ppo", "rf", "ta"):
+            value = strategy_map.get(strategy)
+            if value is None:
+                counts.append(0.0)
+            else:
                 try:
                     counts.append(float(value))
                 except (TypeError, ValueError):
-                    continue
+                    counts.append(0.0)
+
+    regime_map = next(
+        (metrics[key] for key in ("trade_counts_by_regime", "trade_count_by_regime", "trades_by_regime")
+         if isinstance(metrics.get(key), Mapping)),
+        None,
+    )
+    if regime_map is not None:
+        regime_names = set()
+        for strategy_values in regime_map.values():
+            if isinstance(strategy_values, Mapping):
+                regime_names.update(strategy_values)
+        for strategy in ("ppo", "rf", "ta"):
+            strategy_values = regime_map.get(strategy)
+            for regime in regime_names:
+                value = strategy_values.get(regime) if isinstance(strategy_values, Mapping) else None
+                try:
+                    counts.append(float(value))
+                except (TypeError, ValueError):
+                    counts.append(0.0)
     return counts
 
 
@@ -92,6 +119,8 @@ def evaluate(metrics: dict, min_trades: int = 100) -> dict[str, Any]:
 
     if candidate_dd is None or baseline_dd is None:
         reasons.append("missing_drawdown")
+    elif candidate_dd > baseline_dd:
+        reasons.append("drawdown_increase")
     if candidate_exposure is None or baseline_exposure is None:
         reasons.append("missing_exposure")
     elif candidate_exposure > baseline_exposure:

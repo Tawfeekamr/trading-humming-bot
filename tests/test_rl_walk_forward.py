@@ -78,6 +78,68 @@ def test_aggregate_dm_picks_up_consistent_edge():
     assert n == 200
 
 
+
+def test_training_cutoff_date_is_before_test_boundary():
+    from datetime import datetime, timezone
+    import pandas as pd
+    from src.rl.walk_forward import strict_training_end_date
+
+    index = pd.date_range(datetime(2026, 1, 1, tzinfo=timezone.utc), periods=96, freq="h")
+    cutoff = strict_training_end_date(index, boundary_index=48)
+    assert cutoff < index[48].date()
+
+
+def test_walk_forward_report_rows_audit_boundaries_and_comparators(monkeypatch, tmp_path):
+    import numpy as np
+    import pandas as pd
+    import src.rl.data as data
+    import src.rl.walk_forward as wf
+
+    frame = pd.DataFrame(
+        {"close": np.linspace(100.0, 150.0, 500)},
+        index=pd.date_range("2026-01-01", periods=500, freq="h", tz="UTC"),
+    )
+    monkeypatch.setattr(data, "load_klines", lambda *args, **kwargs: frame)
+    cutoffs = []
+    monkeypatch.setattr(
+        wf,
+        "_train_slice_subprocess",
+        lambda pair, train_end, *args: cutoffs.append(train_end) or "model.zip",
+    )
+
+    def fake_eval(*args):
+        returns = np.full(100, 0.001)
+        summary = {
+            "returns_array": returns,
+            "exposure_array": np.ones(100),
+            "trade_count": 120,
+            "Total Return": "10.00%",
+            "Max Drawdown": "1.00%",
+            "profit_factor": 1.5,
+        }
+        return returns, returns, summary, summary
+
+    monkeypatch.setattr(wf, "_evaluate_slice", fake_eval)
+    out = wf.run_walk_forward(
+        "ETHUSDT",
+        "rf.pkl",
+        history_start="2026-01-01",
+        history_end="2026-02-01",
+        train_bars=200,
+        test_bars=100,
+        step_bars=100,
+        timesteps=1,
+        embargo_bars=24,
+        warmup=0,
+        report_path=str(tmp_path / "report.json"),
+    )
+    assert cutoffs and cutoffs[0] < frame.index[224].date()
+    row = __import__("json").loads((tmp_path / "report.json").read_text())["slices"][0]
+    for key in ("train_start", "train_end", "embargo_start", "embargo_end", "test_start", "test_end"):
+        assert key in row
+    assert "ta" in row and "ml" in row
+    assert out["per_slice"][0]["test_start"] < out["per_slice"][0]["test_end"]
+
 def test_aggregate_dm_no_edge_when_identical():
     from src.rl.walk_forward import aggregate_dm
 

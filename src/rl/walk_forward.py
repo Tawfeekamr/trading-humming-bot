@@ -47,6 +47,17 @@ def walk_forward_slices(
     return slices
 
 
+def strict_training_end_date(index, boundary_index: int):
+    """Return an inclusive trainer date strictly before a boundary timestamp."""
+    from datetime import timedelta
+
+    if boundary_index <= 0 or boundary_index >= len(index):
+        raise ValueError("boundary_index must identify a non-initial timestamp")
+    boundary = index[boundary_index]
+    boundary_date = boundary.date() if hasattr(boundary, "date") else boundary
+    return boundary_date - timedelta(days=1)
+
+
 def pool_returns(
     slice_returns_a: Sequence[np.ndarray],
     slice_returns_b: Sequence[np.ndarray],
@@ -204,16 +215,13 @@ def run_walk_forward(
     if not slices:
         print(f"[{pair}] series too short for {train_bars}+{test_bars} slices")
         return {"pair": pair, "slices": 0}
-
     print(f"[{pair}] {len(slices)} walk-forward slices")
     ppo_returns, rf_returns, ta_returns = [], [], []
     ppo_exposure, rf_exposure, ta_exposure = [], [], []
     per_slice, failed, model_paths = [], [], []
     for i, (ts, te, vs, ve) in enumerate(slices):
         try:
-            train_end_date = (
-                df.index[vs].date() if hasattr(df.index[vs], "date") else df.index[vs]
-            )
+            train_end_date = strict_training_end_date(df.index, vs)
             model_path = f"models/rl/_wf_{pair}_slice{i}.zip"
             _train_slice_subprocess(pair, train_end_date, train_bars, timesteps, model_path)
             test_df = df.iloc[max(0, vs - warmup):ve]
@@ -231,8 +239,19 @@ def run_walk_forward(
             ppo_exposure.append(np.asarray(ppo_sum.get("exposure_array", np.zeros(n)))[:n])
             rf_exposure.append(np.asarray(rf_sum.get("exposure_array", np.zeros(n)))[:n])
             ta_exposure.append(np.ones(n, dtype=np.float64))
-            model_paths.append(model_path)
-            per_slice.append({"slice": i, "ppo": ppo_sum, "rf": rf_sum})
+            per_slice.append({
+                "slice": i,
+                "train_start": str(df.index[ts]),
+                "train_end": str(df.index[te - 1]),
+                "embargo_start": str(df.index[te]) if embargo_bars else None,
+                "embargo_end": str(df.index[vs - 1]) if embargo_bars else None,
+                "test_start": str(df.index[vs]),
+                "test_end": str(df.index[ve - 1]),
+                "ppo": ppo_sum,
+                "rf": rf_sum,
+                "ml": rf_sum,
+                "ta": {"trade_count": 1, "returns_array": ta_ret, "time_in_market": 1.0},
+            })
             print(
                 f"  slice {i}: PPO {ppo_sum['Total Return']} | RF {rf_sum['Total Return']}",
                 flush=True,
@@ -243,7 +262,7 @@ def run_walk_forward(
 
     stat, p, n = aggregate_dm(ppo_returns, rf_returns)
     ta_all, ml_all = pool_returns(ta_returns, rf_returns)
-    ta_stat, ta_p = aggregate_dm(ta_returns, rf_returns)
+    ta_stat, ta_p, ta_n = aggregate_dm(ta_returns, rf_returns)
     print(
         f"[{pair}] pooled DM (PPO vs RF): stat={stat:.3f} p={p:.4f} n={n} "
         f"({len(failed)} slices failed)",
@@ -253,16 +272,26 @@ def run_walk_forward(
     from src.ml.evaluation_report import summarize_returns, write_report
     from src.ml.promotion_gate import evaluate
 
-    def summarize(series, exposures):
+    def summarize(series, exposures, trade_count):
         values = pool_returns(series, exposures)[0]
         exposure_values = pool_returns(exposures, series)[0]
-        return summarize_returns(values, exposure_values, fees=fees + slippage)
+        return summarize_returns(
+            values, exposure_values, fees=fees + slippage, trade_count=trade_count
+        )
 
-    ppo_metrics = summarize(ppo_returns, ppo_exposure)
-    rf_metrics = summarize(rf_returns, rf_exposure)
-    ta_metrics = summarize(ta_returns, ta_exposure)
+    ppo_trade_count = sum(int(row["ppo"].get("trade_count", 0)) for row in per_slice)
+    rf_trade_count = sum(int(row["rf"].get("trade_count", 0)) for row in per_slice)
+    ta_trade_count = len(per_slice)
+    ppo_metrics = summarize(ppo_returns, ppo_exposure, ppo_trade_count)
+    rf_metrics = summarize(rf_returns, rf_exposure, rf_trade_count)
+    ta_metrics = summarize(ta_returns, ta_exposure, ta_trade_count)
     gate_metrics = {
-        "trade_count": sum(int(row["ppo"].get("trade_count", 0)) for row in per_slice),
+        "trade_count": ppo_trade_count,
+        "trade_counts_by_strategy": {
+            "ppo": ppo_trade_count,
+            "rf": rf_trade_count,
+            "ta": ta_trade_count,
+        },
         "window_count": len(per_slice),
         "ppo_profit_factor": ppo_metrics["profit_factor"],
         "rf_profit_factor": rf_metrics["profit_factor"],
@@ -274,11 +303,27 @@ def run_walk_forward(
         "rf_total_return": rf_metrics["total_return"],
     }
     promotion = evaluate(gate_metrics)
+
+    def compact(values):
+        return {
+            key: value
+            for key, value in values.items()
+            if key not in {"returns_array", "equity_curve", "exposure_array"}
+        }
+
     report_slices = [
         {
             "slice": row["slice"],
-            "ppo": {key: value for key, value in row["ppo"].items() if key not in {"returns_array", "equity_curve", "exposure_array"}},
-            "rf": {key: value for key, value in row["rf"].items() if key not in {"returns_array", "equity_curve", "exposure_array"}},
+            "train_start": row["train_start"],
+            "train_end": row["train_end"],
+            "embargo_start": row["embargo_start"],
+            "embargo_end": row["embargo_end"],
+            "test_start": row["test_start"],
+            "test_end": row["test_end"],
+            "ppo": compact(row["ppo"]),
+            "rf": compact(row["rf"]),
+            "ml": compact(row["ml"]),
+            "ta": compact(row["ta"]),
         }
         for row in per_slice
     ]
