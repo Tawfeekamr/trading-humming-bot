@@ -51,6 +51,47 @@ def _fmt_duration(seconds: float) -> str:
         return f"{h}h{m}m"
     d, h = divmod(h, 24)
     return f"{d}d{h}h"
+def format_ml_status(report: dict) -> str:
+    """Format the persisted ML/RL runtime report for operator commands."""
+    status = report.get("status") if isinstance(report, dict) else {}
+    status = status if isinstance(status, dict) else {}
+    cache = status.get("cache") if isinstance(status.get("cache"), dict) else {}
+    model = status.get("model") if isinstance(status.get("model"), dict) else {}
+    shadow = status.get("shadow") if isinstance(status.get("shadow"), dict) else {}
+    evidence = status.get("evidence") if isinstance(status.get("evidence"), dict) else {}
+    reasons = cache.get("drift_reasons") or []
+    if isinstance(reasons, str):
+        reasons = [reasons]
+    reason_text = ",".join(str(reason) for reason in reasons) or "none"
+    ppo_active = "true" if report.get("ppo_active") is True else "false"
+    return (
+        "🤖 <b>ML/RL Runtime</b>\n"
+        f"Cache: {cache.get('state', 'missing')} "
+        f"(age_ms={cache.get('age_ms', '?')})\n"
+        f"Model: {cache.get('model_version') or model.get('version') or 'missing'}\n"
+        f"Drift: {reason_text}\n"
+        f"Shadow: {shadow.get('state', 'missing')} "
+        f"(decision_age_ms={shadow.get('decision_age_ms', '?')})\n"
+        f"PPO active: {ppo_active}\n"
+        f"Evidence: {evidence.get('state', 'inconclusive')}"
+    )
+
+
+def _read_ml_report(path: str | os.PathLike[str] | None = None) -> dict:
+    target = Path(path or os.environ.get("ML_REPORT_PATH", "data/ml_runtime_report.json"))
+    try:
+        value = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return {
+            "ppo_active": False,
+            "status": {
+                "cache": {"state": "missing"},
+                "model": {"state": "missing"},
+                "shadow": {"state": "missing"},
+                "evidence": {"state": "inconclusive"},
+            },
+        }
+    return value if isinstance(value, dict) else {}
 
 
 def _signal_price(symbol: str) -> float:
@@ -126,7 +167,7 @@ class TelegramCommandHandler:
         return (
             "📡 <b>Telegram Command Handler Online</b>\n"
             "•••\n"
-            "<b>System:</b> /status /price /logs /errors /readiness\n"
+            "<b>System:</b> /status /price /logs /errors /readiness /ml_status\n"
             "<b>Overview:</b> /bots /pnl_all /trades /help\n"
             "<b>Capital:</b> /capital\n"
             "<b>Grid:</b> /grid_status\n"
@@ -241,6 +282,7 @@ class TelegramCommandHandler:
             "errors": self._cmd_errors,
             "price": self._cmd_price,
             "readiness": self._cmd_readiness,
+            "ml_status": self._cmd_ml_status,
             # P&L + trades
             "pnl_all": self._cmd_pnl_all,
             "trades": self._cmd_trades,
@@ -1054,11 +1096,19 @@ class TelegramCommandHandler:
                 lines.append("💡 Recommendation: Keep paper trading until August, then go live with $5-10K first.")
             else:
                 lines.append("💡 Recommendation: Continue paper trading to build track record.")
-
+            lines.append("•••")
+            lines.extend(format_ml_status(_read_ml_report()).splitlines())
             update.message.reply_text("\n".join(lines), parse_mode="HTML")
         except Exception as e:
             logger.error(f"Error in /readiness: {e}")
             update.message.reply_text(f"⚠️ Error computing readiness: {e}")
+    def _cmd_ml_status(self, update, context):
+        """Show ML cache, model, drift, shadow, and PPO activation state."""
+        try:
+            update.message.reply_text(format_ml_status(_read_ml_report()), parse_mode="HTML")
+        except Exception as e:
+            logger.error(f"Error in /ml_status: {e}")
+            update.message.reply_text(f"⚠️ Error reading ML status: {e}")
 
     def _cmd_server(self, update, context):
         try:
@@ -1443,6 +1493,7 @@ class TelegramCommandHandler:
             "/logs — Last 30 lines from today's bot log\n"
             "/errors — Recent errors and crashes\n"
             "/readiness — Production readiness score (0-100)\n"
+            "/ml_status — ML cache/model/shadow readiness\n"
             "•••\n"
             "<b>Grid:</b>\n"
             "/grid_status — Grid state, pending orders, uptime\n"

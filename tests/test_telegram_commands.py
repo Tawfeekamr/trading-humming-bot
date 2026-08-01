@@ -20,6 +20,7 @@ from src.notifications.telegram_commands import (
     _fmt_price,
     _fmt_duration,
     _signal_price,
+    format_ml_status,
 )
 
 
@@ -95,6 +96,31 @@ class TestSystemCommands:
         monkeypatch.chdir(tmp_path)
         monkeypatch.setattr("urllib.request.urlopen", _mock_urlopen({"strategies": []}))
         _handler(tmp_path)._cmd_readiness(_mock_update(), None)
+    def test_ml_status_reports_runtime_health_and_ppo_is_inactive(self):
+        text = format_ml_status(
+            {
+                "ppo_active": False,
+                "status": {
+                    "cache": {
+                        "state": "stale",
+                        "age_ms": 200000,
+                        "model_version": "rf-v1",
+                        "drift_reasons": ["low_confidence"],
+                    },
+                    "shadow": {
+                        "state": "shadow",
+                        "decision_age_ms": 12,
+                    },
+                    "evidence": {"state": "inconclusive"},
+                },
+            }
+        )
+        assert "Cache: stale" in text
+        assert "Model: rf-v1" in text
+        assert "Drift: low_confidence" in text
+        assert "Shadow: shadow" in text
+        assert "PPO active: false" in text
+        assert "Evidence: inconclusive" in text
 
     def test_help(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)

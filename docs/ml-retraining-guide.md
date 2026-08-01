@@ -57,3 +57,29 @@ Existing confidence and TA fallback behavior remains active.
 - [ ] Copy `.pkl.new` → `.pkl` together with its immutable manifest
 - [ ] Restart Python container to pick up new model
 - [ ] Monitor `/system` Telegram command for regime changes for 30 minutes
+
+## Runtime Attribution Report
+
+Generate a deterministic report from the unified trade journal and the isolated
+PPO shadow decision journal:
+
+```bash
+python scripts/ml_report.py \
+  --db data/trades.db \
+  --shadow data/shadow_routing.jsonl \
+  --since 2026-08-01T00:00:00Z \
+  --out data/ml_runtime_report.json
+```
+
+The report keeps the Task 3 `metadata`/`metrics`/`slices` shape and adds runtime
+coverage fields. `attribution_missing_count` counts old trades with no
+entry-time attribution; a later cache value is never used to fill that gap.
+`ppo_active` is always `false` while routing is shadow-only. Malformed SQLite
+rows, attribution objects, or shadow JSONL cause a non-zero exit; an
+`inconclusive` evidence state is a valid report and is not an input error.
+
+The Telegram `/readiness` response includes cache age, model version, drift
+reason codes, shadow decision age, evidence state, and the explicit PPO active
+flag. `/ml_status` returns the same operator block. Runtime state is reported
+as `live`, `shadow`, `stale`, `missing`, or `inconclusive`; model files alone
+never imply active PPO routing.
