@@ -23,8 +23,17 @@ pub struct TickContext {
     /// Real ML regime confidence (0.0–1.0). Passed through from regime_cache
     /// instead of being fabricated per-regime. 0.0 when no regime data available.
     pub regime_confidence: f64,
+    /// Optional provenance and freshness from the regime cache.
+    pub regime_model_version: Option<String>,
+    pub regime_artifact_sha256: Option<String>,
+    pub regime_feature_contract_hash: Option<String>,
+    pub regime_age_ms: Option<i64>,
+    /// Routing decision visible at entry time for audit attribution.
+    pub router_mode: Option<String>,
+    pub router_action: Option<String>,
+    pub router_engine: Option<String>,
+    pub router_size_mult: Option<f64>,
     pub timestamp: i64,
-    /// Central capital allocator (Phase B). None when capital management isn't
     /// wired (strategies then size from their own config, uncapped).
     pub capital: Option<CapitalManager>,
     /// True while the engine replays historical bars to warm indicators on

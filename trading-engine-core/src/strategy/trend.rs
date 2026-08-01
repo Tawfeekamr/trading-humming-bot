@@ -266,6 +266,27 @@ impl TrendStrategy {
         self
     }
 
+    fn build_close_context(
+        &self,
+        stop_loss: f64,
+        take_profit: f64,
+        r_multiple: Option<f64>,
+    ) -> crate::strategy::trade_journal::TradeContext {
+        let mut ctx = crate::strategy::trade_journal::TradeContext {
+            sl_price: Some(stop_loss),
+            tp_price: Some(take_profit),
+            r_multiple,
+            ..Default::default()
+        };
+        if let Some(attribution) = &self.entry_attribution {
+            ctx.context_json = crate::strategy::trade_journal::merge_regime_context_json(
+                ctx.context_json.as_deref(),
+                attribution,
+            );
+        }
+        ctx
+    }
+
     /// Log a close event to the journal (no-op if the journal is unavailable).
     #[allow(clippy::too_many_arguments)]
     fn log_close(
@@ -286,21 +307,9 @@ impl TrendStrategy {
         // Real audit context: the actual stop/take-profit used + realized R.
         let risk = (entry_price - stop_loss).abs() * amount;
         let r_multiple = if risk > 0.0 { Some(pnl / risk) } else { None };
-        let mut ctx = crate::strategy::trade_journal::TradeContext {
-            sl_price: Some(stop_loss),
-            tp_price: Some(take_profit),
-            r_multiple,
-            ..Default::default()
-        };
-        if let Some(attribution) = &self.entry_attribution {
-            ctx.context_json = crate::strategy::trade_journal::merge_regime_context_json(
-                ctx.context_json.as_deref(),
-                attribution,
-            );
-        }
+        let ctx = self.build_close_context(stop_loss, take_profit, r_multiple);
         crate::strategy::trade_journal::log_unified("trend", &self.pair, Some(side_str), Some(entry_price), Some(exit_price), Some(amount), pnl, Some(exit_reason), Some(duration), &ctx);
     }
-
     pub fn update_indicators(&mut self, bar: &Bar) {
         self.ema_fast.update(bar.close);
         self.ema_slow.update(bar.close);
@@ -1017,9 +1026,15 @@ impl Strategy for TrendStrategy {
                     self.entry_attribution = Some(crate::strategy::trade_journal::RegimeAttribution {
                         regime_at_entry,
                         regime_confidence: ctx.regime.map(|_| ctx.regime_confidence),
+                        regime_model_version: ctx.regime_model_version.clone(),
+                        regime_artifact_sha256: ctx.regime_artifact_sha256.clone(),
                         ml_gate_decision: Some(gate_decision.to_string()),
+                        router_mode: ctx.router_mode.clone(),
+                        router_action: ctx.router_action.clone(),
+                        router_engine: ctx.router_engine.clone(),
+                        router_size_mult: ctx.router_size_mult,
                         decision_timestamp: Some(ctx.timestamp),
-                        ..Default::default()
+                        ml_age_ms: ctx.regime_age_ms,
                     });
                     // Record entry intent: the Fill struct carries no reduce_only,
                     // so on_fill can't otherwise tell this opening fill from a
@@ -1605,6 +1620,14 @@ mod tests {
             open_orders: Vec::new(),
             regime: None,
             regime_confidence: 0.0,
+            regime_model_version: None,
+            regime_artifact_sha256: None,
+            regime_feature_contract_hash: None,
+            regime_age_ms: None,
+            router_mode: None,
+            router_action: None,
+            router_engine: None,
+            router_size_mult: None,
             timestamp: 1_700_000_001_000,
             capital: None,
             replay: false,
@@ -2056,5 +2079,31 @@ mod tests {
         assert!(!orders.iter().any(|o| o.reduce_only && matches!(o.order_type, OrderTypeReq::Market)),
             "no Market reduce-only close while paused-not-flattened");
         assert!(orders.iter().all(|o| o.reduce_only), "no new (non-reduce_only) entry while paused");
+    }
+
+    #[test]
+    fn trend_close_context_contains_entry_provenance() {
+        let mut strategy = warmed_strategy(false);
+        strategy.entry_attribution = Some(crate::strategy::trade_journal::RegimeAttribution {
+            regime_at_entry: Some("trending".into()),
+            regime_confidence: Some(0.9),
+            regime_model_version: Some("rf-v1".into()),
+            regime_artifact_sha256: Some("abc".into()),
+            ml_gate_decision: Some("allowed".into()),
+            router_mode: Some("active".into()),
+            router_action: Some("route".into()),
+            router_engine: Some("trend".into()),
+            router_size_mult: Some(1.0),
+            decision_timestamp: Some(123),
+            ml_age_ms: Some(25),
+            ..Default::default()
+        });
+        let context = strategy.build_close_context(95.0, 110.0, Some(0.5));
+        let value: serde_json::Value =
+            serde_json::from_str(context.context_json.as_deref().unwrap()).unwrap();
+        assert_eq!(value["regime_model_version"], "rf-v1");
+        assert_eq!(value["regime_artifact_sha256"], "abc");
+        assert_eq!(value["router_engine"], "trend");
+        assert_eq!(value["ml_age_ms"], 25);
     }
 }

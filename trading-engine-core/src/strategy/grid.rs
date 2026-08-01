@@ -486,6 +486,20 @@ impl GridStrategy {
     pub fn growth_ratio(&self) -> f64 {
         self.current_capital / self.initial_capital
     }
+    fn build_grid_close_context(&self, level_key: &str) -> crate::strategy::trade_journal::TradeContext {
+        let mut ctx = crate::strategy::trade_journal::TradeContext {
+            entry_reason: Some(level_key.to_string()),
+            context_json: Some(serde_json::json!({"entry_reason": level_key}).to_string()),
+            ..Default::default()
+        };
+        if let Some(attribution) = &self.entry_attribution {
+            ctx.context_json = crate::strategy::trade_journal::merge_regime_context_json(
+                ctx.context_json.as_deref(),
+                attribution,
+            );
+        }
+        ctx
+    }
 }
 
 fn round_down(value: f64, increment: f64) -> f64 {
@@ -712,9 +726,15 @@ impl Strategy for GridStrategy {
                         MarketRegime::Danger => "danger",
                     }.to_string()),
                     regime_confidence: ctx.regime.map(|_| ctx.regime_confidence),
+                    regime_model_version: ctx.regime_model_version.clone(),
+                    regime_artifact_sha256: ctx.regime_artifact_sha256.clone(),
                     ml_gate_decision: Some(if ctx.regime.is_some() { "allowed" } else { "ta_fallback" }.to_string()),
+                    router_mode: ctx.router_mode.clone(),
+                    router_action: ctx.router_action.clone(),
+                    router_engine: ctx.router_engine.clone(),
+                    router_size_mult: ctx.router_size_mult,
                     decision_timestamp: Some(ctx.timestamp),
-                    ..Default::default()
+                    ml_age_ms: ctx.regime_age_ms,
                 });
             }
             orders.push(req);
@@ -760,8 +780,8 @@ impl Strategy for GridStrategy {
         Ok(orders)
     }
 
+
     async fn on_fill(&mut self, fill: &Fill) -> Result<Vec<OrderRequest>> {
-        // Identify OUR fills via client_order_id, which carries the "grid_…" marker
         // the engine tagged ("owner:{idx}#grid_{pair}_{side}_{i}"). fill.order_id is
         // the connector's own id ("paper_N") and must NOT be used for this check —
         // doing so silently dropped every grid fill (no P&L, no cooldown, no notify).
@@ -810,18 +830,7 @@ impl Strategy for GridStrategy {
                     self.pair, fill.quantity, fill.price, level_key, realized);
                 let msg = grid_sell_message(&self.pair, &level_key, fill.price, realized, self.total_pnl);
                 tokio::spawn(async move { let _ = tg.send(&msg).await; });
-                // Only the SELL (a realized round-trip) is journaled — like other engines.
-                let mut grid_ctx = crate::strategy::trade_journal::TradeContext {
-                    entry_reason: Some(level_key.clone()),
-                    context_json: Some(serde_json::json!({"entry_reason": level_key}).to_string()),
-                    ..Default::default()
-                };
-                if let Some(attribution) = &self.entry_attribution {
-                    grid_ctx.context_json = crate::strategy::trade_journal::merge_regime_context_json(
-                        grid_ctx.context_json.as_deref(),
-                        attribution,
-                    );
-                }
+                let grid_ctx = self.build_grid_close_context(&level_key);
                 crate::strategy::trade_journal::log_unified(
                     "grid", &self.pair, Some("BUY"), Some(avg_cost), Some(fill.price),
                     Some(fill.quantity), realized, Some("grid_sell"), None, &grid_ctx);
@@ -1368,5 +1377,30 @@ mod tests {
         assert!(grid.force_flat_close.is_none(), "no close order when inventory is 0");
         assert_eq!(grid.pending_cancels().len(), 1, "resting order still cancelled");
         assert_eq!(grid.state, GridState::Paused);
+    }
+    #[test]
+    fn grid_close_context_contains_entry_provenance() {
+        let mut grid = make_grid();
+        grid.entry_attribution = Some(crate::strategy::trade_journal::RegimeAttribution {
+            regime_at_entry: Some("ranging".into()),
+            regime_confidence: Some(0.8),
+            regime_model_version: Some("rf-v1".into()),
+            regime_artifact_sha256: Some("abc".into()),
+            ml_gate_decision: Some("ta_fallback".into()),
+            router_mode: Some("active".into()),
+            router_action: Some("route".into()),
+            router_engine: Some("grid".into()),
+            router_size_mult: Some(0.75),
+            decision_timestamp: Some(321),
+            ml_age_ms: Some(40),
+            ..Default::default()
+        });
+        let context = grid.build_grid_close_context("sell_0");
+        let value: serde_json::Value =
+            serde_json::from_str(context.context_json.as_deref().unwrap()).unwrap();
+        assert_eq!(value["entry_reason"], "sell_0");
+        assert_eq!(value["regime_model_version"], "rf-v1");
+        assert_eq!(value["router_engine"], "grid");
+        assert_eq!(value["ml_age_ms"], 40);
     }
 }

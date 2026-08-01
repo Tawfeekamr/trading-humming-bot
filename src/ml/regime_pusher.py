@@ -29,6 +29,7 @@ import os
 import pickle
 import time
 from typing import Optional
+import pandas as pd
 import requests
 
 from src.data.feature_contract import MARKET_FEATURE_COLS, assert_market_feature_contract
@@ -219,7 +220,7 @@ def collect_regime(
             log.error("Model metadata unavailable for %s: %s — skipping", pair, exc)
             continue
         regime, confidence = result
-        timestamp_ms = int(df.index[-1].timestamp() * 1000)
+        timestamp_ms = int(time.time() * 1000)
         updates.append(build_regime_update(pair, regime, confidence, metadata, timestamp_ms))
         log.info(
             "%s → regime=%s(%s) confidence=%.3f",

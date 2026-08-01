@@ -576,8 +576,8 @@ impl Engine {
         // Apply the current PPO routing decision (paper-gate). Read once per
         // tick; None (no entry yet, or stale per TTL) ⇒ leave strategies as-is
         // so a cold start or router outage doesn't accidentally pause everything.
-        if let Some(r) = self.routing_cache.get().await {
-            // Guard: only apply when `active_engine` names an instantiated
+        let routing_entry = self.routing_cache.get().await;
+        if let Some(r) = routing_entry.as_ref() {
             // strategy (or it's an explicit GO_FLAT). An unknown name — e.g.
             // "swing" after its strategy was removed while the on-disk PPO
             // policy can still emit swing actions — would match no strategy,
@@ -627,17 +627,27 @@ impl Engine {
             });
 
             let balances = self.connector.get_balances().await.unwrap_or_default();
-
-            let (regime, regime_confidence) = self.regime_cache.get(&pair).await
-                .map(|(r, c)| {
-                    let regime = match r {
+            let decision_timestamp = chrono::Utc::now().timestamp_millis();
+            let regime_entry = self.regime_cache.get_entry(&pair).await;
+            let (regime, regime_confidence, regime_model_version, regime_artifact_sha256,
+                regime_feature_contract_hash, regime_age_ms) = regime_entry
+                .map(|entry| {
+                    let regime = match entry.regime {
                         0 => MarketRegime::Ranging,
                         1 => MarketRegime::Trending,
                         _ => MarketRegime::Danger,
                     };
-                    (Some(regime), c)
+                    let age_ms = (decision_timestamp - entry.timestamp).max(0);
+                    (
+                        Some(regime),
+                        entry.confidence,
+                        entry.model_version,
+                        entry.artifact_sha256,
+                        entry.feature_contract_hash,
+                        Some(age_ms),
+                    )
                 })
-                .unwrap_or((None, 0.0));
+                .unwrap_or((None, 0.0, None, None, None, None));
 
             let ctx = TickContext {
                 order_book,
@@ -646,7 +656,15 @@ impl Engine {
                 open_orders: Vec::new(),
                 regime,
                 regime_confidence,
-                timestamp: chrono::Utc::now().timestamp_millis(),
+                regime_model_version,
+                regime_artifact_sha256,
+                regime_feature_contract_hash,
+                regime_age_ms,
+                router_mode: routing_entry.as_ref().map(|_| "active".to_string()),
+                router_action: routing_entry.as_ref().map(|r| if r.flat { "flat" } else { "route" }.to_string()),
+                router_engine: routing_entry.as_ref().map(|r| r.active_engine.clone()),
+                router_size_mult: routing_entry.as_ref().map(|r| r.size_mult),
+                timestamp: decision_timestamp,
                 capital: Some(self.capital.clone()),
                 replay: false,
             };
@@ -931,6 +949,14 @@ impl Engine {
                             open_orders: vec![],
                             regime: None, // No regime during warmup replay
                             regime_confidence: 0.0,
+                            regime_model_version: None,
+                            regime_artifact_sha256: None,
+                            regime_feature_contract_hash: None,
+                            regime_age_ms: None,
+                            router_mode: None,
+                            router_action: None,
+                            router_engine: None,
+                            router_size_mult: None,
                             timestamp: bar.timestamp,
                             capital: None,
                             replay: true,

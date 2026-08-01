@@ -878,7 +878,12 @@ mod tests {
             regime_model_version: Some("rf-v1".into()),
             regime_artifact_sha256: Some("abc".into()),
             ml_gate_decision: Some("allowed".into()),
+            router_mode: Some("active".into()),
+            router_action: Some("route".into()),
+            router_engine: Some("trend".into()),
+            router_size_mult: Some(1.25),
             decision_timestamp: Some(123),
+            ml_age_ms: Some(25),
             ..Default::default()
         };
         let merged = merge_regime_context_json(Some(r#"{"entry_reason":"buy_0"}"#), &attribution).unwrap();
@@ -886,5 +891,10 @@ mod tests {
         assert_eq!(value["entry_reason"], "buy_0");
         assert_eq!(value["regime_at_entry"], "trending");
         assert_eq!(value["regime_confidence"], 0.91);
+        assert_eq!(value["router_mode"], "active");
+        assert_eq!(value["router_action"], "route");
+        assert_eq!(value["router_engine"], "trend");
+        assert_eq!(value["router_size_mult"], 1.25);
+        assert_eq!(value["ml_age_ms"], 25);
     }
 }
