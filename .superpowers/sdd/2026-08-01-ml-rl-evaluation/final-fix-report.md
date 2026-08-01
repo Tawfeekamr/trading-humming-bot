@@ -35,3 +35,20 @@ Implemented all eight findings from the final review package while keeping PPO s
 - Legacy shadow journals remain readable for stale-evidence reporting, but every record must satisfy the canonical action/engine/size schema; freshness is reported separately by runtime status.
 - A loaded pusher classifier intentionally continues reporting its validated artifact checksum after an on-disk replacement; calling `load_models` is the explicit reload boundary.
 - Promotion remains report-only and shadow-only; no automatic routing activation was added.
+
+
+## Follow-up verifier fix
+
+- `scripts/verify_ml_rl_rollout.py` now keeps PPO checksum/path binding in `_verify_evaluator_claims` but excludes PPO zip artifacts from manifest-required verification unless an actual `.metadata.json` manifest exists. RF and other manifest-backed artifacts remain strict.
+- `tests/test_ml_rl_rollout.py` adds a deterministic generated- PPO zip case with a matching checksum and no manifest sidecar; verification succeeds.
+
+Follow-up verification:
+
+- `python3 -m pytest -q tests/test_ml_rl_rollout.py`
+  - Result: **13 passed**.
+- `python3 -m pytest -q tests/test_ml_report_cli.py tests/test_ml_drift.py tests/test_ml_promotion_gate.py tests/test_rl_walk_forward.py tests/test_ml_rl_rollout.py`
+  - Result: **42 passed**.
+- `python3 -m py_compile scripts/verify_ml_rl_rollout.py`
+  - Result: passed with no output.
+
+Follow-up concern: PPO artifacts are checksum-bound and remain report-verifiable without a manifest; if a PPO manifest is later produced, it is validated under the existing strict manifest rules.

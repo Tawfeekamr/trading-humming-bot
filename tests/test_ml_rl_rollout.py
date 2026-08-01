@@ -211,3 +211,28 @@ def test_rollout_verifier_rejects_unbound_rf_checksum_claim(tmp_path):
     result = verify_ml_rl_rollout(str(tmp_path), str(report_path), str(shadow_path))
     assert result["ok"] is False
     assert "metadata_checksum_mismatch" in result["failures"]
+
+
+def test_rollout_accepts_ppo_checksum_without_manifest_sidecar(tmp_path):
+    model = tmp_path / "ppo_slice0.zip"
+    model.write_bytes(b"ppo-model")
+    digest = hashlib.sha256(model.read_bytes()).hexdigest()
+    report_path = tmp_path / "report.json"
+    shadow_path = tmp_path / "shadow.jsonl"
+    _write_report(
+        report_path,
+        _report(
+            metadata={
+                "feature_contract_hash": "features-v1",
+                "routing_mode": "shadow",
+                "model_paths": [],
+                "ppo_model_paths": ["ppo_slice0.zip"],
+                "ppo_model_sha256": [digest],
+                "verification_now_ms": 1_700_000_000_000,
+            }
+        ),
+    )
+    _shadow(shadow_path)
+    result = verify_ml_rl_rollout(str(tmp_path), str(report_path), str(shadow_path))
+    assert result["ok"] is True
+    assert "manifest_missing" not in result["failures"]

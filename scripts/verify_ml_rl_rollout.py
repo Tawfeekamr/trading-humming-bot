@@ -87,8 +87,29 @@ def _relative_path(root: Path, value: str | Path) -> Path:
     return candidate if candidate.is_absolute() else root / candidate
 
 
+def _ppo_report_paths(root: Path, report: dict[str, Any]) -> set[Path]:
+    """Resolve PPO paths separately from manifest-backed model artifacts."""
+    metadata = _report_metadata(report)
+    raw: list[Any] = []
+    for source in (metadata, report):
+        for key in ("ppo_model_paths", "ppo_models"):
+            value = source.get(key)
+            if isinstance(value, (list, tuple)):
+                raw.extend(value)
+            elif isinstance(value, str):
+                raw.append(value)
+    paths: set[Path] = set()
+    for value in raw:
+        if isinstance(value, dict):
+            value = value.get("path") or value.get("artifact")
+        if isinstance(value, str) and value:
+            paths.add(_relative_path(root, value))
+    return paths
+
+
 def _model_paths(root: Path, report: dict[str, Any]) -> list[Path]:
     metadata = _report_metadata(report)
+    ppo_paths = _ppo_report_paths(root, report)
     raw: list[Any] = []
     for source in (metadata, report):
         for key in ("model_paths", "ppo_model_paths", "model_artifacts", "artifacts", "models", "model_checksums"):
@@ -112,9 +133,18 @@ def _model_paths(root: Path, report: dict[str, Any]) -> list[Path]:
         path = _relative_path(root, value)
         if path.name.endswith(_MANIFEST_SUFFIX):
             path = Path(str(path)[: -len(_MANIFEST_SUFFIX)])
+        manifest_exists = Path(f"{path}{_MANIFEST_SUFFIX}").exists()
+        # PPO artifacts are bound by evaluator checksums below. They only enter
+        # manifest verification when a real immutable manifest exists; the PPO
+        # trainer's ordinary zip sidecar is not a model manifest.
+        if (
+            (path in ppo_paths or "_wf_" in path.name or "ppo" in path.name.lower())
+            and not manifest_exists
+        ):
+            continue
         if path not in paths:
             paths.append(path)
-    # Only discover artifacts that have a manifest.  Unrelated historical model
+    # Only discover artifacts that have a manifest. Unrelated historical model
     # files must not make a paper report fail merely by being present.
     models_root = root / "models"
     if not paths and models_root.exists():
