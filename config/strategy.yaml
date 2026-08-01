@@ -72,19 +72,16 @@ price_integrity:
   recover_consecutive_ticks: 3 # in-band ticks to clear Suspect w/o REST
   enable_gate_fallback: true
 
-# ── PPO Routing (Phase 1: declarative) ─────────────────────────────
-# Consumed by the Python live_router (src/rl/router.py) which POSTs the
-# {active_engine, size_mult, flat} decision into data/routing_cache.json;
-# the Rust engine reads that cache via RoutingCache (Task 6 wiring).
-# Rust's AppConfig has no `routing` field and no deny_unknown_fields, so this
-# block is silently ignored by the Rust config loader — declarative-only for
-# Phase 1. A future Rust `enabled` gate may consume `routing.enabled`.
+# ── PPO Routing (shadow-only by default) ───────────────────────────
+# The Python sidecar writes validated decisions to an isolated journal.
+# It never updates data/routing_cache.json unless explicitly run in live mode.
 routing:
   enabled: true
+  mode: shadow
+  shadow_path: data/shadow_routing.jsonl
   ppo_model: models/rl/ppo_ETHUSDT_2026-07-05_clean-oos-24m.zip
   pair: ETHUSDT
   bar_seconds: 3600
-
 # ── Grid Parameters ───────────────────────────────────────────────
 grid:
   levels: 5                   # Claude: 5 is fine — activation logic matters more than count

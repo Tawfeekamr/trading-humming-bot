@@ -145,57 +145,84 @@ def build_observation(
     return np.nan_to_num(obs, nan=0.0, posinf=0.0, neginf=0.0)
 
 
+def _model_metadata(model_path: str) -> tuple[str, str]:
+    """Return a stable model label and artifact checksum for each decision."""
+    from hashlib import sha256
+    from pathlib import Path
+
+    path = Path(model_path)
+    version = path.stem or path.name or "unknown"
+    try:
+        digest = sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        digest = "unavailable"
+    return version, digest
+
+
+def _observation_timestamp_ms(row: Any, fallback_ms: int) -> int:
+    """Extract a feature row timestamp without making pandas a hard dependency."""
+    value = getattr(row, "name", None)
+    if value is None:
+        return fallback_ms
+    try:
+        return int(value.timestamp() * 1000)
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        try:
+            return int(value)
+        except (TypeError, ValueError, OverflowError):
+            return fallback_ms
+
+
 def run_loop(
     pair: str,
     model_path: str,
     rust_url: str,
     bar_seconds: int = 3600,
+    shadow: bool = True,
+    shadow_path: str = "data/shadow_routing.jsonl",
+    max_age_ms: int = 2 * 3600 * 1000,
 ) -> None:
-    """Each closed 1h bar: compute features, predict, POST the routing decision.
+    """Compute one action per closed bar, shadowing by default.
 
-    Blocking forever loop. Intended to be the entrypoint of a dedicated
-    routing sidecar container (paper-gated): it predicts an action from the
-    trained PPO policy and pushes the decoded routing payload to the Rust
-    engine at ``POST /api/v1/routing``. The engine then pauses/activates
-    strategies and scales sizes accordingly.
-
-    Heavy imports (sb3 via ``PPORouter``, ``requests``, ``compute_features``,
-    ``EnvConfig``) are deferred to here so importing this module stays light.
-
-    Args:
-        pair: trading pair, e.g. ``"BTCUSDT"`` — passed to ``load_klines``.
-        model_path: path to the trained PPO ``.zip`` artifact.
-        rust_url: base URL of the Rust engine (e.g. ``"http://localhost:8080"``).
-        bar_seconds: sleep between bars (default 3600 = 1h).
+    In shadow mode the decoded decision is validated and appended to the
+    isolated JSONL journal. The active routing POST is reachable only through
+    the explicit ``shadow=False`` opt-in.
     """
     import time
 
     import requests
 
     from src.rl.features import FEATURE_COLS, compute_features
-    from src.rl.router import PPORouter
+    from src.rl.router import PPORouter, decode_routing_action
 
-    # Default config; we only use ``initial_capital`` as the unrealised_pct
-    # denominator (matches the training-time reference capital).
+    journal = None
+    decision_type = None
+    if shadow:
+        from src.rl.shadow_journal import log_decision
+        from src.rl.shadow_schema import ShadowRoutingDecision, validate_decision
+
+        journal = log_decision
+        decision_type = ShadowRoutingDecision
+
     try:
         from src.rl.env import EnvConfig
 
-        initial_capital = float(EnvConfig().initial_capital)
-    except Exception:  # pragma: no cover — env.py import should not fail in
-        # any environment where sb3 is installed (env.py imports gymnasium),
-        # but we degrade gracefully rather than crash the loop on import.
-        initial_capital = 10_000.0
-
-    router = PPORouter(model_path)
+        configured_initial_capital = float(EnvConfig().initial_capital)
+    except Exception:  # pragma: no cover - optional heavy runtime dependency
+        configured_initial_capital = 10_000.0
     initial_capital = None
+
+    model_version, model_sha256 = _model_metadata(model_path)
+    try:
+        router = PPORouter(model_path)
+    except Exception as exc:
+        router = None
+        logger.error("[live_router] %s model failure: %s", "shadow" if shadow else "live", exc)
 
     while True:
         try:
-            # Live 1h bars from the engine. Replaces load_klines(today-2d, today),
-            # which pulled Binance's delayed daily archive (1-2 day lag, no current
-            # day) and used a window below compute_features' ~50-bar warmup — so a
-            # live router could never build a valid feature row. The engine's bar
-            # cache holds 500 live 1h bars.
+            if router is None:
+                raise RuntimeError("routing model unavailable")
             df = _fetch_live_klines(rust_url, pair)
             feats = compute_features(df)[FEATURE_COLS]
             if feats.empty:
@@ -204,32 +231,89 @@ def run_loop(
 
             equity = _get_equity(rust_url)
             if initial_capital is None:
-                initial_capital = equity if equity > 0 else 10_000.0
-                logger.info(f"Live router reference initial_capital set to ${initial_capital:.2f}")
+                initial_capital = (
+                    equity if equity > 0 else configured_initial_capital
+                )
+                logger.info(
+                    "Live router reference initial_capital set to $%.2f",
+                    initial_capital,
+                )
 
             obs = build_observation(
                 row,
                 {"equity": equity, "initial_equity": initial_capital},
             )
+            action = int(router.predict(obs))
+            engine, size_mult = decode_routing_action(action)
+            payload = decode_action(action)
+            now_ms = time.time_ns() // 1_000_000
 
-            action = router.predict(obs)
-            payload = decode_action(int(action))
-
-            try:
-                requests.post(
-                    f"{rust_url}/api/v1/routing",
-                    json=payload,
-                    timeout=5,
+            if shadow:
+                observation_timestamp_ms = _observation_timestamp_ms(row, now_ms)
+                decision = decision_type(
+                    timestamp_ms=observation_timestamp_ms,
+                    pair=pair,
+                    action=action,
+                    engine=engine,
+                    size_mult=size_mult,
+                    model_version=model_version,
+                    model_sha256=model_sha256,
+                    observation_age_ms=max(0, now_ms - observation_timestamp_ms),
                 )
-            except requests.RequestException:
-                # Network blip — retry on the next bar.
-                pass
+                valid, reason = validate_decision(
+                    decision.to_dict(), now_ms=now_ms, max_age_ms=max_age_ms
+                )
+                if not valid:
+                    raise ValueError(f"invalid shadow decision: {reason}")
+                journal(shadow_path, decision)
+            else:
+                try:
+                    requests.post(
+                        f"{rust_url}/api/v1/routing",
+                        json=payload,
+                        timeout=5,
+                    )
+                except requests.RequestException:
+                    # Network blip — retry on the next bar.
+                    pass
         except Exception as exc:  # never let one bad bar kill the sidecar
-            import sys
-
-            print(f"[live_router] cycle failed: {exc}", file=sys.stderr)
+            logger.error(
+                "[live_router] %s cycle failed: %s",
+                "shadow" if shadow else "live",
+                exc,
+            )
 
         time.sleep(bar_seconds)
+
+
+def main(argv: list[str] | None = None) -> None:
+    """CLI entrypoint; shadow mode is the safe default."""
+    import argparse
+    import os
+
+    parser = argparse.ArgumentParser(description="PPO routing sidecar")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--shadow", dest="shadow", action="store_true")
+    mode.add_argument("--live", dest="shadow", action="store_false")
+    parser.set_defaults(shadow=True)
+    parser.add_argument("--pair", default="ETHUSDT")
+    parser.add_argument("--model", "--model-path", dest="model_path", required=True)
+    parser.add_argument(
+        "--rust-url", default=os.environ.get("RUST_ENGINE_URL", "http://bot:8080")
+    )
+    parser.add_argument("--shadow-path", default="data/shadow_routing.jsonl")
+    parser.add_argument("--bar-seconds", type=int, default=3600)
+    args = parser.parse_args(argv)
+    run_loop(
+        args.pair,
+        args.model_path,
+        args.rust_url,
+        bar_seconds=args.bar_seconds,
+        shadow=args.shadow,
+        shadow_path=args.shadow_path,
+    )
+
+
 
 
 def _get_equity(rust_url: str) -> float:
@@ -288,3 +372,5 @@ def _fetch_live_klines(rust_url: str, pair: str, limit: int = 500):
     df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True, errors="coerce")
     df = df.set_index("timestamp").sort_index()
     return df[["open", "high", "low", "close", "volume"]]
+if __name__ == "__main__":  # pragma: no cover - exercised by the container
+    main()

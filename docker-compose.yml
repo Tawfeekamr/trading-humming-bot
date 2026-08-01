@@ -30,3 +30,28 @@ services:
       - ./models:/home/hummingbot/models
       - ./.env:/home/hummingbot/.env
       - ./config:/home/hummingbot/config:ro
+
+
+  trading-rl-shadow:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command:
+      - python3
+      - -m
+      - src.rl.live_router
+      - --shadow
+      - --pair
+      - ETHUSDT
+      - --model
+      - /home/hummingbot/models/rl/ppo_ETHUSDT_2026-07-05_clean-oos-24m.zip
+      - --rust-url
+      - http://bot:8080
+      - --shadow-path
+      - /home/hummingbot/data/shadow_routing.jsonl
+    restart: unless-stopped
+    depends_on:
+      - bot
+    volumes:
+      - ./data:/home/hummingbot/data
+      - ./models:/home/hummingbot/models

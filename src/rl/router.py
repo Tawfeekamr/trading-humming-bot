@@ -6,12 +6,20 @@ Provides a unified interface to step the Gymnasium environment using either:
 2. The Supervised Random Forest baseline.
 """
 from __future__ import annotations
-
 import numpy as np
 
-# Gymnasium action space mapping (from src/rl/env.py)
-# 1 = GRID 1.0x, 4 = TREND 1.0x, 7 = SWING 1.0x, 9 = FLAT
+from src.rl.action_map import ACTION_TO_ENGINE_SIZE
 
+
+def decode_routing_action(action: int) -> tuple[str, float]:
+    """Decode and validate a PPO action using the canonical action map."""
+    if isinstance(action, bool) or not isinstance(action, (int, np.integer)):
+        raise ValueError("routing action must be an integer")
+    action = int(action)
+    if not 0 <= action < len(ACTION_TO_ENGINE_SIZE):
+        raise ValueError(f"routing action outside 0..{len(ACTION_TO_ENGINE_SIZE) - 1}")
+    engine, size_mult = ACTION_TO_ENGINE_SIZE[action]
+    return engine, float(size_mult)
 
 class RoutingPolicy:
     def predict(self, obs: np.ndarray) -> int:
