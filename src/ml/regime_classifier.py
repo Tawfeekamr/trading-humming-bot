@@ -1,4 +1,5 @@
 import pickle
+import warnings
 import numpy as np
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.calibration import CalibratedClassifierCV
@@ -113,10 +114,8 @@ class RegimeClassifier:
     def save_model(self):
         if not self.is_trained:
             raise ValueError("Cannot save an untrained model.")
-
         if self.feature_contract_hash is None:
             self.feature_contract_hash = canonical_feature_contract_hash(self.feature_columns)
-        metadata = metadata_for_classifier(self)
         data = {
             'model': self.model,
             'model_type': self.model_type,
@@ -130,7 +129,32 @@ class RegimeClassifier:
         if self.calibrated_model is not None:
             data['calibrated_model'] = self.calibrated_model
         artifact = pickle.dumps(data)
-        write_artifact_with_metadata(self.model_path, artifact, metadata)
+        try:
+            metadata = metadata_for_classifier(self)
+        except ValueError as exc:
+            warnings.warn(
+                f"Saving unverifiable legacy model without manifest: {exc}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            manifest_path = f"{self.model_path}.metadata.json"
+            if os.path.exists(manifest_path):
+                raise FileExistsError(
+                    f"cannot replace manifest-backed artifact without provenance: {self.model_path}"
+                ) from exc
+            directory = os.path.dirname(self.model_path)
+            if directory:
+                os.makedirs(directory, exist_ok=True)
+            temp_path = f"{self.model_path}.legacy.tmp"
+            try:
+                with open(temp_path, "wb") as output:
+                    output.write(artifact)
+                os.replace(temp_path, self.model_path)
+            finally:
+                if os.path.exists(temp_path):
+                    os.unlink(temp_path)
+        else:
+            write_artifact_with_metadata(self.model_path, artifact, metadata)
         print(f"Model saved to {self.model_path} (type={self.model_type})")
 
     def load_model(self):

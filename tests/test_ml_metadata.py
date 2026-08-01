@@ -118,3 +118,19 @@ def test_load_models_rejects_tampered_artifact_and_keeps_fallback(tmp_path):
     artifact.write_bytes(artifact.read_bytes() + b"tamper")
 
     assert load_models(["ETH-USDT"], str(tmp_path)) == {}
+
+def test_direct_feature_contract_save_remains_legacy_and_pusher_skips(tmp_path):
+    import numpy as np
+    from sklearn.ensemble import RandomForestClassifier
+    from src.ml.regime_pusher import load_models
+    from src.ml.regime_classifier import RegimeClassifier
+
+    artifact = tmp_path / "regime_ETH-USDT_clean.pkl"
+    clf = RegimeClassifier(model_path=str(artifact))
+    clf.model = RandomForestClassifier(n_estimators=2, random_state=1)
+    clf.train(np.asarray([[0.0], [1.0], [2.0], [3.0]]), np.asarray([0, 0, 1, 1]))
+    clf.feature_columns = ["returns"]
+    with pytest.warns(RuntimeWarning, match="unverifiable legacy"):
+        clf.save_model()
+    assert not (tmp_path / "regime_ETH-USDT_clean.pkl.metadata.json").exists()
+    assert load_models(["ETH-USDT"], str(tmp_path)) == {}
