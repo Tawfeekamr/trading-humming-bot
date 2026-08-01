@@ -5,6 +5,7 @@ pub mod gateio_rest;
 pub mod gateio_ws;
 pub mod paper;
 pub mod perp_price;
+pub mod price_verify;
 
 use async_trait::async_trait;
 use anyhow::Result;
