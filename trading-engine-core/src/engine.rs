@@ -1,13 +1,16 @@
 use anyhow::Result;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Instant, Duration};
 use tracing::{info, warn, error};
 use tokio::sync::mpsc;
+
 use crate::config::AppConfig;
 use crate::connector::Connector;
 use crate::connector::binance_ws::{BinanceWs, WsEvent};
 use crate::connector::types::*;
+use crate::connector::price_verify::PriceVerifier;
+use crate::price_filter::{FilterDecision, VerifyResult, validated_mid};
 use crate::risk::RiskManager;
 use crate::capital::CapitalManager;
 use crate::notifications::TelegramBot;
@@ -27,15 +30,73 @@ async fn recv_api_command(rx: &mut Option<mpsc::Receiver<EngineCommand>>) -> Opt
     }
 }
 
+struct PriceVerifyRequest {
+    symbol: String,
+    book: OrderBook,
+    suspect_mid: f64,
+    last_good_mid: f64,
+    tolerance_pct: f64,
+    timeout: Duration,
+    verifier: Arc<dyn PriceVerifier>,
+}
+
+struct PriceVerifyCompletion {
+    symbol: String,
+    book: OrderBook,
+    suspect_mid: f64,
+    result: VerifyResult,
+}
+
+fn spawn_price_verifier_worker(
+    mut requests: mpsc::Receiver<PriceVerifyRequest>,
+    results: mpsc::Sender<PriceVerifyCompletion>,
+) {
+    tokio::spawn(async move {
+        while let Some(request) = requests.recv().await {
+            let result = match tokio::time::timeout(
+                request.timeout,
+                request.verifier.verify(
+                    &request.symbol,
+                    request.suspect_mid,
+                    request.last_good_mid,
+                    request.tolerance_pct,
+                ),
+            )
+            .await
+            {
+                Ok(result) => result,
+                Err(_) => VerifyResult::Unavailable,
+            };
+            if results
+                .send(PriceVerifyCompletion {
+                    symbol: request.symbol,
+                    book: request.book,
+                    suspect_mid: request.suspect_mid,
+                    result,
+                })
+                .await
+                .is_err()
+            {
+                break;
+            }
+        }
+    });
+}
 pub struct Engine {
     config: AppConfig,
     connector: Arc<dyn Connector>,
     strategies: Vec<Box<dyn Strategy>>,
+
     risk: RiskManager,
     telegram: TelegramBot,
     signal: Option<SignalEngine>,
     bar_buffers: BarCache,
     order_books: HashMap<String, OrderBook>,
+    price_filter: crate::price_filter::PriceFilter,
+    price_verifier: Arc<dyn PriceVerifier>,
+    price_verify_tx: mpsc::Sender<PriceVerifyRequest>,
+    price_verify_rx: mpsc::Receiver<PriceVerifyCompletion>,
+    price_verifying: HashSet<String>,
     status_cache: StrategyStatusCache,
     regime_cache: RegimeCache,
     /// PPO router decision (active engine + size mult + flat). Read each tick
@@ -64,6 +125,12 @@ impl Engine {
         routing_cache: RoutingCache,
         capital: CapitalManager,
     ) -> Self {
+        let price_verifier: Arc<dyn PriceVerifier> =
+            Arc::new(crate::connector::price_verify::BinancePriceVerifier::new());
+        let (verify_request_tx, verify_request_rx) = mpsc::channel(32);
+        let (verify_result_tx, verify_result_rx) = mpsc::channel(32);
+        spawn_price_verifier_worker(verify_request_rx, verify_result_tx);
+
         let mut engine = Self {
             config,
             connector,
@@ -73,6 +140,11 @@ impl Engine {
             signal: None, // initialized below
             bar_buffers: bar_cache,
             order_books: HashMap::new(),
+            price_filter: crate::price_filter::PriceFilter::new(),
+            price_verifier,
+            price_verify_tx: verify_request_tx,
+            price_verify_rx: verify_result_rx,
+            price_verifying: HashSet::new(),
             status_cache,
             regime_cache,
             routing_cache,
@@ -90,12 +162,18 @@ impl Engine {
 
     pub fn add_strategy(&mut self, strategy: Box<dyn Strategy>) {
         info!("Added strategy: {} on {}", strategy.name(), strategy.trading_pair());
+
         self.strategies.push(strategy);
     }
 
     pub fn set_api_command_receiver(&mut self, rx: mpsc::Receiver<EngineCommand>) {
         self.api_commands = Some(rx);
     }
+    #[cfg(test)]
+    pub(crate) fn set_price_verifier(&mut self, verifier: Arc<dyn PriceVerifier>) {
+        self.price_verifier = verifier;
+    }
+
 
     /// Run the main trading loop
     pub async fn run(&mut self) -> Result<()> {
@@ -192,30 +270,77 @@ impl Engine {
                         api_commands = None;
                     }
                 }
+                verification = self.price_verify_rx.recv() => {
+                    let Some(verification) = verification else { continue; };
+                    self.handle_price_verification(verification).await?;
+                }
                 event = ws_rx.recv() => {
                     let Some(event) = event else { break; };
                     match event {
                         WsEvent::OrderBookUpdate { symbol, bids, asks } => {
-                            // Normalize WebSocket symbol ("XRPUSDT") to config pair key ("XRP-USDT")
                             let pair_key = self.find_pair_for_symbol(&symbol)
                                 .unwrap_or_else(|| symbol.clone());
-                            self.order_books.insert(pair_key.clone(), OrderBook {
-                                symbol: pair_key,
+                            let book = OrderBook {
+                                symbol: pair_key.clone(),
                                 bids,
                                 asks,
                                 timestamp: chrono::Utc::now().timestamp_millis(),
-                            });
+                            };
+                            let cfg_pi = &self.config.price_integrity;
+                            let mut should_insert = !cfg_pi.enabled;
+                            if cfg_pi.enabled {
+                                match self.price_filter.observe(&pair_key, &book, cfg_pi) {
+                                    FilterDecision::Accept => should_insert = true,
+                                    FilterDecision::HardReject => {
+                                        warn!("Price filter: hard-reject {}; holding last-good", pair_key);
+                                    }
+                                    FilterDecision::HoldSuspect => {}
+                                    FilterDecision::SuspectNewVerify => {
+                                        let Some(suspect_mid) = validated_mid(&book) else {
+                                            warn!("Price filter: invalid suspect book {}; holding last-good", pair_key);
+                                            continue;
+                                        };
+                                        let last_good_mid =
+                                            self.price_filter.last_good(&pair_key).unwrap_or(suspect_mid);
+                                        if self.price_verifying.insert(pair_key.clone()) {
+                                            let request = PriceVerifyRequest {
+                                                symbol: pair_key.clone(),
+                                                book: book.clone(),
+                                                suspect_mid,
+                                                last_good_mid,
+                                                tolerance_pct: cfg_pi.verify_tolerance_pct,
+                                                timeout: Duration::from_millis(cfg_pi.verify_timeout_ms),
+                                                verifier: self.price_verifier.clone(),
+                                            };
+                                            if self.price_verify_tx.try_send(request).is_err() {
+                                                self.price_verifying.remove(&pair_key);
+                                                self.price_filter.resolve_verify(
+                                                    &pair_key,
+                                                    &VerifyResult::Unavailable,
+                                                    suspect_mid,
+                                                    cfg_pi,
+                                                );
+                                                warn!(
+                                                    "Price verifier unavailable for {}; holding last-good",
+                                                    pair_key
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            if should_insert {
+                                self.order_books.insert(pair_key.clone(), book);
+                            }
                             self.tick_strategies().await?;
                             self.process_paper_fills().await?;
                             self.feed_breaker().await;
                         }
                         WsEvent::Kline { symbol, bar, is_closed } => {
                             if is_closed {
-                                // WebSocket uses "DOGEUSDT" format; config uses "DOGE-USDT".
                                 let pair_key = self.find_pair_for_symbol(&symbol)
                                     .unwrap_or(symbol);
                                 self.bar_buffers.push_closed_bar(pair_key, bar).await;
-                                // Persist bar buffers every closed candle
                                 self.save_bar_buffers().await;
                             }
                         }
@@ -225,7 +350,6 @@ impl Engine {
                         _ => {}
                     }
 
-                    // Signal engine: manage positions on every tick
                     if let Some(signal) = &self.signal {
                         signal.manage_positions(&*self.connector).await;
                     }
@@ -235,6 +359,38 @@ impl Engine {
         self.api_commands = api_commands;
 
         warn!("WebSocket event stream ended");
+        Ok(())
+    }
+
+    async fn handle_price_verification(&mut self, completion: PriceVerifyCompletion) -> Result<()> {
+        if !self.price_verifying.remove(&completion.symbol) {
+            return Ok(());
+        }
+
+        let cfg_pi = &self.config.price_integrity;
+        let was_suspect = self.price_filter.is_suspect(&completion.symbol);
+        self.price_filter.resolve_verify(
+            &completion.symbol,
+            &completion.result,
+            completion.suspect_mid,
+            cfg_pi,
+        );
+
+        let accepted = completion.result == VerifyResult::Confirmed
+            && was_suspect
+            && !self.price_filter.is_suspect(&completion.symbol);
+        if accepted {
+            self.order_books
+                .insert(completion.symbol.clone(), completion.book);
+            self.tick_strategies().await?;
+            self.process_paper_fills().await?;
+            self.feed_breaker().await;
+        } else if completion.result != VerifyResult::Confirmed {
+            warn!(
+                "Price filter: {} verification {:?}; holding last-good",
+                completion.symbol, completion.result
+            );
+        }
         Ok(())
     }
 
@@ -479,6 +635,16 @@ impl Engine {
             // Reduce-only orders (exits) bypass the halt check so a circuit
             // breaker trip can't trap open positions.
             if !req.reduce_only {
+                let pair_key = self
+                    .find_pair_for_symbol(&req.symbol)
+                    .unwrap_or_else(|| req.symbol.clone());
+                if self.price_filter.is_suspect(&pair_key) {
+                    warn!(
+                        "Order vetoed (price suspect): {} — holding until price verified",
+                        pair_key
+                    );
+                    continue;
+                }
                 if let Err(e) = self.risk.check_trading_allowed() {
                     warn!("Order vetoed by risk manager (halted): {}", e);
                     continue;
@@ -888,6 +1054,11 @@ mod tests {
             "{}/../config/strategy.yaml",
             env!("CARGO_MANIFEST_DIR")
         );
+        let price_verifier: Arc<dyn PriceVerifier> =
+            Arc::new(crate::connector::price_verify::BinancePriceVerifier::new());
+        let (verify_request_tx, verify_request_rx) = mpsc::channel(32);
+        let (verify_result_tx, verify_result_rx) = mpsc::channel(32);
+        spawn_price_verifier_worker(verify_request_rx, verify_result_tx);
         let config = AppConfig::load(&path).expect("strategy.yaml must load");
         Engine {
             config,
@@ -901,6 +1072,11 @@ mod tests {
             signal: None,
             bar_buffers: BarCache::new(),
             order_books: HashMap::new(),
+            price_filter: crate::price_filter::PriceFilter::new(),
+            price_verifier,
+            price_verify_tx: verify_request_tx,
+            price_verify_rx: verify_result_rx,
+            price_verifying: HashSet::new(),
             status_cache: StrategyStatusCache::new(),
             regime_cache: RegimeCache::new("/tmp/test_engine_regime.json", 0),
             routing_cache,
@@ -910,6 +1086,91 @@ mod tests {
             api_commands: None,
         }
     }
+    fn test_book(symbol: &str, mid: f64) -> OrderBook {
+        OrderBook {
+            symbol: symbol.into(),
+            bids: vec![(mid - 1.0, 1.0)],
+            asks: vec![(mid + 1.0, 1.0)],
+            timestamp: 0,
+        }
+    }
+
+    fn test_order(symbol: &str, reduce_only: bool) -> OrderRequest {
+        OrderRequest {
+            symbol: symbol.into(),
+            side: OrderSide::Buy,
+            order_type: OrderTypeReq::Limit,
+            price: Some(500.0),
+            quantity: 1.0,
+            time_in_force: Some(TimeInForceReq::Gtc),
+            client_order_id: None,
+            reduce_only,
+        }
+    }
+
+    #[tokio::test]
+    async fn suspect_pair_vetoes_entries_but_allows_reduce_only_exits() {
+        let routing = RoutingCache::new("/tmp/test_engine_price_veto.json", 0);
+        let mut engine = minimal_engine(vec![], routing);
+        let baseline = test_book("BNB-USDT", 580.0);
+        let spike = test_book("BNB-USDT", 497.0);
+        engine.order_books.insert("BNB-USDT".into(), baseline.clone());
+        assert_eq!(
+            engine.price_filter.observe("BNB-USDT", &baseline, &engine.config.price_integrity),
+            FilterDecision::Accept
+        );
+        assert_eq!(
+            engine.price_filter.observe("BNB-USDT", &spike, &engine.config.price_integrity),
+            FilterDecision::SuspectNewVerify
+        );
+
+        let connector = Arc::new(RecordingConnector::default());
+        let placed = connector.placed.clone();
+        engine.connector = connector;
+        engine
+            .submit_orders(vec![
+                test_order("BNBUSDT", false),
+                test_order("BNBUSDT", true),
+            ])
+            .await
+            .expect("order submission must complete");
+
+        let placed = placed.lock();
+        assert_eq!(placed.len(), 1);
+        assert!(placed[0].reduce_only);
+    }
+
+    #[tokio::test]
+    async fn confirmed_verification_reprocesses_and_publishes_suspect_book() {
+        let routing = RoutingCache::new("/tmp/test_engine_price_confirm.json", 0);
+        let mut engine = minimal_engine(vec![], routing);
+        let baseline = test_book("BNB-USDT", 580.0);
+        let suspect = test_book("BNB-USDT", 497.0);
+        engine.order_books.insert("BNB-USDT".into(), baseline.clone());
+        engine.price_filter.observe("BNB-USDT", &baseline, &engine.config.price_integrity);
+        assert_eq!(
+            engine.price_filter.observe("BNB-USDT", &suspect, &engine.config.price_integrity),
+            FilterDecision::SuspectNewVerify
+        );
+        engine.price_verifying.insert("BNB-USDT".into());
+
+        engine
+            .handle_price_verification(PriceVerifyCompletion {
+                symbol: "BNB-USDT".into(),
+                book: suspect,
+                suspect_mid: 497.0,
+                result: VerifyResult::Confirmed,
+            })
+            .await
+            .expect("verification result must complete");
+
+        assert!(!engine.price_filter.is_suspect("BNB-USDT"));
+        assert_eq!(
+            validated_mid(engine.order_books.get("BNB-USDT").expect("book published")),
+            Some(497.0)
+        );
+    }
+
 
     #[tokio::test]
     async fn test_routing_pauses_non_active_strategies() {
