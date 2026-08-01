@@ -164,15 +164,16 @@ async fn test_partial_exit_fill_reconciles_across_restart() {
     let mut bars = Vec::new();
     let orders = s1.on_tick(&make_tick(50000.0 + risk, &mut bars)).await.unwrap();
     let tp1 = orders.iter().find(|o| o.reduce_only).expect("TP1 order");
+    let tp1_price = tp1.price.unwrap_or(50000.0);
+    let tp1_qty = tp1.quantity;
     drop(s1);
 
     let tg2 = trading_engine_core::notifications::TelegramBot::new("", "");
     let mut s2 = TrendStrategy::new(pair, &config, tg2);
     assert!((s2.position().unwrap().remaining_qty - 0.067).abs() < 1e-9);
-    s2.on_fill(&make_fill(OrderSide::Sell, tp1.price.unwrap_or(50000.0), tp1.quantity)).await.unwrap();
+    s2.on_fill(&make_fill(OrderSide::Sell, tp1_price, tp1_qty)).await.unwrap();
     assert!((s2.position().unwrap().remaining_qty - 0.067).abs() < 1e-9);
     let _ = std::fs::remove_file(format!("data/{}_trend_position.json", pair.replace("-", "_")));
-
 }
 /// TP2 closes 50% of the quantity remaining after TP1, leaving the runner.
 #[tokio::test]
