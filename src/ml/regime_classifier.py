@@ -8,7 +8,7 @@ from src.ml.model_metadata import (
     canonical_feature_contract_hash,
     metadata_for_classifier,
     read_metadata,
-    write_metadata,
+    write_artifact_with_metadata,
 )
 
 REGIME_RANGING = 0
@@ -34,6 +34,7 @@ class RegimeClassifier:
         self.class_distribution = {}
         self.metrics = {}
         self.source_commit = None
+        self.training_samples = None
         self.metadata = None
 
     def _create_default_model(self):
@@ -67,6 +68,7 @@ class RegimeClassifier:
         if sample_weight is not None and self.model_type == 'xgboost':
             fit_kwargs['sample_weight'] = sample_weight
         self.model.fit(X_train, y_train, **fit_kwargs)
+        self.training_samples = len(X_train)
         labels, counts = np.unique(np.asarray(y_train), return_counts=True)
         total = float(counts.sum())
         self.class_distribution = {
@@ -112,11 +114,9 @@ class RegimeClassifier:
         if not self.is_trained:
             raise ValueError("Cannot save an untrained model.")
 
-        directory = os.path.dirname(self.model_path)
-        if directory:
-            os.makedirs(directory, exist_ok=True)
         if self.feature_contract_hash is None:
             self.feature_contract_hash = canonical_feature_contract_hash(self.feature_columns)
+        metadata = metadata_for_classifier(self)
         data = {
             'model': self.model,
             'model_type': self.model_type,
@@ -125,12 +125,12 @@ class RegimeClassifier:
             'feature_schema_version': self.feature_schema_version,
             'feature_contract_hash': self.feature_contract_hash,
             'class_distribution': self.class_distribution,
+            'training_samples': self.training_samples,
         }
         if self.calibrated_model is not None:
             data['calibrated_model'] = self.calibrated_model
-        with open(self.model_path, 'wb') as f:
-            pickle.dump(data, f)
-        write_metadata(self.model_path, metadata_for_classifier(self))
+        artifact = pickle.dumps(data)
+        write_artifact_with_metadata(self.model_path, artifact, metadata)
         print(f"Model saved to {self.model_path} (type={self.model_type})")
 
     def load_model(self):
@@ -147,6 +147,7 @@ class RegimeClassifier:
             self.feature_schema_version = data.get('feature_schema_version', None)
             self.feature_contract_hash = data.get('feature_contract_hash', None)
             self.class_distribution = data.get('class_distribution', {})
+            self.training_samples = data.get('training_samples', None)
         else:
             # Legacy format: raw sklearn model
             self.model = data
@@ -165,8 +166,8 @@ class RegimeClassifier:
             self.class_distribution = manifest["class_distribution"]
             self.metrics = manifest["metrics"]
             self.source_commit = manifest["source_commit"]
+        self.is_trained = True
         print(f"Model loaded from {self.model_path} (type={self.model_type})")
-
     def tune_hyperparameters(self, X_train, y_train, n_iter=20, cv=3, sample_weight=None):
         from sklearn.model_selection import RandomizedSearchCV
 

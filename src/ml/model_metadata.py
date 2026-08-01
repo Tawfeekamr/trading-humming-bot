@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import subprocess
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -31,21 +32,38 @@ def canonical_feature_contract_hash(columns: list[str] | tuple[str, ...] | None)
     canonical = json.dumps(list(columns), separators=(",", ":"), ensure_ascii=True)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
-
 def metadata_for_classifier(clf: Any) -> dict[str, Any]:
-    """Build truthful manifest fields from classifier provenance attributes."""
+    """Build a manifest only from explicit, truthful classifier provenance."""
+    required_fields = ("pair", "timeframe", "train_start", "train_end")
+    missing = [field for field in required_fields if not getattr(clf, field, None)]
+    if missing:
+        raise ValueError(f"model provenance missing required fields: {', '.join(missing)}")
     feature_hash = getattr(clf, "feature_contract_hash", None)
     if feature_hash is None:
         feature_hash = canonical_feature_contract_hash(getattr(clf, "feature_columns", None))
+    if not feature_hash:
+        raise ValueError("model provenance missing feature_contract_hash")
+    class_distribution = dict(getattr(clf, "class_distribution", None) or {})
+    if not class_distribution:
+        raise ValueError("model provenance missing class_distribution")
+    label_params = dict(getattr(clf, "label_params", None) or {})
+    if not label_params:
+        raise ValueError("model provenance missing label_params")
+    metrics = dict(getattr(clf, "metrics", None) or {})
+    if not metrics:
+        training_samples = getattr(clf, "training_samples", None)
+        if training_samples is None:
+            raise ValueError("model provenance missing metrics")
+        metrics = {"training_samples": int(training_samples)}
     return {
-        "pair": getattr(clf, "pair", None) or "unknown",
-        "timeframe": getattr(clf, "timeframe", None) or "unknown",
-        "train_start": getattr(clf, "train_start", None) or "unknown",
-        "train_end": getattr(clf, "train_end", None) or "unknown",
-        "feature_contract_hash": feature_hash or "unknown",
-        "label_params": dict(getattr(clf, "label_params", None) or {}),
-        "class_distribution": dict(getattr(clf, "class_distribution", None) or {}),
-        "metrics": dict(getattr(clf, "metrics", None) or {}),
+        "pair": str(clf.pair),
+        "timeframe": str(clf.timeframe),
+        "train_start": str(clf.train_start),
+        "train_end": str(clf.train_end),
+        "feature_contract_hash": str(feature_hash),
+        "label_params": label_params,
+        "class_distribution": class_distribution,
+        "metrics": metrics,
         "source_commit": getattr(clf, "source_commit", None) or _source_commit(),
     }
 
@@ -91,6 +109,30 @@ def _validate_keys(metadata: dict[str, Any]) -> None:
         raise ValueError("metadata class_distribution must be an object")
     if not isinstance(metadata["metrics"], dict):
         raise ValueError("metadata metrics must be an object")
+
+
+def write_artifact_with_metadata(path: str, artifact: bytes, metadata: dict) -> str:
+    """Cut over a new artifact only after its immutable manifest is accepted."""
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    token = uuid.uuid4().hex
+    temp_artifact = target.with_name(f".{target.name}.{token}.tmp")
+    temp_manifest = metadata_path(str(temp_artifact))
+    try:
+        temp_artifact.write_bytes(artifact)
+        digest = write_metadata(str(temp_artifact), metadata)
+        final_manifest = metadata_path(path)
+        encoded = temp_manifest.read_bytes()
+        if final_manifest.exists() and final_manifest.read_bytes() != encoded:
+            raise FileExistsError(f"immutable metadata already exists: {final_manifest}")
+        if target.exists() and not final_manifest.exists():
+            raise FileExistsError(f"refusing to replace unmanifested artifact: {target}")
+        os.replace(temp_artifact, target)
+        os.replace(temp_manifest, final_manifest)
+        return digest
+    finally:
+        temp_artifact.unlink(missing_ok=True)
+        temp_manifest.unlink(missing_ok=True)
 
 
 def _canonical_json(metadata: dict[str, Any]) -> bytes:

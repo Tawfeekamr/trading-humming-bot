@@ -47,3 +47,22 @@ def test_pusher_monitor_keeps_bounded_window_and_reports_without_disabling():
     assert "class_distribution_shift" in report["ETH-USDT"]["reasons"]
     assert "danger_frequency_spike" in report["ETH-USDT"]["reasons"]
     assert len(monitor._windows["ETH-USDT"]) == 2
+    assert "feature_contract_mismatch" not in report["ETH-USDT"]["reasons"]
+
+
+def test_pusher_monitor_reports_feature_contract_mismatch():
+    from src.ml.regime_pusher import RegimeDriftMonitor
+
+    monitor = RegimeDriftMonitor()
+    monitor.observe(
+        "BNB-USDT",
+        0,
+        0.8,
+        1_000,
+        {
+            "class_distribution": {"0": 1.0, "1": 0.0, "2": 0.0},
+            "feature_contract_hash": "wrong-hash",
+        },
+    )
+    report = monitor.collect_drift_report(now_ms=1_000)
+    assert report["BNB-USDT"]["reasons"] == ["feature_contract_mismatch"]

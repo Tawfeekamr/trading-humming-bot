@@ -89,7 +89,15 @@ def main(argv: list[str] | None = None) -> int:
 
     out = args.output or f"models/regime_{_pair_to_slug(args.pair)}_clean.pkl"
     clf = RegimeClassifier(model_path=out, model_type="random_forest")
-    # Deeper, regularized forest — the depth-5 default underfits; now that the
+    clf.pair = _pair_to_slug(args.pair)
+    clf.timeframe = "1h"
+    clf.train_start = start.isoformat()
+    clf.train_end = end.isoformat()
+    clf.label_params = {
+        "window_bars": 24,
+        "return_threshold": 0.02,
+        "danger_drawdown_threshold": -0.03,
+    }
     # label is learnable, full depth + min_samples_leaf fits real structure, and
     # isotonic calibration makes the confidences honest.
     from sklearn.ensemble import RandomForestClassifier

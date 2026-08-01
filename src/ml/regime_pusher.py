@@ -104,7 +104,7 @@ class RegimeDriftMonitor:
                 confidence_24h,
                 age_ms,
                 DRIFT_CACHE_TTL_MS,
-                feature_contract_match=not feature_match,
+                feature_contract_match=feature_match,
             )
             item = {
                 "pair": pair,
