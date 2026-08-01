@@ -9,12 +9,10 @@ Implemented the agreed hybrid trend exit model.
 - Reactive exit quantities are persisted in the trend state. Matching reduce-only fills consume the pending booked quantity instead of deducting it a second time, including across restart; unbooked external/manual reduce fills still reconcile normally.
 - Corrected trend YAML comments and removed the stale `runner_pct` setting.
 
-Focused verification completed before the final persistence amendment:
+Focused verification:
 
-- `cargo test --test test_trend_exits` — 8 passed
+- `cargo test --test test_trend_exits` — 10 passed
 - `cargo test --test test_trend_strategy` — 4 passed
 - `cargo test trend::tests` — 38 passed
-
-The final amendment adds restart-fill and legacy three-target normalization regressions. Their execution is currently blocked by unrelated in-progress engine.rs changes in the shared workspace (`PriceVerifyRequest` missing `generation` initializer); no trend compiler diagnostics are emitted before that engine error.
 
 Concern: `risk_reward_ratio` and the historical `calculate_tp_levels` arguments remain for config/API compatibility but are intentionally ignored by the fixed hybrid ladder.
