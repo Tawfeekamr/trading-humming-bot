@@ -113,6 +113,7 @@ def test_walk_forward_report_rows_audit_boundaries_and_comparators(monkeypatch, 
             "returns_array": returns,
             "exposure_array": np.ones(100),
             "trade_count": 120,
+            "fees": 0.125,
             "Total Return": "10.00%",
             "Max Drawdown": "1.00%",
             "profit_factor": 1.5,
@@ -136,6 +137,12 @@ def test_walk_forward_report_rows_audit_boundaries_and_comparators(monkeypatch, 
     assert cutoffs and cutoffs[0] < frame.index[200].date()
     report = __import__("json").loads((tmp_path / "report.json").read_text())
     assert len(report["metadata"]["ppo_model_sha256"]) == 2
+    assert report["metadata"]["ppo_model_paths"] == [
+        "models/rl/_wf_ETHUSDT_slice0.zip",
+        "models/rl/_wf_ETHUSDT_slice1.zip",
+    ]
+    assert report["metrics"]["gate_metrics"]["trade_counts_by_regime"] == {}
+    assert report["metrics"]["promotion"]["eligible"] is False
     row = report["slices"][0]
     for key in ("train_start", "train_end", "embargo_start", "embargo_end", "test_start", "test_end"):
         assert key in row

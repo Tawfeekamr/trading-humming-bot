@@ -54,26 +54,30 @@ def _sample_counts(metrics: Mapping[str, Any]) -> list[float]:
          if isinstance(metrics.get(key), Mapping)),
         None,
     )
-    if regime_map is not None:
-        if all(not isinstance(value, Mapping) for value in regime_map.values()):
-            for value in regime_map.values():
+    # Regime-level evidence is mandatory for promotion. Missing or empty
+    # attribution must fail closed rather than allowing aggregate totals to
+    # hide an under-sampled market regime.
+    if not regime_map:
+        counts.append(0.0)
+    elif all(not isinstance(value, Mapping) for value in regime_map.values()):
+        for value in regime_map.values():
+            try:
+                counts.append(float(value))
+            except (TypeError, ValueError):
+                counts.append(0.0)
+    else:
+        regime_names = set()
+        for strategy_values in regime_map.values():
+            if isinstance(strategy_values, Mapping):
+                regime_names.update(strategy_values)
+        for strategy in ("ppo", "rf", "ta"):
+            strategy_values = regime_map.get(strategy)
+            for regime in regime_names:
+                value = strategy_values.get(regime) if isinstance(strategy_values, Mapping) else None
                 try:
                     counts.append(float(value))
                 except (TypeError, ValueError):
                     counts.append(0.0)
-        else:
-            regime_names = set()
-            for strategy_values in regime_map.values():
-                if isinstance(strategy_values, Mapping):
-                    regime_names.update(strategy_values)
-            for strategy in ("ppo", "rf", "ta"):
-                strategy_values = regime_map.get(strategy)
-                for regime in regime_names:
-                    value = strategy_values.get(regime) if isinstance(strategy_values, Mapping) else None
-                    try:
-                        counts.append(float(value))
-                    except (TypeError, ValueError):
-                        counts.append(0.0)
     return counts
 
 

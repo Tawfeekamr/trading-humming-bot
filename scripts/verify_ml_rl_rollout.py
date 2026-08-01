@@ -91,7 +91,7 @@ def _model_paths(root: Path, report: dict[str, Any]) -> list[Path]:
     metadata = _report_metadata(report)
     raw: list[Any] = []
     for source in (metadata, report):
-        for key in ("model_paths", "model_artifacts", "artifacts", "models", "model_checksums"):
+        for key in ("model_paths", "ppo_model_paths", "model_artifacts", "artifacts", "models", "model_checksums"):
             value = source.get(key)
             if isinstance(value, dict):
                 raw.extend(value.keys() if key == "model_checksums" else value.values())

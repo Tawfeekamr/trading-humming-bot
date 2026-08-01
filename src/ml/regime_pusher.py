@@ -80,7 +80,7 @@ class RegimeDriftMonitor:
         now = int(time.time() * 1000) if now_ms is None else int(now_ms)
         report: dict[str, dict] = {}
         feature_hash = canonical_feature_contract_hash(MARKET_FEATURE_COLS)
-        for pair in sorted(self._windows):
+        for pair in sorted(set(self._windows) | set(self._metadata)):
             window = self._windows[pair]
             cutoff = now - self.window_ms
             while window and window[0][0] < cutoff:
@@ -141,12 +141,15 @@ def model_path_for(pair: str, model_dir: str) -> str:
     return os.path.join(model_dir, f"regime_{pair}_clean.pkl")
 
 def model_metadata(clf: RegimeClassifier, path: str) -> dict[str, str | None]:
-    """Return deterministic model provenance for a regime update.
+    """Return stable provenance captured when the model was validated.
 
-    The artifact digest is deliberately computed from the bytes on disk rather
-    than from a mutable classifier object.  Feature provenance prefers a model
-    supplied hash and otherwise hashes the canonical ordered feature manifest.
+    A loaded classifier's artifact may be replaced on disk between polling
+    cycles. Reusing the metadata captured by ``load_models`` prevents a later
+    update from claiming a checksum for bytes that were never loaded.
     """
+    validated = getattr(clf, "_validated_artifact_metadata", None)
+    if isinstance(validated, dict):
+        return dict(validated)
     if not os.path.isfile(path):
         raise FileNotFoundError(f"model artifact not found: {path}")
     digest = hashlib.sha256()
@@ -232,6 +235,25 @@ def load_models(pairs: list[str], model_dir: str) -> dict[str, RegimeClassifier]
             continue
         if not _declared_feature_contract_ok(clf):
             continue
+        # Capture the checksum and provenance from the manifest validated at
+        # load time. Subsequent pushes reuse this snapshot until load_models
+        # is called explicitly again.
+        clf._validated_artifact_metadata = {
+            "model_version": (
+                str(manifest.get("model_version"))
+                if manifest.get("model_version") is not None
+                else (
+                    str(getattr(clf, "model_version", getattr(clf, "version", "")))
+                    or None
+                )
+            ),
+            "artifact_sha256": str(manifest["artifact_sha256"]),
+            "feature_contract_hash": (
+                str(manifest.get("feature_contract_hash"))
+                if manifest.get("feature_contract_hash") is not None
+                else None
+            ),
+        }
         models[pair] = clf
         log.info("Loaded model for %s from %s", pair, path)
     return models

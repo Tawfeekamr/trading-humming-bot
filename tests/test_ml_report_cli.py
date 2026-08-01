@@ -73,7 +73,7 @@ def test_report_counts_missing_entry_attribution_without_cache_inference(tmp_pat
             {
                 "timestamp_ms": 1_756_656_000_000,
                 "pair": "ETH-USDT",
-                "action": 0,
+                "action": 4,
                 "engine": "trend",
                 "size_mult": 1.0,
                 "model_version": "ppo-v1",
@@ -172,7 +172,7 @@ def test_report_joins_shadow_decision_to_entry_timestamp_without_filling_regime(
             {
                 "timestamp_ms": 1_756_656_000_000,
                 "pair": "ETHUSDT",
-                "action": 2,
+                "action": 1,
                 "engine": "grid",
                 "size_mult": 1.0,
                 "model_version": "ppo-v1",
@@ -206,7 +206,7 @@ def test_shadow_model_version_does_not_become_regime_model_provenance(tmp_path):
             {
                 "timestamp_ms": 1_756_656_000_000,
                 "pair": "ETHUSDT",
-                "action": 2,
+                "action": 1,
                 "engine": "grid",
                 "size_mult": 1.0,
                 "model_version": "ppo-v9",
@@ -231,3 +231,36 @@ def test_existing_database_without_trades_table_is_malformed(tmp_path):
 
     with pytest.raises(ReportError):
         build_report(db_path=db_path, shadow_path=tmp_path / "shadow.jsonl")
+
+def test_shadow_reader_rejects_action_engine_mismatch(tmp_path):
+    db_path = tmp_path / "missing.db"
+    shadow_path = tmp_path / "shadow.jsonl"
+    shadow_path.write_text(
+        json.dumps(
+            {
+                "timestamp_ms": 1_756_656_000_000,
+                "pair": "ETHUSDT",
+                "action": 1,
+                "engine": "trend",
+                "size_mult": 1.0,
+                "model_version": "ppo-v1",
+                "model_sha256": "ppo-sha",
+                "observation_age_ms": 0,
+                "mode": "shadow",
+            }
+        ) + "\n"
+    )
+    with pytest.raises(ReportError, match="size multiplier outside action map"):
+        build_report(db_path=db_path, shadow_path=shadow_path)
+
+
+def test_runtime_evidence_requires_each_engine_regime_slice_to_reach_floor():
+    from scripts.ml_report import _state_status
+
+    rows = [
+        {"engine": "grid", "context": {"regime_at_entry": "ranging"}}
+        for _ in range(100)
+    ] + [{"engine": "grid", "context": {"regime_at_entry": "trending"}}]
+    status = _state_status(rows, [])
+    assert status["evidence"]["state"] == "inconclusive"
+    assert status["evidence"]["insufficient_slices"] == ["grid:trending"]

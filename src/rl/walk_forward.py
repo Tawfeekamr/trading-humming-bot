@@ -182,6 +182,9 @@ def _report_metadata(pair: str, rf_model: str, ppo_models: list[str], **extra) -
         "pair": pair,
         "rf_model": rf_model,
         "rf_model_sha256": checksum(rf_model),
+        # Keep paths paired with the per-slice checksums so report verifiers
+        # can resolve every generated PPO artifact deterministically.
+        "ppo_model_paths": list(ppo_models),
         "ppo_model_sha256": [checksum(path) for path in ppo_models],
         **extra,
     }
@@ -273,19 +276,52 @@ def run_walk_forward(
     from src.ml.evaluation_report import summarize_returns, write_report
     from src.ml.promotion_gate import evaluate
 
-    def summarize(series, exposures, trade_count):
+    def summarize(series, exposures, trade_count, realized_fees):
         values = pool_returns(series, exposures)[0]
         exposure_values = pool_returns(exposures, series)[0]
-        return summarize_returns(
-            values, exposure_values, fees=fees + slippage, trade_count=trade_count
+        has_realized_fees = realized_fees is not None
+        applied_fees = 0.0 if has_realized_fees else fees + slippage
+        result = summarize_returns(
+            values, exposure_values, fees=applied_fees, trade_count=trade_count
         )
+        # _run_model returns equity deltas after execution fees. Keep net
+        # returns untouched while surfacing the realized fee total.
+        result["fees"] = float(realized_fees if has_realized_fees else applied_fees)
+        return result
+
+    def realized_fees(strategy: str) -> float | None:
+        fee_values = [
+            float(row[strategy]["fees"])
+            for row in per_slice
+            if row[strategy].get("fees") is not None
+        ]
+        return float(sum(fee_values)) if fee_values else None
 
     ppo_trade_count = sum(int(row["ppo"].get("trade_count", 0)) for row in per_slice)
     rf_trade_count = sum(int(row["rf"].get("trade_count", 0)) for row in per_slice)
     ta_trade_count = len(per_slice)
-    ppo_metrics = summarize(ppo_returns, ppo_exposure, ppo_trade_count)
-    rf_metrics = summarize(rf_returns, rf_exposure, rf_trade_count)
-    ta_metrics = summarize(ta_returns, ta_exposure, ta_trade_count)
+    ppo_metrics = summarize(ppo_returns, ppo_exposure, ppo_trade_count, realized_fees("ppo"))
+    rf_metrics = summarize(rf_returns, rf_exposure, rf_trade_count, realized_fees("rf"))
+    ta_metrics = summarize(ta_returns, ta_exposure, ta_trade_count, None)
+
+    # Preserve regime attribution when evaluators provide it. If unavailable,
+    # the empty map is intentional: promotion_gate treats it as inconclusive.
+    trade_counts_by_regime: dict[str, dict[str, int]] = {}
+    for strategy in ("ppo", "rf", "ta"):
+        aggregate: dict[str, int] = {}
+        for row in per_slice:
+            raw = row[strategy].get("trade_counts_by_regime")
+            if not isinstance(raw, dict):
+                continue
+            for regime, count in raw.items():
+                if isinstance(count, dict):
+                    for nested_regime, nested_count in count.items():
+                        aggregate[str(nested_regime)] = aggregate.get(str(nested_regime), 0) + int(nested_count)
+                else:
+                    aggregate[str(regime)] = aggregate.get(str(regime), 0) + int(count)
+        if aggregate:
+            trade_counts_by_regime[strategy] = aggregate
+
     gate_metrics = {
         "trade_count": ppo_trade_count,
         "trade_counts_by_strategy": {
@@ -293,6 +329,7 @@ def run_walk_forward(
             "rf": rf_trade_count,
             "ta": ta_trade_count,
         },
+        "trade_counts_by_regime": trade_counts_by_regime,
         "window_count": len(per_slice),
         "ppo_profit_factor": ppo_metrics["profit_factor"],
         "rf_profit_factor": rf_metrics["profit_factor"],
@@ -333,6 +370,7 @@ def run_walk_forward(
         "rf": rf_metrics,
         "ml": rf_metrics,
         "ta": ta_metrics,
+        "gate_metrics": gate_metrics,
         "promotion": promotion,
         "ppo_vs_rf": {"dm_stat": stat, "dm_p": p, "n": n},
         "ta_vs_ml": {"dm_stat": ta_stat, "dm_p": ta_p, "n": len(ta_all)},

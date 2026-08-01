@@ -240,14 +240,18 @@ impl Engine {
         // Replay loaded bars through strategies to restore indicator state
         self.replay_bars_to_strategies().await;
 
-        // Load regime cache from file (fallback for when Python hasn't pushed yet)
+        // Regime cache remains available as a TA fallback, but PPO routing is
+        // active only when explicitly configured for live mode. A stale or
+        // sentinel routing_cache.json must be inert during shadow evaluation.
         self.regime_cache.load_from_file().await;
         info!("Regime cache loaded from file");
 
-        // Load routing cache from file (fallback for when the PPO router hasn't
-        // pushed yet — same cold-start shape as the regime cache above).
-        self.routing_cache.load_from_file().await;
-        info!("Routing cache loaded from file");
+        if self.config.routing.is_live() {
+            self.routing_cache.load_from_file().await;
+            info!("Routing cache loaded from file (live mode)");
+        } else {
+            info!("Routing cache ignored (routing mode={})", self.config.routing.mode);
+        }
 
         // Restore placed-orders map so strategies can cancel their own resting
         // orders across restarts (swing TP1 / hard stop placed before shutdown).
@@ -569,14 +573,16 @@ impl Engine {
         }
         Ok(results)
     }
-
     async fn tick_strategies(&mut self) -> Result<()> {
         self.capital.reset_tick_grants(); // fresh per-tick allocation budget
 
-        // Apply the current PPO routing decision (paper-gate). Read once per
-        // tick; None (no entry yet, or stale per TTL) ⇒ leave strategies as-is
-        // so a cold start or router outage doesn't accidentally pause everything.
-        let routing_entry = self.routing_cache.get().await;
+        // Shadow mode must never consume active routing state, including a
+        // cache left by an earlier live run. Only explicit live mode reads it.
+        let routing_entry = if self.config.routing.is_live() {
+            self.routing_cache.get().await
+        } else {
+            None
+        };
         if let Some(r) = routing_entry.as_ref() {
             // strategy (or it's an explicit GO_FLAT). An unknown name — e.g.
             // "swing" after its strategy was removed while the on-disk PPO
@@ -1211,7 +1217,9 @@ mod tests {
         let (verify_request_tx, verify_request_rx) = mpsc::channel(32);
         let (verify_result_tx, verify_result_rx) = mpsc::channel(32);
         spawn_price_verifier_worker(verify_request_rx, verify_result_tx);
-        let config = AppConfig::load(&path).expect("strategy.yaml must load");
+        let mut config = AppConfig::load(&path).expect("strategy.yaml must load");
+        // Existing routing unit tests exercise the explicit live path.
+        config.routing.mode = "live".to_string();
         Engine {
             config,
             connector: Arc::new(NullConnector),
@@ -1571,6 +1579,33 @@ mod tests {
 
         assert_eq!(grid_log.lock().paused, None,
             "no routing ⇒ set_paused must not be called");
+        assert_eq!(trend_log.lock().paused, None);
+        assert!(!grid_log.lock().flat_called);
+        assert!(!trend_log.lock().flat_called);
+    }
+
+    #[tokio::test]
+    async fn test_shadow_mode_ignores_sentinel_routing_cache() {
+        let grid_log = Arc::new(Mutex::new(CallLog::default()));
+        let trend_log = Arc::new(Mutex::new(CallLog::default()));
+        let routing = RoutingCache::new("/tmp/test_engine_routing_shadow.json", 0);
+        routing.update(crate::strategy::routing_cache::RoutingUpdate {
+            active_engine: "grid".into(),
+            size_mult: 1.5,
+            flat: true,
+        }).await;
+
+        let mut engine = minimal_engine(
+            vec![
+                Box::new(MockStrategy::new("grid", grid_log.clone())),
+                Box::new(MockStrategy::new("trend", trend_log.clone())),
+            ],
+            routing,
+        );
+        engine.config.routing.mode = "shadow".to_string();
+        engine.tick_strategies().await.expect("shadow tick must complete");
+
+        assert_eq!(grid_log.lock().paused, None);
         assert_eq!(trend_log.lock().paused, None);
         assert!(!grid_log.lock().flat_called);
         assert!(!trend_log.lock().flat_called);

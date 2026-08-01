@@ -161,6 +161,10 @@ def _read_trades(path: Path, since_ms: int | None) -> list[dict[str, Any]]:
 def _read_shadow(path: Path, since_ms: int | None) -> list[dict[str, Any]]:
     if not path.exists():
         return []
+    try:
+        from src.rl.shadow_schema import validate_decision
+    except ImportError as exc:
+        raise ReportError(f"shadow schema unavailable: {exc}") from exc
     result: list[dict[str, Any]] = []
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
@@ -173,33 +177,30 @@ def _read_shadow(path: Path, since_ms: int | None) -> list[dict[str, Any]]:
             value = json.loads(line)
         except (TypeError, ValueError, json.JSONDecodeError) as exc:
             raise ReportError(f"shadow journal line {line_number} is not JSON") from exc
-        if not isinstance(value, dict) or not _REQUIRED_SHADOW_FIELDS <= value.keys():
+        if not isinstance(value, dict):
             raise ReportError(f"shadow journal line {line_number} has an invalid schema")
-        timestamp_ms = int(_number(value["timestamp_ms"], "shadow timestamp", integer=True))
+
+        # The report still records stale decisions so operators can see stale
+        # evidence. Canonical validation is used for all structural/action-map
+        # checks; the report status computes freshness separately.
+        try:
+            timestamp_ms = int(value["timestamp_ms"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ReportError(f"shadow journal line {line_number} has an invalid timestamp") from exc
+        valid, reason = validate_decision(
+            value, now_ms=timestamp_ms, max_age_ms=2**63 - 1
+        )
+        if not valid:
+            raise ReportError(f"shadow journal line {line_number}: {reason}")
         if since_ms is not None and timestamp_ms < since_ms:
             continue
-        if value["mode"] != "shadow":
-            raise ReportError(f"shadow journal line {line_number} is not shadow mode")
-        action = int(_number(value["action"], "shadow action", integer=True))
-        if action > 9:
-            raise ReportError(f"shadow journal line {line_number} has an invalid action")
-        age = int(_number(value["observation_age_ms"], "observation age", integer=True))
-        size_mult = float(_number(value["size_mult"], "shadow size multiplier"))
-        if not isinstance(value["pair"], str) or not value["pair"]:
-            raise ReportError(f"shadow journal line {line_number} has no pair")
-        if not isinstance(value["engine"], str) or not value["engine"]:
-            raise ReportError(f"shadow journal line {line_number} has no engine")
-        if not isinstance(value["model_version"], str) or not value["model_version"]:
-            raise ReportError(f"shadow journal line {line_number} has no model version")
-        if not isinstance(value["model_sha256"], str) or not value["model_sha256"]:
-            raise ReportError(f"shadow journal line {line_number} has no model checksum")
         result.append(
             {
                 **value,
                 "timestamp_ms": timestamp_ms,
-                "action": action,
-                "size_mult": size_mult,
-                "observation_age_ms": age,
+                "action": int(value["action"]),
+                "size_mult": float(value["size_mult"]),
+                "observation_age_ms": int(value["observation_age_ms"]),
             }
         )
     return sorted(result, key=lambda row: (row["timestamp_ms"], row["pair"], row["action"]))
@@ -218,7 +219,6 @@ def _metrics(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
     result["fees"] = round(sum(row["fees"] for row in values), 12)
     result["slippage"] = 0.0
     return result
-
 
 def _state_status(rows: list[dict[str, Any]], shadow: list[dict[str, Any]]) -> dict[str, Any]:
     cache_rows = [row for row in rows if row["context"].get("regime_at_entry") is not None]
@@ -243,7 +243,15 @@ def _state_status(rows: list[dict[str, Any]], shadow: list[dict[str, Any]]) -> d
         "stale" if any(row["observation_age_ms"] > _CACHE_TTL_MS for row in shadow) else "shadow"
     )
     model_state = "live" if versions and ages else ("inconclusive" if versions else "missing")
-    inconclusive = len(rows) < 100
+    slice_counts: dict[str, int] = {}
+    for row in rows:
+        regime = str(row["context"].get("regime_at_entry") or "missing").lower()
+        key = f"{row['engine']}:{regime}"
+        slice_counts[key] = slice_counts.get(key, 0) + 1
+    insufficient_slices = sorted(
+        key for key, count in slice_counts.items() if count < 100
+    )
+    inconclusive = not rows or bool(insufficient_slices)
     return {
         "cache": {
             "state": cache_state,
@@ -261,6 +269,8 @@ def _state_status(rows: list[dict[str, Any]], shadow: list[dict[str, Any]]) -> d
             "state": "inconclusive" if inconclusive else "live",
             "trade_count": len(rows),
             "minimum_trades": 100,
+            "slice_counts": dict(sorted(slice_counts.items())),
+            "insufficient_slices": insufficient_slices,
         },
     }
 

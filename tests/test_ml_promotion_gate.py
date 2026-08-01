@@ -16,7 +16,7 @@ def test_small_sample_is_inconclusive():
     assert "inconclusive_sample" in result["reasons"]
 
 
-def test_drawdown_parity_can_qualify_ppo():
+def test_drawdown_parity_without_regime_counts_is_inconclusive():
     from src.ml.promotion_gate import evaluate
 
     result = evaluate(
@@ -31,8 +31,8 @@ def test_drawdown_parity_can_qualify_ppo():
             "window_count": 3,
         }
     )
-    assert result["eligible"] is True
-    assert "human_review_required" in result["reasons"]
+    assert result["eligible"] is False
+    assert "inconclusive_sample" in result["reasons"]
 
 
 def test_gate_rejects_missing_or_underfloor_strategy_and_regime_counts():

@@ -66,3 +66,35 @@ def test_pusher_monitor_reports_feature_contract_mismatch():
     )
     report = monitor.collect_drift_report(now_ms=1_000)
     assert report["BNB-USDT"]["reasons"] == ["feature_contract_mismatch"]
+
+
+def test_drift_report_includes_loaded_model_with_no_observations():
+    from src.data.feature_contract import MARKET_FEATURE_COLS
+    from src.ml.model_metadata import canonical_feature_contract_hash
+    from src.ml.regime_pusher import RegimeDriftMonitor
+
+    monitor = RegimeDriftMonitor()
+    monitor._metadata["XRP-USDT"] = {
+        "class_distribution": {"0": 0.7, "1": 0.3, "2": 0.0},
+        "feature_contract_hash": canonical_feature_contract_hash(MARKET_FEATURE_COLS),
+    }
+    report = monitor.collect_drift_report(now_ms=1_000)
+    assert report["XRP-USDT"]["live_distribution"] == {0: 0.0, 1: 0.0, 2: 0.0}
+    assert "low_confidence" in report["XRP-USDT"]["reasons"]
+    assert "stale_cache" in report["XRP-USDT"]["reasons"]
+
+
+def test_pusher_reuses_validated_artifact_metadata_after_file_replacement(tmp_path):
+    from types import SimpleNamespace
+    from src.ml.regime_pusher import model_metadata
+
+    clf = SimpleNamespace(
+        _validated_artifact_metadata={
+            "model_version": "rf-v1",
+            "artifact_sha256": "validated-sha",
+            "feature_contract_hash": "features-v1",
+        }
+    )
+    path = tmp_path / "replaced.pkl"
+    path.write_bytes(b"new-bytes")
+    assert model_metadata(clf, str(path))["artifact_sha256"] == "validated-sha"

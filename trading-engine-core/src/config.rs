@@ -27,6 +27,28 @@ pub struct AppConfig {
     pub paper: PaperConfig,
     #[serde(default)]
     pub price_integrity: PriceIntegrityConfig,
+    #[serde(default)]
+    pub routing: RoutingConfig,
+}
+
+/// PPO routing is intentionally opt-in: only the explicit `live` mode may
+/// affect active strategies. Shadow (and unknown) modes remain observational.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RoutingConfig {
+    #[serde(default)]
+    pub mode: String,
+}
+
+impl Default for RoutingConfig {
+    fn default() -> Self {
+        Self { mode: "shadow".to_string() }
+    }
+}
+
+impl RoutingConfig {
+    pub fn is_live(&self) -> bool {
+        self.mode.eq_ignore_ascii_case("live")
+    }
 }
 
 fn default_timeframe() -> String { "1m".to_string() }
