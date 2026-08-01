@@ -28,12 +28,17 @@ import logging
 import os
 import pickle
 import time
+from collections import defaultdict, deque
 from typing import Optional
 import pandas as pd
 import requests
 
 from src.data.feature_contract import MARKET_FEATURE_COLS, assert_market_feature_contract
-from src.data.feature_engineering import calculate_technical_features
+from src.ml.drift import evaluate_drift
+from src.ml.model_metadata import (
+    canonical_feature_contract_hash,
+    read_metadata,
+)
 from src.ml.regime_classifier import RegimeClassifier
 
 logging.basicConfig(
@@ -46,9 +51,88 @@ log = logging.getLogger("regime_pusher")
 # Requesting exactly this many 1h bars guarantees the response is served from
 # the 1h cache (the /api/v1/klines connector fallback defaults to 1m — a silent
 # interval mismatch we must avoid, since the classifier was trained on 1h bars).
+DRIFT_WINDOW_MS = 24 * 60 * 60 * 1000
+DRIFT_CACHE_TTL_MS = 180_000
+DRIFT_WINDOW_MAX_EVENTS = 2_000
+
+
+class RegimeDriftMonitor:
+    """Bounded, deterministic 24-hour prediction windows keyed by pair."""
+
+    def __init__(self, window_ms: int = DRIFT_WINDOW_MS, max_events: int = DRIFT_WINDOW_MAX_EVENTS):
+        self.window_ms = int(window_ms)
+        self._windows = defaultdict(lambda: deque(maxlen=max_events))
+        self._last_seen: dict[str, int] = {}
+        self._metadata: dict[str, dict] = {}
+
+    def observe(self, pair: str, regime: int, confidence: float, timestamp_ms: int, metadata: dict | None = None) -> None:
+        timestamp_ms = int(timestamp_ms)
+        window = self._windows[pair]
+        cutoff = timestamp_ms - self.window_ms
+        while window and window[0][0] < cutoff:
+            window.popleft()
+        window.append((timestamp_ms, int(regime), float(confidence)))
+        self._last_seen[pair] = timestamp_ms
+        if metadata is not None:
+            self._metadata[pair] = dict(metadata)
+
+    def collect_drift_report(self, now_ms: int | None = None) -> dict[str, dict]:
+        now = int(time.time() * 1000) if now_ms is None else int(now_ms)
+        report: dict[str, dict] = {}
+        feature_hash = canonical_feature_contract_hash(MARKET_FEATURE_COLS)
+        for pair in sorted(self._windows):
+            window = self._windows[pair]
+            cutoff = now - self.window_ms
+            while window and window[0][0] < cutoff:
+                window.popleft()
+            metadata = self._metadata.get(pair, {})
+            training = metadata.get("class_distribution", {})
+            counts = {0: 0, 1: 0, 2: 0}
+            confidences = []
+            for _, regime, confidence in window:
+                counts[regime] = counts.get(regime, 0) + 1
+                confidences.append(confidence)
+            total = sum(counts.values())
+            live = {key: (value / total if total else 0.0) for key, value in sorted(counts.items())}
+            confidence_24h = sum(confidences) / len(confidences) if confidences else None
+            last_seen = self._last_seen.get(pair, 0)
+            age_ms = max(0, now - last_seen) if last_seen else self.window_ms + 1
+            feature_match = metadata.get("feature_contract_hash") == feature_hash
+            reasons = evaluate_drift(
+                training,
+                live,
+                confidence_24h,
+                age_ms,
+                DRIFT_CACHE_TTL_MS,
+                feature_contract_match=not feature_match,
+            )
+            item = {
+                "pair": pair,
+                "training_distribution": dict(training),
+                "live_distribution": live,
+                "confidence_24h": confidence_24h,
+                "age_ms": age_ms,
+                "reasons": reasons,
+            }
+            report[pair] = item
+            if reasons:
+                log.warning("regime_drift pair=%s reasons=%s report=%s", pair, reasons, item)
+        return report
+
+
+_DRIFT_MONITOR = RegimeDriftMonitor()
+
+
+def collect_drift_report(models: dict[str, RegimeClassifier] | None = None, now_ms: int | None = None) -> dict[str, dict]:
+    """Return deterministic drift reports without disabling predictions."""
+    if models:
+        for pair, clf in sorted(models.items()):
+            metadata = getattr(clf, "metadata", None)
+            if metadata is not None:
+                _DRIFT_MONITOR._metadata[pair] = dict(metadata)
+    return _DRIFT_MONITOR.collect_drift_report(now_ms=now_ms)
 KLINE_LIMIT = 500
 KLINE_INTERVAL = "1h"
-
 REGIME_NAMES = {0: "ranging", 1: "trending", 2: "danger"}
 
 
@@ -138,8 +222,14 @@ def load_models(pairs: list[str], model_dir: str) -> dict[str, RegimeClassifier]
         if not os.path.exists(path):
             log.warning("No clean model for %s (expected %s) — skipping, TA fallback stays)", pair, path)
             continue
-        clf = RegimeClassifier(model_path=path, model_type="random_forest")
-        clf.load_model()
+        try:
+            manifest = read_metadata(path)
+            clf = RegimeClassifier(model_path=path, model_type="random_forest")
+            clf.load_model()
+            clf.metadata = manifest
+        except (OSError, ValueError, EOFError, pickle.PickleError, ImportError) as exc:
+            log.error("Model rejected for %s: %s — skipping, TA fallback stays", pair, exc)
+            continue
         if not _declared_feature_contract_ok(clf):
             continue
         models[pair] = clf
@@ -165,6 +255,7 @@ def compute_regime(df: pd.DataFrame, clf: RegimeClassifier) -> Optional[tuple[in
     if not _declared_feature_contract_ok(clf):
         return None
     try:
+        from src.data.feature_engineering import calculate_technical_features
         feats = calculate_technical_features(df.copy())
     except Exception:
         return None
@@ -222,6 +313,7 @@ def collect_regime(
         regime, confidence = result
         timestamp_ms = int(time.time() * 1000)
         updates.append(build_regime_update(pair, regime, confidence, metadata, timestamp_ms))
+        _DRIFT_MONITOR.observe(pair, regime, confidence, timestamp_ms, getattr(clf, "metadata", None))
         log.info(
             "%s → regime=%s(%s) confidence=%.3f",
             pair, regime, REGIME_NAMES.get(regime, "?"), confidence,

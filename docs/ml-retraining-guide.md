@@ -12,14 +12,14 @@
 ## Training Commands
 
 ```bash
-# Standard retrain (all timeframes, 2000 candles)
-python -m src.ml.train_pipeline --pair SOL-USDT
+# Standard retrain (1h, at least 90 days / 2,160 candles)
+python -m src.ml.train_pipeline --pair SOL-USDT --timeframe 1h --candles 2160
 
-# High-quality retrain (more data, single timeframe)
+# Recommended retrain (1h, 4,000+ candles)
 python -m src.ml.train_pipeline --pair SOL-USDT --timeframe 1h --candles 4000
 
-# Quick validation (check if model still performs)
-python -m src.ml.train_pipeline --pair SOL-USDT --timeframe 1h --candles 2000
+# Quick validation (must still use the 90-day minimum)
+python -m src.ml.train_pipeline --pair SOL-USDT --timeframe 1h --candles 2160
 ```
 
 ## Data Requirements
@@ -33,17 +33,27 @@ python -m src.ml.train_pipeline --pair SOL-USDT --timeframe 1h --candles 2000
 
 ## Drift Detection
 
-Compare the last 7 days of model predictions against the training label distribution:
+The pusher retains a bounded 24-hour prediction window per pair and compares
+the live class distribution with the immutable `*.pkl.metadata.json` manifest.
+It emits deterministic reason codes for operator/retraining reports:
 
-1. Count regime predictions per class over the last 7 days
-2. If any class shifts >20% from training distribution, flag for retraining
-3. If DANGER predictions increase >3× baseline, investigate immediately (may indicate real market shift)
+- `class_distribution_shift` — a class moved by more than 20 percentage points
+- `danger_frequency_spike` — DANGER frequency exceeded 3x its training rate
+- `low_confidence` — 24-hour mean confidence is below 0.55
+- `stale_cache` — the regime cache is older than its 180-second TTL
+- `feature_contract_mismatch` — live and manifest feature hashes differ
+
+Warnings request retraining/reporting; they do not disable model inference.
+Existing confidence and TA fallback behavior remains active.
 
 ## Deployment Checklist
 
 - [ ] Train model and review accuracy, confusion matrix, DANGER recall
+- [ ] Verify at least 2,160 one-hour candles (90 days); prefer 4,000+
 - [ ] Verify embargo gap is active (check "Embargo gap: N samples" in training output)
 - [ ] Review feature importances — if all flat (0.04-0.10), model may be weak
-- [ ] Copy `.pkl.new` → `.pkl` (active model)
+- [ ] Confirm the adjacent `.pkl.metadata.json` manifest has the real source commit
+- [ ] Verify the manifest `artifact_sha256` matches the `.pkl` before deployment
+- [ ] Copy `.pkl.new` → `.pkl` together with its immutable manifest
 - [ ] Restart Python container to pick up new model
 - [ ] Monitor `/system` Telegram command for regime changes for 30 minutes

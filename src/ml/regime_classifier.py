@@ -4,6 +4,13 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.calibration import CalibratedClassifierCV
 import os
 
+from src.ml.model_metadata import (
+    canonical_feature_contract_hash,
+    metadata_for_classifier,
+    read_metadata,
+    write_metadata,
+)
+
 REGIME_RANGING = 0
 REGIME_TRENDING = 1
 REGIME_DANGER = 2
@@ -18,6 +25,16 @@ class RegimeClassifier:
         self.is_trained = False
         self.feature_columns = None
         self.feature_schema_version = None
+        self.feature_contract_hash = None
+        self.pair = None
+        self.timeframe = None
+        self.train_start = None
+        self.train_end = None
+        self.label_params = {}
+        self.class_distribution = {}
+        self.metrics = {}
+        self.source_commit = None
+        self.metadata = None
 
     def _create_default_model(self):
         if self.model_type == 'xgboost':
@@ -50,6 +67,11 @@ class RegimeClassifier:
         if sample_weight is not None and self.model_type == 'xgboost':
             fit_kwargs['sample_weight'] = sample_weight
         self.model.fit(X_train, y_train, **fit_kwargs)
+        labels, counts = np.unique(np.asarray(y_train), return_counts=True)
+        total = float(counts.sum())
+        self.class_distribution = {
+            int(label): float(count / total) for label, count in zip(labels, counts)
+        }
         self.is_trained = True
         print("Training complete.")
 
@@ -90,18 +112,25 @@ class RegimeClassifier:
         if not self.is_trained:
             raise ValueError("Cannot save an untrained model.")
 
-        os.makedirs(os.path.dirname(self.model_path), exist_ok=True)
+        directory = os.path.dirname(self.model_path)
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+        if self.feature_contract_hash is None:
+            self.feature_contract_hash = canonical_feature_contract_hash(self.feature_columns)
         data = {
             'model': self.model,
             'model_type': self.model_type,
             'version': 5,
             'feature_columns': self.feature_columns,
             'feature_schema_version': self.feature_schema_version,
+            'feature_contract_hash': self.feature_contract_hash,
+            'class_distribution': self.class_distribution,
         }
         if self.calibrated_model is not None:
             data['calibrated_model'] = self.calibrated_model
         with open(self.model_path, 'wb') as f:
             pickle.dump(data, f)
+        write_metadata(self.model_path, metadata_for_classifier(self))
         print(f"Model saved to {self.model_path} (type={self.model_type})")
 
     def load_model(self):
@@ -116,12 +145,26 @@ class RegimeClassifier:
             self.calibrated_model = data.get('calibrated_model', None)
             self.feature_columns = data.get('feature_columns', None)
             self.feature_schema_version = data.get('feature_schema_version', None)
+            self.feature_contract_hash = data.get('feature_contract_hash', None)
+            self.class_distribution = data.get('class_distribution', {})
         else:
             # Legacy format: raw sklearn model
             self.model = data
             self.model_type = 'random_forest'
             self.calibrated_model = None
-        self.is_trained = True
+        manifest_path = f"{self.model_path}.metadata.json"
+        if os.path.exists(manifest_path):
+            manifest = read_metadata(self.model_path)
+            self.metadata = manifest
+            self.pair = manifest["pair"]
+            self.timeframe = manifest["timeframe"]
+            self.train_start = manifest["train_start"]
+            self.train_end = manifest["train_end"]
+            self.feature_contract_hash = manifest["feature_contract_hash"]
+            self.label_params = manifest["label_params"]
+            self.class_distribution = manifest["class_distribution"]
+            self.metrics = manifest["metrics"]
+            self.source_commit = manifest["source_commit"]
         print(f"Model loaded from {self.model_path} (type={self.model_type})")
 
     def tune_hyperparameters(self, X_train, y_train, n_iter=20, cv=3, sample_weight=None):
