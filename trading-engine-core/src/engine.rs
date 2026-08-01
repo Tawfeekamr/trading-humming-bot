@@ -39,14 +39,15 @@ struct PriceVerifyRequest {
     timeout: Duration,
     verifier: Arc<dyn PriceVerifier>,
     generation: u64,
+    filter_mid: f64,
 }
 
 struct PriceVerifyCompletion {
     symbol: String,
     book: OrderBook,
-    suspect_mid: f64,
     result: VerifyResult,
     generation: u64,
+    filter_mid: f64,
 }
 
 fn spawn_price_verifier_worker(
@@ -73,9 +74,9 @@ fn spawn_price_verifier_worker(
                 .send(PriceVerifyCompletion {
                     symbol: request.symbol,
                     book: request.book,
-                    suspect_mid: request.suspect_mid,
                     result,
                     generation: request.generation,
+                    filter_mid: request.filter_mid,
                 })
                 .await
                 .is_err()
@@ -324,6 +325,7 @@ impl Engine {
                                             book.clone(),
                                             suspect_mid,
                                             generation,
+                                            suspect_mid,
                                         );
                                     }
                                 }
@@ -384,6 +386,7 @@ impl Engine {
         book: OrderBook,
         suspect_mid: f64,
         generation: u64,
+        filter_mid: f64,
     ) {
         if !self.price_verifying.insert(symbol.to_string()) {
             return;
@@ -402,6 +405,7 @@ impl Engine {
             timeout: Duration::from_millis(cfg_pi.verify_timeout_ms),
             verifier: self.price_verifier.clone(),
             generation,
+            filter_mid,
         };
         if self.price_verify_tx.try_send(request).is_err() {
             self.price_verifying.remove(symbol);
@@ -426,7 +430,7 @@ impl Engine {
         self.price_filter.resolve_verify(
             &completion.symbol,
             &completion.result,
-            completion.suspect_mid,
+            completion.filter_mid,
             cfg_pi,
         );
 
@@ -463,12 +467,24 @@ impl Engine {
                             latest_book,
                             latest_mid,
                             latest_generation,
+                            if completion.result == VerifyResult::Confirmed {
+                                latest_mid
+                            } else {
+                                completion.filter_mid
+                            },
                         );
                     }
                     FilterDecision::HoldSuspect => {
                         self.pending_verification_books.insert(
                             completion.symbol.clone(),
-                            (latest_book, latest_mid, latest_generation),
+                            (latest_book.clone(), latest_mid, latest_generation),
+                        );
+                        self.enqueue_price_verification(
+                            &completion.symbol,
+                            latest_book,
+                            latest_mid,
+                            latest_generation,
+                            completion.filter_mid,
                         );
                     }
                     FilterDecision::HardReject => {}
@@ -1270,9 +1286,9 @@ mod tests {
             .handle_price_verification(PriceVerifyCompletion {
                 symbol: "BNB-USDT".into(),
                 book: suspect,
-                suspect_mid: 497.0,
                 result: VerifyResult::Confirmed,
                 generation: 0,
+                filter_mid: 497.0,
             })
             .await
             .expect("verification result must complete");
@@ -1316,9 +1332,9 @@ mod tests {
             .handle_price_verification(PriceVerifyCompletion {
                 symbol: "BNB-USDT".into(),
                 book: first,
-                suspect_mid: 497.0,
                 result: VerifyResult::Confirmed,
                 generation: first_generation,
+                filter_mid: 497.0,
             })
             .await
             .expect("stale verification must complete");
@@ -1330,6 +1346,64 @@ mod tests {
         assert!(!engine.price_verifying.contains("BNB-USDT"));
         assert!(!engine.pending_verification_books.contains_key("BNB-USDT"));
     }
+    #[tokio::test]
+    async fn denied_stale_result_requeues_and_confirms_latest_book() {
+        let routing = RoutingCache::new("/tmp/test_engine_price_denied_stale.json", 0);
+        let mut engine = minimal_engine(vec![], routing);
+        let baseline = test_book("BNB-USDT", 580.0);
+        let first = test_book("BNB-USDT", 497.0);
+        let latest = test_book("BNB-USDT", 496.0);
+        engine.order_books.insert("BNB-USDT".into(), baseline.clone());
+        engine.price_filter.observe("BNB-USDT", &baseline, &engine.config.price_integrity);
+        assert_eq!(
+            engine.price_filter.observe("BNB-USDT", &first, &engine.config.price_integrity),
+            FilterDecision::SuspectNewVerify
+        );
+        let first_generation = engine.remember_pending_verification(
+            "BNB-USDT",
+            first.clone(),
+            497.0,
+        );
+        engine.price_verifying.insert("BNB-USDT".into());
+        assert_eq!(
+            engine.price_filter.observe("BNB-USDT", &latest, &engine.config.price_integrity),
+            FilterDecision::HoldSuspect
+        );
+        let latest_generation = engine.remember_pending_verification(
+            "BNB-USDT",
+            latest.clone(),
+            496.0,
+        );
+
+        engine
+            .handle_price_verification(PriceVerifyCompletion {
+                symbol: "BNB-USDT".into(),
+                book: first,
+                result: VerifyResult::Denied,
+                generation: first_generation,
+                filter_mid: 497.0,
+            })
+            .await
+            .expect("denied verification must complete");
+        assert!(engine.price_verifying.contains("BNB-USDT"));
+
+        engine
+            .handle_price_verification(PriceVerifyCompletion {
+                symbol: "BNB-USDT".into(),
+                book: latest,
+                result: VerifyResult::Confirmed,
+                generation: latest_generation,
+                filter_mid: 497.0,
+            })
+            .await
+            .expect("replacement verification must complete");
+        assert!(!engine.price_filter.is_suspect("BNB-USDT"));
+        assert_eq!(
+            validated_mid(engine.order_books.get("BNB-USDT").expect("latest book published")),
+            Some(496.0)
+        );
+    }
+
 
     #[tokio::test]
     async fn api_entries_are_vetoed_for_suspect_pairs() {
