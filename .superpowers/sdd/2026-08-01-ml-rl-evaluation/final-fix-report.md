@@ -52,3 +52,12 @@ Follow-up verification:
   - Result: passed with no output.
 
 Follow-up concern: PPO artifacts are checksum-bound and remain report-verifiable without a manifest; if a PPO manifest is later produced, it is validated under the existing strict manifest rules.
+
+## Rust integration-test compatibility follow-up
+
+- `trading-engine-core/tests/test_adx_discrepancy.rs` and `trading-engine-core/tests/test_trend_exits.rs` now initialize all optional regime-attribution and router fields on `TickContext`; production behavior is unchanged.
+
+Verification:
+
+- `cargo test --workspace --no-fail-fast`
+  - Result: **379 passed, 39 suites, 6 ignored**.
