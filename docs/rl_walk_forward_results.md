@@ -86,3 +86,35 @@ Train windows remain strictly before test windows. `--embargo-bars` can
 preserve a non-zero gap between training and evaluation data; the training
 subprocess uses the test-start boundary so the provenance check cannot
 silently include the embargo or OOS bars.
+
+## Paper-only verification runbook
+
+Walk-forward output is evidence, not an activation switch. For each enabled
+pair, run the evaluator against cached data and retain the generated report
+with its source commit, model SHA-256 checksums, feature-contract hash, and
+chronological train/test windows:
+
+```bash
+python -m src.rl.walk_forward --pairs ETHUSDT BNBUSDT
+python scripts/verify_ml_rl_rollout.py \
+  --repo-root . \
+  --report reports/rl_walk_forward_ETHUSDT.json \
+  --shadow data/shadow_routing.jsonl \
+  --out reports/ml_rl_rollout_verification.json
+```
+
+Run the compose sidecar with `routing.mode=shadow` only. It may read cached
+market/equity data and write `data/shadow_routing.jsonl`; it must not receive
+exchange credentials, call an active order endpoint, or create/update
+`data/routing_cache.json`. Verify that the active cache is absent or unchanged
+from its pre-run checksum and that shadow observations remain within the
+configured freshness TTL for one complete bar interval.
+
+The verifier checks the adjacent immutable model manifests and artifact
+checksums, feature hashes, promotion-gate shape and result, routing mode,
+active-cache immutability, cache/shadow freshness, the full shadow schema, and
+entry-time attribution coverage. A non-zero result is rejected. A report with
+too few independent trades is `inconclusive`, not a promotion; a clean report
+and fresh shadow evidence may be recorded as `eligible` only after human
+review. PPO is never activated automatically, and an explicit separate
+human-approved change is required before any live-routing mode exists.

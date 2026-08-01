@@ -83,3 +83,47 @@ reason codes, shadow decision age, evidence state, and the explicit PPO active
 flag. `/ml_status` returns the same operator block. Runtime state is reported
 as `live`, `shadow`, `stale`, `missing`, or `inconclusive`; model files alone
 never imply active PPO routing.
+
+
+## Paper-only rollout verification
+
+PPO is a paper/shadow observer in this phase. A model file, an eligible
+walk-forward report, or a running sidecar never activates PPO. Do not provide
+the shadow container with exchange credentials or an active-routing endpoint.
+Run the following checks offline against cached artifacts and journals:
+
+```bash
+# Run the cached walk-forward evaluator for every enabled pair. This writes
+# reports/rl_walk_forward_<PAIR>.json and never writes data/routing_cache.json.
+python -m src.rl.walk_forward --pairs ETHUSDT BNBUSDT
+
+# Verify manifests, feature-contract hashes, report gates, cache freshness,
+# attribution coverage, and every shadow decision.
+python scripts/verify_ml_rl_rollout.py \
+  --repo-root . \
+  --report reports/rl_walk_forward_ETHUSDT.json \
+  --shadow data/shadow_routing.jsonl \
+  --out reports/ml_rl_rollout_verification.json
+```
+
+The verifier emits machine-readable JSON and a concise exit summary. It
+rejects active PPO, a non-`shadow` routing mode, an active routing-cache
+change, missing or mismatched model-manifest checksums, feature-contract hash
+mismatches, stale cache/shadow observations, invalid shadow schema records,
+and malformed or rejected promotion gates. An inconclusive sample-size gate
+is reported as a warning and remains ineligible for promotion.
+
+Before and after a shadow run, record the SHA-256 of
+`data/routing_cache.json` when that file exists; pass the baseline checksum in
+the report metadata as `routing_cache_sha256`. The shadow service may append
+only to `data/shadow_routing.jsonl`. Confirm the active cache is absent or
+byte-for-byte unchanged and that the journal contains fresh, schema-valid
+records for at least one complete bar interval. No AWS, exchange, or live
+routing operation is part of verification.
+
+Review `promotion.eligible`, all reasons, model checksums, date windows,
+source commit, feature hash, and attribution coverage. Record the evidence as
+`eligible` only when the report gate and verifier pass; use `inconclusive` for
+insufficient independent trades or missing paper evidence, and `rejected` for
+any verifier failure. PPO remains shadow-only until a separate,
+human-approved configuration and code change explicitly promotes it.
