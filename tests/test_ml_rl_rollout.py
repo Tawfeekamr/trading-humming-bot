@@ -190,3 +190,24 @@ def test_rollout_verifier_does_not_claim_full_attribution_without_trade_total(tm
     result = verify_ml_rl_rollout(str(tmp_path), str(report_path), str(shadow_path))
     assert result["attribution_coverage"]["ratio"] is None
     assert "attribution_unknown" in result["warnings"]
+
+
+def test_rollout_verifier_rejects_unbound_rf_checksum_claim(tmp_path):
+    report_path = tmp_path / "report.json"
+    shadow_path = tmp_path / "shadow.jsonl"
+    _write_report(
+        report_path,
+        _report(
+            metadata={
+                "feature_contract_hash": "features-v1",
+                "routing_mode": "shadow",
+                "model_paths": [],
+                "rf_model_sha256": "a" * 64,
+                "verification_now_ms": 1_700_000_000_000,
+            }
+        ),
+    )
+    _shadow(shadow_path)
+    result = verify_ml_rl_rollout(str(tmp_path), str(report_path), str(shadow_path))
+    assert result["ok"] is False
+    assert "metadata_checksum_mismatch" in result["failures"]

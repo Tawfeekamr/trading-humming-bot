@@ -178,8 +178,10 @@ def _verify_evaluator_claims(
 ) -> None:
     metadata = _report_metadata(report)
 
-    def check(path_value: Any, claim: Any) -> None:
+    def check(path_value: Any, claim: Any, *, required: bool = False) -> None:
         if not isinstance(path_value, str) or not path_value:
+            if required:
+                _failure(failures, "metadata_checksum_mismatch")
             return
         path = _relative_path(root, path_value)
         if not path.exists() or not isinstance(claim, str):
@@ -191,7 +193,9 @@ def _verify_evaluator_claims(
         except OSError:
             _failure(failures, "metadata_checksum_mismatch")
 
-    check(metadata.get("rf_model"), metadata.get("rf_model_sha256"))
+    rf_claim = metadata.get("rf_model_sha256")
+    if rf_claim is not None:
+        check(metadata.get("rf_model"), rf_claim, required=True)
     ppo_paths = metadata.get("ppo_model_paths") or metadata.get("ppo_models")
     if isinstance(ppo_paths, str):
         ppo_paths = [ppo_paths]
