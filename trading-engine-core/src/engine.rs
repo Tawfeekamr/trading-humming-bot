@@ -38,6 +38,7 @@ struct PriceVerifyRequest {
     tolerance_pct: f64,
     timeout: Duration,
     verifier: Arc<dyn PriceVerifier>,
+    generation: u64,
 }
 
 struct PriceVerifyCompletion {
@@ -45,6 +46,7 @@ struct PriceVerifyCompletion {
     book: OrderBook,
     suspect_mid: f64,
     result: VerifyResult,
+    generation: u64,
 }
 
 fn spawn_price_verifier_worker(
@@ -73,6 +75,7 @@ fn spawn_price_verifier_worker(
                     book: request.book,
                     suspect_mid: request.suspect_mid,
                     result,
+                    generation: request.generation,
                 })
                 .await
                 .is_err()
@@ -99,7 +102,8 @@ pub struct Engine {
     price_verifying: HashSet<String>,
     status_cache: StrategyStatusCache,
     regime_cache: RegimeCache,
-    /// PPO router decision (active engine + size mult + flat). Read each tick
+    price_generation: HashMap<String, u64>,
+    pending_verification_books: HashMap<String, (OrderBook, f64, u64)>,
     /// at the top of `tick_strategies` to pause non-active engines and force
     /// flat when the router says so. None (or stale) ⇒ route unchanged.
     routing_cache: RoutingCache,
@@ -145,6 +149,8 @@ impl Engine {
             price_verify_tx: verify_request_tx,
             price_verify_rx: verify_result_rx,
             price_verifying: HashSet::new(),
+            price_generation: HashMap::new(),
+            pending_verification_books: HashMap::new(),
             status_cache,
             regime_cache,
             routing_cache,
@@ -290,42 +296,35 @@ impl Engine {
                             let mut should_insert = !cfg_pi.enabled;
                             if cfg_pi.enabled {
                                 match self.price_filter.observe(&pair_key, &book, cfg_pi) {
-                                    FilterDecision::Accept => should_insert = true,
+                                    FilterDecision::Accept => {
+                                        should_insert = true;
+                                        self.pending_verification_books.remove(&pair_key);
+                                    }
                                     FilterDecision::HardReject => {
+                                        self.pending_verification_books.remove(&pair_key);
                                         warn!("Price filter: hard-reject {}; holding last-good", pair_key);
                                     }
-                                    FilterDecision::HoldSuspect => {}
+                                    FilterDecision::HoldSuspect => {
+                                        if let Some(mid) = validated_mid(&book) {
+                                            self.remember_pending_verification(&pair_key, book.clone(), mid);
+                                        }
+                                    }
                                     FilterDecision::SuspectNewVerify => {
                                         let Some(suspect_mid) = validated_mid(&book) else {
                                             warn!("Price filter: invalid suspect book {}; holding last-good", pair_key);
                                             continue;
                                         };
-                                        let last_good_mid =
-                                            self.price_filter.last_good(&pair_key).unwrap_or(suspect_mid);
-                                        if self.price_verifying.insert(pair_key.clone()) {
-                                            let request = PriceVerifyRequest {
-                                                symbol: pair_key.clone(),
-                                                book: book.clone(),
-                                                suspect_mid,
-                                                last_good_mid,
-                                                tolerance_pct: cfg_pi.verify_tolerance_pct,
-                                                timeout: Duration::from_millis(cfg_pi.verify_timeout_ms),
-                                                verifier: self.price_verifier.clone(),
-                                            };
-                                            if self.price_verify_tx.try_send(request).is_err() {
-                                                self.price_verifying.remove(&pair_key);
-                                                self.price_filter.resolve_verify(
-                                                    &pair_key,
-                                                    &VerifyResult::Unavailable,
-                                                    suspect_mid,
-                                                    cfg_pi,
-                                                );
-                                                warn!(
-                                                    "Price verifier unavailable for {}; holding last-good",
-                                                    pair_key
-                                                );
-                                            }
-                                        }
+                                        let generation = self.remember_pending_verification(
+                                            &pair_key,
+                                            book.clone(),
+                                            suspect_mid,
+                                        );
+                                        self.enqueue_price_verification(
+                                            &pair_key,
+                                            book.clone(),
+                                            suspect_mid,
+                                            generation,
+                                        );
                                     }
                                 }
                             }
@@ -362,6 +361,61 @@ impl Engine {
         Ok(())
     }
 
+    fn remember_pending_verification(
+        &mut self,
+        symbol: &str,
+        book: OrderBook,
+        suspect_mid: f64,
+    ) -> u64 {
+        let generation = self
+            .price_generation
+            .entry(symbol.to_string())
+            .and_modify(|generation| *generation = generation.saturating_add(1))
+            .or_insert(0);
+        let generation = *generation;
+        self.pending_verification_books
+            .insert(symbol.to_string(), (book, suspect_mid, generation));
+        generation
+    }
+
+    fn enqueue_price_verification(
+        &mut self,
+        symbol: &str,
+        book: OrderBook,
+        suspect_mid: f64,
+        generation: u64,
+    ) {
+        if !self.price_verifying.insert(symbol.to_string()) {
+            return;
+        }
+        let cfg_pi = &self.config.price_integrity;
+        let last_good_mid = self
+            .price_filter
+            .last_good(symbol)
+            .unwrap_or(suspect_mid);
+        let request = PriceVerifyRequest {
+            symbol: symbol.to_string(),
+            book,
+            suspect_mid,
+            last_good_mid,
+            tolerance_pct: cfg_pi.verify_tolerance_pct,
+            timeout: Duration::from_millis(cfg_pi.verify_timeout_ms),
+            verifier: self.price_verifier.clone(),
+            generation,
+        };
+        if self.price_verify_tx.try_send(request).is_err() {
+            self.price_verifying.remove(symbol);
+            self.pending_verification_books.remove(symbol);
+            self.price_filter.resolve_verify(
+                symbol,
+                &VerifyResult::Unavailable,
+                suspect_mid,
+                cfg_pi,
+            );
+            warn!("Price verifier unavailable for {}; holding last-good", symbol);
+        }
+    }
+
     async fn handle_price_verification(&mut self, completion: PriceVerifyCompletion) -> Result<()> {
         if !self.price_verifying.remove(&completion.symbol) {
             return Ok(());
@@ -376,12 +430,59 @@ impl Engine {
             cfg_pi,
         );
 
-        let accepted = completion.result == VerifyResult::Confirmed
+        let pending = self
+            .pending_verification_books
+            .remove(&completion.symbol);
+        let mut accepted_book = None;
+        if let Some((latest_book, latest_mid, latest_generation)) = pending {
+            if latest_generation == completion.generation {
+                if completion.result == VerifyResult::Confirmed
+                    && was_suspect
+                    && !self.price_filter.is_suspect(&completion.symbol)
+                {
+                    accepted_book = Some(latest_book);
+                } else if self.price_filter.is_suspect(&completion.symbol) {
+                    self.pending_verification_books.insert(
+                        completion.symbol.clone(),
+                        (latest_book, latest_mid, latest_generation),
+                    );
+                }
+            } else {
+                match self
+                    .price_filter
+                    .observe(&completion.symbol, &latest_book, cfg_pi)
+                {
+                    FilterDecision::Accept => accepted_book = Some(latest_book),
+                    FilterDecision::SuspectNewVerify => {
+                        self.pending_verification_books.insert(
+                            completion.symbol.clone(),
+                            (latest_book.clone(), latest_mid, latest_generation),
+                        );
+                        self.enqueue_price_verification(
+                            &completion.symbol,
+                            latest_book,
+                            latest_mid,
+                            latest_generation,
+                        );
+                    }
+                    FilterDecision::HoldSuspect => {
+                        self.pending_verification_books.insert(
+                            completion.symbol.clone(),
+                            (latest_book, latest_mid, latest_generation),
+                        );
+                    }
+                    FilterDecision::HardReject => {}
+                }
+            }
+        } else if completion.result == VerifyResult::Confirmed
             && was_suspect
-            && !self.price_filter.is_suspect(&completion.symbol);
-        if accepted {
-            self.order_books
-                .insert(completion.symbol.clone(), completion.book);
+            && !self.price_filter.is_suspect(&completion.symbol)
+        {
+            accepted_book = Some(completion.book);
+        }
+
+        if let Some(book) = accepted_book {
+            self.order_books.insert(completion.symbol.clone(), book);
             self.tick_strategies().await?;
             self.process_paper_fills().await?;
             self.feed_breaker().await;
@@ -413,6 +514,9 @@ impl Engine {
 
     async fn place_api_order(&mut self, req: OrderRequest) -> Result<OrderResponse> {
         if !req.reduce_only {
+            if self.is_price_suspect(&req.symbol) {
+                anyhow::bail!("order blocked: price suspect");
+            }
             self.risk.check_trading_allowed()?;
         }
 
@@ -428,7 +532,6 @@ impl Engine {
         }
         Ok(resp)
     }
-
     async fn cancel_api_order(&mut self, symbol: &str, order_id: &str) -> Result<()> {
         self.connector.cancel_order(symbol, order_id).await?;
         let original_len = self.placed_orders.len();
@@ -630,15 +733,22 @@ impl Engine {
         }
     }
 
+    fn is_price_suspect(&self, symbol: &str) -> bool {
+        let pair_key = self
+            .find_pair_for_symbol(symbol)
+            .unwrap_or_else(|| symbol.to_string());
+        self.price_filter.is_suspect(&pair_key)
+    }
+
     async fn submit_orders(&mut self, orders: Vec<OrderRequest>) -> Result<()> {
         for req in orders {
             // Reduce-only orders (exits) bypass the halt check so a circuit
             // breaker trip can't trap open positions.
             if !req.reduce_only {
-                let pair_key = self
-                    .find_pair_for_symbol(&req.symbol)
-                    .unwrap_or_else(|| req.symbol.clone());
-                if self.price_filter.is_suspect(&pair_key) {
+                if self.is_price_suspect(&req.symbol) {
+                    let pair_key = self
+                        .find_pair_for_symbol(&req.symbol)
+                        .unwrap_or_else(|| req.symbol.clone());
                     warn!(
                         "Order vetoed (price suspect): {} — holding until price verified",
                         pair_key
@@ -1077,6 +1187,8 @@ mod tests {
             price_verify_tx: verify_request_tx,
             price_verify_rx: verify_result_rx,
             price_verifying: HashSet::new(),
+            price_generation: HashMap::new(),
+            pending_verification_books: HashMap::new(),
             status_cache: StrategyStatusCache::new(),
             regime_cache: RegimeCache::new("/tmp/test_engine_regime.json", 0),
             routing_cache,
@@ -1160,6 +1272,7 @@ mod tests {
                 book: suspect,
                 suspect_mid: 497.0,
                 result: VerifyResult::Confirmed,
+                generation: 0,
             })
             .await
             .expect("verification result must complete");
@@ -1170,6 +1283,73 @@ mod tests {
             Some(497.0)
         );
     }
+    #[tokio::test]
+    async fn stale_verification_requeues_latest_suspect_book() {
+        let routing = RoutingCache::new("/tmp/test_engine_price_stale.json", 0);
+        let mut engine = minimal_engine(vec![], routing);
+        let baseline = test_book("BNB-USDT", 580.0);
+        let first = test_book("BNB-USDT", 497.0);
+        let latest = test_book("BNB-USDT", 470.0);
+        engine.order_books.insert("BNB-USDT".into(), baseline.clone());
+        engine.price_filter.observe("BNB-USDT", &baseline, &engine.config.price_integrity);
+        assert_eq!(
+            engine.price_filter.observe("BNB-USDT", &first, &engine.config.price_integrity),
+            FilterDecision::SuspectNewVerify
+        );
+        let first_generation = engine.remember_pending_verification(
+            "BNB-USDT",
+            first.clone(),
+            497.0,
+        );
+        engine.price_verifying.insert("BNB-USDT".into());
+        assert_eq!(
+            engine.price_filter.observe("BNB-USDT", &latest, &engine.config.price_integrity),
+            FilterDecision::HoldSuspect
+        );
+        let latest_generation = engine.remember_pending_verification(
+            "BNB-USDT",
+            latest,
+            470.0,
+        );
+
+        engine
+            .handle_price_verification(PriceVerifyCompletion {
+                symbol: "BNB-USDT".into(),
+                book: first,
+                suspect_mid: 497.0,
+                result: VerifyResult::Confirmed,
+                generation: first_generation,
+            })
+            .await
+            .expect("stale verification must complete");
+
+        assert_eq!(
+            validated_mid(engine.order_books.get("BNB-USDT").expect("latest book accepted")),
+            Some(470.0)
+        );
+        assert!(!engine.price_verifying.contains("BNB-USDT"));
+        assert!(!engine.pending_verification_books.contains_key("BNB-USDT"));
+    }
+
+    #[tokio::test]
+    async fn api_entries_are_vetoed_for_suspect_pairs() {
+        let routing = RoutingCache::new("/tmp/test_engine_api_price_veto.json", 0);
+        let mut engine = minimal_engine(vec![], routing);
+        let baseline = test_book("BNB-USDT", 580.0);
+        let spike = test_book("BNB-USDT", 497.0);
+        engine.price_filter.observe("BNB-USDT", &baseline, &engine.config.price_integrity);
+        assert_eq!(
+            engine.price_filter.observe("BNB-USDT", &spike, &engine.config.price_integrity),
+            FilterDecision::SuspectNewVerify
+        );
+        let connector = Arc::new(RecordingConnector::default());
+        let placed = connector.placed.clone();
+        engine.connector = connector;
+
+        assert!(engine.place_api_order(test_order("BNBUSDT", false)).await.is_err());
+        assert!(placed.lock().is_empty());
+    }
+
 
 
     #[tokio::test]

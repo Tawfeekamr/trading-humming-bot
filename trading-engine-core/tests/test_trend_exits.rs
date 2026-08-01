@@ -136,16 +136,44 @@ async fn test_breakeven_and_tp1_partial_at_1r() {
     let risk = 50000.0 - sl;
     let mut bars = Vec::new();
     let orders = strategy.on_tick(&make_tick(50000.0 + risk, &mut bars)).await.unwrap();
-
     let sell = orders.iter().find(|o| o.side == OrderSide::Sell && o.reduce_only)
         .expect("TP1 should emit a reduce-only sell at +1R");
     assert!((sell.quantity - 0.033).abs() < 1e-9, "TP1 closes 33% of initial qty");
-    let pos = strategy.position().expect("runner remains after TP1");
-    assert!((pos.remaining_qty - 0.067).abs() < 1e-9);
+    let remaining_after_order = strategy.position().expect("runner remains after TP1").remaining_qty;
+    assert!((remaining_after_order - 0.067).abs() < 1e-9);
+    // The strategy books reactive exits optimistically in on_tick; the matching
+    // fill callback must reconcile the already-booked quantity exactly once.
+    strategy.on_fill(&make_fill(OrderSide::Sell, sell.price.unwrap_or(50000.0), sell.quantity)).await.unwrap();
+    let pos = strategy.position().expect("runner remains after TP1 fill");
+    assert!((pos.remaining_qty - 0.067).abs() < 1e-9, "exit fill must not double-deduct");
     assert!((pos.stop_loss - 50000.0).abs() < 50.0, "stop promoted to breakeven");
     assert!(pos.tp_levels[0].filled);
 }
 
+/// An optimistic TP booked before restart must remain booked when its fill
+/// arrives after restart; the callback must not deduct it a second time.
+#[tokio::test]
+async fn test_partial_exit_fill_reconciles_across_restart() {
+    let config = default_trend_config();
+    let pair = "RESTART-PARTIAL-USDT";
+    let tg1 = trading_engine_core::notifications::TelegramBot::new("", "");
+    let mut s1 = TrendStrategy::new(pair, &config, tg1);
+    warmup(&mut s1, 50000.0);
+    enter_position(&mut s1, 50000.0, 0.1).await;
+    let risk = 50000.0 - s1.calculate_stop_loss(50000.0, OrderSide::Buy);
+    let mut bars = Vec::new();
+    let orders = s1.on_tick(&make_tick(50000.0 + risk, &mut bars)).await.unwrap();
+    let tp1 = orders.iter().find(|o| o.reduce_only).expect("TP1 order");
+    drop(s1);
+
+    let tg2 = trading_engine_core::notifications::TelegramBot::new("", "");
+    let mut s2 = TrendStrategy::new(pair, &config, tg2);
+    assert!((s2.position().unwrap().remaining_qty - 0.067).abs() < 1e-9);
+    s2.on_fill(&make_fill(OrderSide::Sell, tp1.price.unwrap_or(50000.0), tp1.quantity)).await.unwrap();
+    assert!((s2.position().unwrap().remaining_qty - 0.067).abs() < 1e-9);
+    let _ = std::fs::remove_file(format!("data/{}_trend_position.json", pair.replace("-", "_")));
+
+}
 /// TP2 closes 50% of the quantity remaining after TP1, leaving the runner.
 #[tokio::test]
 async fn test_tp2_closes_half_of_remaining_quantity() {
@@ -292,6 +320,37 @@ async fn test_restored_position_backfills_hybrid_targets_without_exits() {
     assert!(s2.position().is_some(), "restored position survives first tick");
     assert!(s2.position().unwrap().tp_levels.iter().all(|tp| tp.filled));
 
+    let _ = std::fs::remove_file(path);
+}
+
+/// Restored legacy ladders with a TP3 are normalized to the two hybrid targets.
+#[tokio::test]
+async fn test_restored_three_target_ladder_discards_tp3() {
+    let config = default_trend_config();
+    let pair = "RESTORE-LEGACY-3TP-USDT";
+    let tg1 = trading_engine_core::notifications::TelegramBot::new("", "");
+    let mut s1 = TrendStrategy::new(pair, &config, tg1);
+    warmup(&mut s1, 50000.0);
+    enter_position(&mut s1, 50000.0, 0.1).await;
+    drop(s1);
+
+    let path = format!("data/{}_trend_position.json", pair.replace("-", "_"));
+    let content = std::fs::read_to_string(&path).unwrap();
+    let mut state: serde_json::Value = serde_json::from_str(&content).unwrap();
+    state["position"]["tp_levels"] = serde_json::json!([
+        {"price": 50020.0, "close_pct": 0.33, "filled": true},
+        {"price": 50030.0, "close_pct": 0.50, "filled": false},
+        {"price": 50040.0, "close_pct": 0.80, "filled": false}
+    ]);
+    std::fs::write(&path, serde_json::to_string(&state).unwrap()).unwrap();
+
+    let tg2 = trading_engine_core::notifications::TelegramBot::new("", "");
+    let s2 = TrendStrategy::new(pair, &config, tg2);
+    let pos = s2.position().expect("legacy position restored");
+    assert_eq!(pos.tp_levels.len(), 2);
+    assert!(pos.tp_levels[0].filled);
+    assert!(!pos.tp_levels[1].filled);
+    assert_eq!(pos.tp_levels[1].close_pct, 0.50);
     let _ = std::fs::remove_file(path);
 }
 

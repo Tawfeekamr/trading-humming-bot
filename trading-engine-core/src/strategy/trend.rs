@@ -112,6 +112,13 @@ impl TrendPosition {
 struct TrendPositionState {
     position: TrendPosition,
     realized_pnl: f64,
+    /// Quantity deducted when a reactive reduce-only order was emitted but its
+    /// matching fill has not arrived yet. Defaults to zero for old state files.
+    #[serde(default)]
+    pending_exit_qty: f64,
+    /// Original per-unit stop distance, retained after breakeven promotion.
+    #[serde(default)]
+    initial_risk: f64,
 }
 
 #[derive(Default, Clone)]
@@ -149,6 +156,12 @@ pub struct TrendStrategy {
     /// struct carries no reduce_only, so this is the only signal available.
     /// `pub` so tests can inject an entry intent before calling on_fill directly.
     pub pending_entry: Option<OrderSide>,
+    /// Quantity already deducted optimistically by reactive exit handling.
+    /// Matching reduce-only fills consume this balance instead of deducting a
+    /// second time in on_fill.
+    pending_exit_qty: f64,
+    /// Original per-unit stop distance used to backfill migrated target levels.
+    position_initial_risk: f64,
     last_bar_count: usize,
     // Capital tracking
     initial_capital: f64,
@@ -224,6 +237,8 @@ impl TrendStrategy {
             atr: Atr::new(14),
             position: None,
             pending_entry: None,
+            pending_exit_qty: 0.0,
+            position_initial_risk: 0.0,
             last_bar_count: 0,
             initial_capital: capital,
             realized_pnl: 0.0,
@@ -442,6 +457,8 @@ impl TrendStrategy {
             let state = TrendPositionState {
                 position: pos.clone(),
                 realized_pnl: self.realized_pnl,
+                pending_exit_qty: self.pending_exit_qty,
+                initial_risk: self.position_initial_risk,
             };
             match serde_json::to_string_pretty(&state) {
                 Ok(json) => { let _ = fs::write(&path, json); }
@@ -460,19 +477,50 @@ impl TrendStrategy {
                 match serde_json::from_str::<TrendPositionState>(&content) {
                     Ok(state) => {
                         let mut pos = state.position;
-                        // Positions written by the trailing-only model have no
-                        // target ladder. Migrate them on load; the restored flag
-                        // below ensures overdue targets are reconciled without
-                        // emitting catch-up exit orders.
-                        if pos.tp_levels.is_empty() {
-                            pos.tp_levels = TrendPosition::calculate_tp_levels(
-                                pos.entry_price,
-                                pos.stop_loss,
-                                self.config.risk_reward_ratio,
-                                0.0,
-                                pos.side,
-                            );
-                        }
+                        let legacy_filled = [
+                            pos.tp_levels.get(0).map_or(false, |tp| tp.filled),
+                            pos.tp_levels.get(1).map_or(false, |tp| tp.filled),
+                        ];
+                        let stored_risk = if state.initial_risk > 0.0 {
+                            state.initial_risk
+                        } else {
+                            match pos.side {
+                                OrderSide::Buy => pos.entry_price - pos.stop_loss,
+                                OrderSide::Sell => pos.stop_loss - pos.entry_price,
+                            }.max(0.0)
+                        };
+                        // New state files retain the original stop distance,
+                        // which survives breakeven promotion. Very old files
+                        // may have lost it; use the trail excursion when
+                        // available, otherwise a small non-zero fallback so a
+                        // migrated ladder never collapses onto entry.
+                        let migration_risk = if stored_risk > 0.0 {
+                            stored_risk
+                        } else {
+                            pos.trailing_stop
+                                .map(|trail| (trail - pos.entry_price).abs())
+                                .filter(|risk| *risk > 0.0)
+                                .unwrap_or(pos.entry_price.abs() * 0.01)
+                        };
+                        self.position_initial_risk = migration_risk;
+                        self.pending_exit_qty = state.pending_exit_qty;
+                        // Normalize every restored ladder to the fixed hybrid
+                        // targets. Preserve only TP1/TP2 filled flags; legacy
+                        // TP3 is intentionally discarded.
+                        let migration_stop = match pos.side {
+                            OrderSide::Buy => pos.entry_price - migration_risk,
+                            OrderSide::Sell => pos.entry_price + migration_risk,
+                        };
+                        let mut hybrid_levels = TrendPosition::calculate_tp_levels(
+                            pos.entry_price,
+                            migration_stop,
+                            self.config.risk_reward_ratio,
+                            0.0,
+                            pos.side,
+                        );
+                        hybrid_levels[0].filled = legacy_filled[0];
+                        hybrid_levels[1].filled = legacy_filled[1];
+                        pos.tp_levels = hybrid_levels;
                         pos.restored = true; // reconcile on the first on_tick after load
                         // Back-fill the funding clock for old state files written
                         // before last_funding_time existed (serde default 0). A
@@ -615,6 +663,7 @@ impl Strategy for TrendStrategy {
                 let pnl = trade_pnl(side, entry, current_price, qty);
                 self.realized_pnl += pnl;
                 self.pending_entry = None;
+                self.pending_exit_qty = 0.0;
                 self.log_close(side, entry, current_price, qty, pnl, sl, tp_target, "force_flat", ctx.timestamp, et);
                 self.notify_exit(current_price, pnl, "force_flat");
                 let (_ot, price_opt) = exit_order_req(perp_attached, side, current_price);
@@ -794,6 +843,7 @@ impl Strategy for TrendStrategy {
                 self.realized_pnl += pnl;
                 self.position = None;
                 self.pending_entry = None;
+                self.pending_exit_qty = 0.0;
                 if let Some((s, ep, sl, tp_target, et)) = snap {
                     self.log_close(s, ep, current_price, qty, pnl, sl, tp_target, reason, ctx.timestamp, et);
                 }
@@ -820,6 +870,7 @@ impl Strategy for TrendStrategy {
                         pos.remaining_qty -= sell_qty;
                         let pnl = trade_pnl(tp_side, tp_entry, current_price, sell_qty);
                         self.realized_pnl += pnl;
+                        self.pending_exit_qty += sell_qty;
                         let reason = if idx == 0 { "tp1" } else { "tp2" };
                         tp_exits.push((sell_qty, pnl, reason));
                         let (ot, price_opt) = exit_order_req(perp_attached, tp_side, current_price);
@@ -853,6 +904,7 @@ impl Strategy for TrendStrategy {
                     self.realized_pnl += pnl;
                     self.position = None;
                     self.pending_entry = None;
+                    self.pending_exit_qty = 0.0;
                     if let Some((s, ep, sl, tp_target, et)) = snap {
                         self.log_close(s, ep, current_price, qty, pnl, sl, tp_target, "signal_exit", ctx.timestamp, et);
                     }
@@ -866,8 +918,8 @@ impl Strategy for TrendStrategy {
                     self.save_position();
                     return Ok(orders);
                 }
+                }
             }
-        }
 
         // Persist any trailing stop / TP updates from this tick
         self.save_position();
@@ -949,8 +1001,9 @@ impl Strategy for TrendStrategy {
         // An entry fill opens a position in the side recorded at order time. The
         // Fill struct carries no reduce_only, so `pending_entry` (set when the
         // entry order was placed) is the only way to tell an opening fill from a
-        // closing one when the position is already flat. Any other fill reconciles
-        // remaining quantity — exit paths already booked PnL at detection time.
+        // closing one when the position is already flat. Reactive exit paths
+        // book PnL and remaining quantity at detection time; pending_exit_qty
+        // prevents their matching fills from deducting the same quantity again.
         if let Some(side) = self.pending_entry.take() {
             let stop_loss = self.calculate_stop_loss(fill.price, side);
             let tp_levels = TrendPosition::calculate_tp_levels(
@@ -960,6 +1013,10 @@ impl Strategy for TrendStrategy {
                 0.0,
                 side,
             );
+            self.position_initial_risk = match side {
+                OrderSide::Buy => fill.price - stop_loss,
+                OrderSide::Sell => stop_loss - fill.price,
+            }.max(0.0);
             self.position = Some(TrendPosition {
                 side, entry_price: fill.price, stop_loss,
                 quantity: fill.quantity, remaining_qty: fill.quantity,
@@ -973,14 +1030,22 @@ impl Strategy for TrendStrategy {
                 last_funding_time: fill.timestamp,
             });
             self.save_position();
+            self.pending_exit_qty = 0.0;
             self.notify_entry(fill.price, fill.quantity, stop_loss, side);
             return Ok(Vec::new());
         }
-        // Exit / reduce fill: reconcile remaining quantity.
-        if let Some(mut pos) = self.position.take() {
-            pos.remaining_qty -= fill.quantity;
-            if pos.remaining_qty <= 0.0001 { self.position = None; }
-            else { self.position = Some(pos); }
+        // A fill may exceed the quantity already booked by a reactive exit
+        // (for example, an external/manual reduce order); only that excess
+        // reconciles against the position here.
+        let booked = self.pending_exit_qty.min(fill.quantity);
+        self.pending_exit_qty -= booked;
+        let unbooked = fill.quantity - booked;
+        if unbooked > 0.0 {
+            if let Some(mut pos) = self.position.take() {
+                pos.remaining_qty -= unbooked;
+                if pos.remaining_qty <= 0.0001 { self.position = None; }
+                else { self.position = Some(pos); }
+            }
         }
         self.save_position();
         Ok(Vec::new())
@@ -1669,7 +1734,7 @@ mod tests {
             entry_time: 1_700_000_000_000, restored: false, last_funding_time: 0,
         };
         let mut v = serde_json::to_value(&TrendPositionState {
-            position: pos, realized_pnl: 0.0,
+            position: pos, realized_pnl: 0.0, pending_exit_qty: 0.0, initial_risk: 0.0,
         }).unwrap();
         // Remove the key so serde's default (0) kicks in on load — exactly the
         // legacy-file scenario this fix guards against. (as_mut Object remove,
