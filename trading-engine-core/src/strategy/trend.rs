@@ -481,19 +481,27 @@ impl TrendStrategy {
                             pos.tp_levels.get(0).map_or(false, |tp| tp.filled),
                             pos.tp_levels.get(1).map_or(false, |tp| tp.filled),
                         ];
+                        let stop_risk = match pos.side {
+                            OrderSide::Buy => pos.entry_price - pos.stop_loss,
+                            OrderSide::Sell => pos.stop_loss - pos.entry_price,
+                        }.max(0.0);
+                        let legacy_target_risk = pos.tp_levels.first()
+                            .map(|tp| (tp.price - pos.entry_price).abs())
+                            .filter(|risk| *risk > 0.0)
+                            .unwrap_or(0.0);
                         let stored_risk = if state.initial_risk > 0.0 {
                             state.initial_risk
+                        } else if stop_risk > 0.0 {
+                            stop_risk
                         } else {
-                            match pos.side {
-                                OrderSide::Buy => pos.entry_price - pos.stop_loss,
-                                OrderSide::Sell => pos.stop_loss - pos.entry_price,
-                            }.max(0.0)
+                            legacy_target_risk
                         };
                         // New state files retain the original stop distance,
                         // which survives breakeven promotion. Very old files
-                        // may have lost it; use the trail excursion when
-                        // available, otherwise a small non-zero fallback so a
-                        // migrated ladder never collapses onto entry.
+                        // may have lost it; use the legacy TP1 distance first,
+                        // then the trail excursion, otherwise a small non-zero
+                        // fallback so a migrated ladder never collapses onto
+                        // entry.
                         let migration_risk = if stored_risk > 0.0 {
                             stored_risk
                         } else {

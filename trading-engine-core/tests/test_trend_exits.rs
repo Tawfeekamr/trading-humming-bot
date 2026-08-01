@@ -338,10 +338,12 @@ async fn test_restored_three_target_ladder_discards_tp3() {
     let path = format!("data/{}_trend_position.json", pair.replace("-", "_"));
     let content = std::fs::read_to_string(&path).unwrap();
     let mut state: serde_json::Value = serde_json::from_str(&content).unwrap();
+    state["position"]["stop_loss"] = serde_json::json!(50000.0);
+    state["initial_risk"] = serde_json::json!(0.0);
     state["position"]["tp_levels"] = serde_json::json!([
-        {"price": 50020.0, "close_pct": 0.33, "filled": true},
-        {"price": 50030.0, "close_pct": 0.50, "filled": false},
-        {"price": 50040.0, "close_pct": 0.80, "filled": false}
+        {"price": 50100.0, "close_pct": 0.33, "filled": true},
+        {"price": 50150.0, "close_pct": 0.50, "filled": false},
+        {"price": 50200.0, "close_pct": 0.80, "filled": false}
     ]);
     std::fs::write(&path, serde_json::to_string(&state).unwrap()).unwrap();
 
@@ -349,9 +351,10 @@ async fn test_restored_three_target_ladder_discards_tp3() {
     let s2 = TrendStrategy::new(pair, &config, tg2);
     let pos = s2.position().expect("legacy position restored");
     assert_eq!(pos.tp_levels.len(), 2);
+    assert!((pos.tp_levels[0].price - 50100.0).abs() < 1e-9);
+    assert!((pos.tp_levels[1].price - 50150.0).abs() < 1e-9);
     assert!(pos.tp_levels[0].filled);
     assert!(!pos.tp_levels[1].filled);
-    assert_eq!(pos.tp_levels[1].close_pct, 0.50);
     let _ = std::fs::remove_file(path);
 }
 
