@@ -59,6 +59,19 @@ paper:
   taker_fee_bps: 5      # USDT-M taker tier
   maker_fee_bps: 2      # USDT-M maker tier
 
+# ── Price-Sanity Filter ─────────────────────────────────────────
+# Rejects garbage order books (bad-tick phantom losses) before any
+# consumer sees them. Suspect mids are cross-checked against Binance REST.
+price_integrity:
+  enabled: true
+  stdev_window: 200            # rolling books per symbol (~20s @ 100ms)
+  stdev_k: 10.0                # suspect if |Δmid| > k·stdev
+  min_deviation_pct: 0.5       # floor on the band (avoids stdev≈0 flakiness)
+  verify_tolerance_pct: 1.0    # REST within this % of a ref = agreement
+  verify_timeout_ms: 800
+  recover_consecutive_ticks: 3 # in-band ticks to clear Suspect w/o REST
+  enable_gate_fallback: true
+
 # ── PPO Routing (Phase 1: declarative) ─────────────────────────────
 # Consumed by the Python live_router (src/rl/router.py) which POSTs the
 # {active_engine, size_mult, flat} decision into data/routing_cache.json;

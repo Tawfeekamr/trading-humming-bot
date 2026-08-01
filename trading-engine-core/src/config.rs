@@ -25,6 +25,8 @@ pub struct AppConfig {
     pub timeframe: String,
     #[serde(default)]
     pub paper: PaperConfig,
+    #[serde(default)]
+    pub price_integrity: PriceIntegrityConfig,
 }
 
 fn default_timeframe() -> String { "1m".to_string() }
@@ -53,6 +55,72 @@ impl Default for PaperConfig {
         Self { slippage_bps: 0.0, taker_fee_bps: 10.0, maker_fee_bps: 10.0, market_data_testnet: false }
     }
 }
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PriceIntegrityConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_200")]
+    pub stdev_window: u32,
+    #[serde(default = "default_10")]
+    pub stdev_k: f64,
+    #[serde(default = "default_0_5")]
+    pub min_deviation_pct: f64,
+    #[serde(default = "default_1")]
+    pub verify_tolerance_pct: f64,
+    #[serde(default = "default_800")]
+    pub verify_timeout_ms: u64,
+    #[serde(default = "default_3u")]
+    pub recover_consecutive_ticks: u32,
+    #[serde(default = "default_true")]
+    pub enable_gate_fallback: bool,
+}
+
+impl Default for PriceIntegrityConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            stdev_window: 200,
+            stdev_k: 10.0,
+            min_deviation_pct: 0.5,
+            verify_tolerance_pct: 1.0,
+            verify_timeout_ms: 800,
+            recover_consecutive_ticks: 3,
+            enable_gate_fallback: true,
+        }
+    }
+}
+
+impl PriceIntegrityConfig {
+    /// Reject non-positive numeric knobs so a misconfig can't silently disable
+    /// the filter. Mirrors TrendConfig::validate().
+    pub fn validate(&self) -> Result<()> {
+        if self.stdev_window == 0 {
+            anyhow::bail!("price_integrity.stdev_window must be > 0");
+        }
+        if self.stdev_k <= 0.0 {
+            anyhow::bail!("price_integrity.stdev_k must be > 0");
+        }
+        if self.min_deviation_pct <= 0.0 {
+            anyhow::bail!("price_integrity.min_deviation_pct must be > 0");
+        }
+        if self.verify_tolerance_pct <= 0.0 {
+            anyhow::bail!("price_integrity.verify_tolerance_pct must be > 0");
+        }
+        if self.verify_timeout_ms == 0 {
+            anyhow::bail!("price_integrity.verify_timeout_ms must be > 0");
+        }
+        if self.recover_consecutive_ticks == 0 {
+            anyhow::bail!("price_integrity.recover_consecutive_ticks must be > 0");
+        }
+        Ok(())
+    }
+}
+
+fn default_200() -> u32 { 200 }
+fn default_800() -> u64 { 800 }
+fn default_3u() -> u32 { 3 }
+
 
 /// Centralized capital accounting config (Phase A: visibility only).
 #[derive(Debug, Deserialize)]
@@ -390,6 +458,7 @@ impl AppConfig {
         let content = std::fs::read_to_string(path)?;
         let config: AppConfig = serde_yaml::from_str(&content)?;
         config.trend.validate()?;
+        config.price_integrity.validate()?;
         Ok(config)
     }
 }
@@ -667,5 +736,42 @@ mod trailing_stop_config_tests {
 
         let good = TrendConfig { trailing_stop_atr_mult: 2.0, ..Default::default() };
         assert!(good.validate().is_ok(), "2.0 must be accepted");
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn price_integrity_defaults_are_sane_and_valid() {
+        let c = PriceIntegrityConfig::default();
+        assert!(c.enabled, "default enabled = true");
+        assert!(c.validate().is_ok(), "defaults must validate");
+        assert_eq!(c.stdev_k, 10.0);
+        assert_eq!(c.verify_tolerance_pct, 1.0);
+        assert_eq!(c.verify_timeout_ms, 800);
+        assert_eq!(c.recover_consecutive_ticks, 3);
+    }
+
+    #[test]
+    fn price_integrity_rejects_nonpositive_numeric_knobs() {
+        let mk = |k: f64| PriceIntegrityConfig { stdev_k: k, ..Default::default() };
+        assert!(mk(0.0).validate().is_err(), "stdev_k=0 rejected");
+        assert!(mk(-1.0).validate().is_err(), "stdev_k<0 rejected");
+        let bad_tol = PriceIntegrityConfig { verify_tolerance_pct: 0.0, ..Default::default() };
+        assert!(bad_tol.validate().is_err(), "tolerance=0 rejected");
+        let bad_to = PriceIntegrityConfig { verify_timeout_ms: 0, ..Default::default() };
+        assert!(bad_to.validate().is_err(), "timeout=0 rejected");
+        let bad_win = PriceIntegrityConfig { stdev_window: 0, ..Default::default() };
+        assert!(bad_win.validate().is_err(), "window=0 rejected");
+        let bad_rec = PriceIntegrityConfig { recover_consecutive_ticks: 0, ..Default::default() };
+        assert!(bad_rec.validate().is_err(), "recover=0 rejected");
+    }
+
+    #[test]
+    fn price_integrity_loads_from_yaml_block() {
+        let yaml = "pairs: []\nexchange: binance\ngrid: { levels: 1, capital_usdt: 1000 }\nrisk: { max_drawdown_pct: 10.0, daily_loss_limit_pct: 5.0, max_exposure_pct: 100.0 }\nprice_integrity:\n  enabled: true\n  stdev_k: 7.5\n";
+        let cfg: AppConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(cfg.price_integrity.stdev_k, 7.5);
     }
 }
