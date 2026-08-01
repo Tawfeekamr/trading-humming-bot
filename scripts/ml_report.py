@@ -30,11 +30,15 @@ _REQUIRED_SHADOW_FIELDS = {
     "action",
     "engine",
     "size_mult",
+
     "model_version",
     "model_sha256",
     "observation_age_ms",
     "mode",
 }
+def _pair_key(value: Any) -> str:
+    """Normalize exchange pair spellings for attribution joins only."""
+    return "".join(ch for ch in str(value).upper() if ch.isalnum())
 
 
 def _iso_ms(value: str | None) -> int | None:
@@ -227,9 +231,18 @@ def _state_status(rows: list[dict[str, Any]], shadow: list[dict[str, Any]]) -> d
             reasons.add(raw)
         elif isinstance(raw, list):
             reasons.update(str(item) for item in raw)
-    cache_state = "missing" if not cache_rows else ("stale" if any(age > _CACHE_TTL_MS for age in ages) else "live")
-    shadow_state = "missing" if not shadow else ("stale" if any(row["observation_age_ms"] > _CACHE_TTL_MS for row in shadow) else "shadow")
-    model_state = "live" if versions else "missing"
+    if not cache_rows:
+        cache_state = "missing"
+    elif not ages:
+        cache_state = "inconclusive"
+    elif any(age > _CACHE_TTL_MS for age in ages):
+        cache_state = "stale"
+    else:
+        cache_state = "live"
+    shadow_state = "missing" if not shadow else (
+        "stale" if any(row["observation_age_ms"] > _CACHE_TTL_MS for row in shadow) else "shadow"
+    )
+    model_state = "live" if versions and ages else ("inconclusive" if versions else "missing")
     inconclusive = len(rows) < 100
     return {
         "cache": {
@@ -252,11 +265,12 @@ def _state_status(rows: list[dict[str, Any]], shadow: list[dict[str, Any]]) -> d
     }
 
 
-def _join_shadow_attribution(rows: list[dict[str, Any]], shadow: list[dict[str, Any]]) -> None:
-    """Attach an exact/near entry-time shadow decision to persisted context."""
+def _join_shadow_attribution(rows: list[dict[str, Any]], shadow: list[dict[str, Any]]) -> int:
+    """Attach an entry-time shadow decision to persisted context."""
     by_pair: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for decision in shadow:
-        by_pair[decision["pair"]].append(decision)
+        by_pair[_pair_key(decision["pair"])].append(decision)
+    joined = 0
     for row in rows:
         context = row["context"]
         decision_timestamp = context.get("decision_timestamp")
@@ -266,7 +280,7 @@ def _join_shadow_attribution(rows: list[dict[str, Any]], shadow: list[dict[str, 
             decision_timestamp = int(decision_timestamp)
         except (TypeError, ValueError):
             raise ReportError("decision_timestamp must be an integer")
-        candidates = by_pair.get(row["pair"], [])
+        candidates = by_pair.get(_pair_key(row["pair"]), [])
         if not candidates:
             continue
         decision = min(candidates, key=lambda item: abs(item["timestamp_ms"] - decision_timestamp))
@@ -276,7 +290,10 @@ def _join_shadow_attribution(rows: list[dict[str, Any]], shadow: list[dict[str, 
         context.setdefault("router_action", str(decision["action"]))
         context.setdefault("router_engine", decision["engine"])
         context.setdefault("router_size_mult", decision["size_mult"])
-        context.setdefault("regime_model_version", decision["model_version"])
+        context.setdefault("router_model_version", decision["model_version"])
+        context.setdefault("router_model_sha256", decision["model_sha256"])
+        joined += 1
+    return joined
 
 
 def build_report(
@@ -288,7 +305,7 @@ def build_report(
     since_ms = _iso_ms(since)
     rows = _read_trades(Path(db_path), since_ms)
     shadow = _read_shadow(Path(shadow_path), since_ms)
-    _join_shadow_attribution(rows, shadow)
+    shadow_attributed_trades = _join_shadow_attribution(rows, shadow)
 
     by_engine: dict[str, list[dict[str, Any]]] = defaultdict(list)
     by_regime: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -325,6 +342,7 @@ def build_report(
         "ppo_active": False,
         "attribution_missing_count": attribution_missing,
         "shadow_decisions": len(shadow),
+        "shadow_attributed_trades": shadow_attributed_trades,
         "status": status,
     }
 

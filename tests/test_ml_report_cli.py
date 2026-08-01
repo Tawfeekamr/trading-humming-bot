@@ -171,7 +171,7 @@ def test_report_joins_shadow_decision_to_entry_timestamp_without_filling_regime(
         json.dumps(
             {
                 "timestamp_ms": 1_756_656_000_000,
-                "pair": "ETH-USDT",
+                "pair": "ETHUSDT",
                 "action": 2,
                 "engine": "grid",
                 "size_mult": 1.0,
@@ -189,6 +189,40 @@ def test_report_joins_shadow_decision_to_entry_timestamp_without_filling_regime(
     assert report["attribution_missing_count"] == 0
     assert report["shadow_decisions"] == 1
     assert report["metrics"]["by_regime"]["ranging"]["trade_count"] == 1
+    assert report["shadow_attributed_trades"] == 1
+    assert report["status"]["cache"]["state"] == "inconclusive"
+
+
+def test_shadow_model_version_does_not_become_regime_model_provenance(tmp_path):
+    db_path = tmp_path / "trades.db"
+    context = json.dumps({"regime_at_entry": "trending", "decision_timestamp": 1_756_656_000_000, "ml_age_ms": 10})
+    _db(
+        db_path,
+        [(1, "2026-08-01T00:01:00+00:00", "trend", "ETH-USDT", "BUY", 100, 101, 1, 1, "tp", 10, 0.1, None, context)],
+    )
+    shadow_path = tmp_path / "shadow.jsonl"
+    shadow_path.write_text(
+        json.dumps(
+            {
+                "timestamp_ms": 1_756_656_000_000,
+                "pair": "ETHUSDT",
+                "action": 2,
+                "engine": "grid",
+                "size_mult": 1.0,
+                "model_version": "ppo-v9",
+                "model_sha256": "ppo-sha",
+                "observation_age_ms": 10,
+                "mode": "shadow",
+            }
+        )
+        + "\n"
+    )
+
+    report = build_report(db_path=db_path, shadow_path=shadow_path)
+
+    assert report["status"]["cache"]["model_version"] is None
+    assert report["status"]["model"]["version"] is None
+    assert report["status"]["shadow"]["model_version"] == "ppo-v9"
 
 
 def test_existing_database_without_trades_table_is_malformed(tmp_path):
