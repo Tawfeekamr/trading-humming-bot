@@ -173,6 +173,44 @@ def _verify_manifests(
                 _failure(failures, "metadata_checksum_mismatch")
     return checksums
 
+def _verify_evaluator_claims(
+    root: Path, report: dict[str, Any], failures: list[str]
+) -> None:
+    metadata = _report_metadata(report)
+
+    def check(path_value: Any, claim: Any) -> None:
+        if not isinstance(path_value, str) or not path_value:
+            return
+        path = _relative_path(root, path_value)
+        if not path.exists() or not isinstance(claim, str):
+            _failure(failures, "metadata_checksum_mismatch")
+            return
+        try:
+            if _sha256(path) != claim:
+                _failure(failures, "metadata_checksum_mismatch")
+        except OSError:
+            _failure(failures, "metadata_checksum_mismatch")
+
+    check(metadata.get("rf_model"), metadata.get("rf_model_sha256"))
+    ppo_paths = metadata.get("ppo_model_paths") or metadata.get("ppo_models")
+    if isinstance(ppo_paths, str):
+        ppo_paths = [ppo_paths]
+    if not isinstance(ppo_paths, list):
+        ppo_paths = [
+            path
+            for path in metadata.get("model_paths", [])
+            if isinstance(path, str) and ("ppo" in path.lower() or "_wf_" in path.lower())
+        ]
+    ppo_claims = metadata.get("ppo_model_sha256")
+    if ppo_claims is not None:
+        if isinstance(ppo_claims, str):
+            ppo_claims = [ppo_claims]
+        if not isinstance(ppo_claims, list) or len(ppo_claims) != len(ppo_paths):
+            _failure(failures, "metadata_checksum_mismatch")
+        else:
+            for path, claim in zip(ppo_paths, ppo_claims):
+                check(path, claim)
+
 
 def _routing_mode(root: Path, report: dict[str, Any]) -> str | None:
     config = root / "config" / "strategy.yaml"
@@ -211,24 +249,27 @@ def _verify_shadow_mode_and_cache(
     cache = root / "data" / "routing_cache.json"
     before = _cache_snapshot(cache)
     metadata = _report_metadata(report)
-    expected = (
-        metadata.get("routing_cache_sha256")
-        or metadata.get("active_routing_cache_sha256")
-        or metadata.get("active_cache_sha256")
-        or report.get("routing_cache_sha256")
-        or report.get("active_cache_sha256")
-    )
+    expected = metadata.get("routing_cache_sha256")
     if expected is not None and before[0] != expected:
         _failure(failures, "active_routing_cache_changed")
     elif before[0] is not None and expected is None:
-        _warning(warnings, "active_routing_cache_untracked")
+        _failure(failures, "active_routing_cache_changed")
     return mode, before
 
 
 def _verify_report_gate(
     report: dict[str, Any], failures: list[str], warnings: list[str]
 ) -> None:
-    gate = report.get("promotion") or report.get("promotion_gate") or _report_metadata(report).get("promotion")
+    gate = (
+        report.get("promotion")
+        or report.get("promotion_gate")
+        or _report_metadata(report).get("promotion")
+        or (
+            report.get("metrics", {}).get("promotion")
+            if isinstance(report.get("metrics"), dict)
+            else None
+        )
+    )
     if not isinstance(gate, dict) or not isinstance(gate.get("eligible"), bool):
         _failure(failures, "report_gate")
         return
@@ -236,8 +277,11 @@ def _verify_report_gate(
         return
     reasons = gate.get("reasons", [])
     reasons = [str(reason) for reason in reasons] if isinstance(reasons, list) else [str(reasons)]
-    inconclusive = any("inconclusive" in reason for reason in reasons)
-    if inconclusive:
+    pure_inconclusive = bool(reasons) and all(
+        reason in {"inconclusive", "inconclusive_sample", "insufficient_sample", "insufficient_trades"}
+        for reason in reasons
+    )
+    if pure_inconclusive:
         _warning(warnings, "report_gate_inconclusive")
     else:
         _failure(failures, "report_gate_rejected")
@@ -249,28 +293,24 @@ def _verify_attribution(
     metrics = report.get("metrics", {})
     status = report.get("status", {})
     evidence = status.get("evidence", {}) if isinstance(status, dict) else {}
-    total_raw = (
-        metrics.get("trade_count")
-        if isinstance(metrics, dict)
-        else report.get("trade_count")
-    )
+    total_raw = metrics.get("trade_count") if isinstance(metrics, dict) else None
     if total_raw is None:
-        total_raw = report.get("trade_count") or (
-            evidence.get("trade_count") if isinstance(evidence, dict) else None
-        )
+        total_raw = report.get("trade_count")
+    if total_raw is None and isinstance(evidence, dict):
+        total_raw = evidence.get("trade_count")
     missing_raw = report.get("attribution_missing_count", 0)
     try:
         total = int(total_raw) if total_raw is not None else None
         missing = int(missing_raw)
     except (TypeError, ValueError):
         _failure(failures, "attribution_coverage")
-        return {"total": 0, "attributed": 0, "missing": 0, "ratio": 0.0}
+        return {"total": None, "attributed": None, "missing": 0, "ratio": None, "state": "inconclusive"}
     if missing < 0 or (total is not None and (total < 0 or missing > total)):
         _failure(failures, "attribution_coverage")
         return {"total": max(total or 0, 0), "attributed": 0, "missing": max(missing, 0), "ratio": 0.0}
     if total is None:
-        _warning(warnings, "attribution_total_missing")
-        total = missing
+        _warning(warnings, "attribution_unknown")
+        return {"total": None, "attributed": None, "missing": missing, "ratio": None, "state": "inconclusive"}
     attributed = max(total - missing, 0)
     ratio = 1.0 if total == 0 else round(attributed / total, 12)
     if missing:
@@ -287,7 +327,7 @@ def _verify_shadow_records(
 ) -> int:
     path = _relative_path(root, shadow_path)
     if not path.exists():
-        _warning(warnings, "shadow_records_missing")
+        _failure(failures, "shadow_records_missing")
         return 0
     try:
         from src.rl.shadow_schema import validate_decision
@@ -317,6 +357,8 @@ def _verify_shadow_records(
             _failure(failures, "shadow_records_stale" if "stale" in reason else "shadow_records_invalid")
             continue
         count += 1
+    if count == 0:
+        _failure(failures, "shadow_records_missing")
     return count
 
 
@@ -354,6 +396,7 @@ def verify_ml_rl_rollout(repo_root: str, report_path: str, shadow_path: str) -> 
         _verify_report_gate(report, failures, warnings)
         coverage = _verify_attribution(report, failures, warnings)
         checksums = _verify_manifests(root, report, failures, warnings)
+        _verify_evaluator_claims(root, report, failures)
         _verify_shadow_records(root, shadow_path, report, failures, warnings)
         status = report.get("status")
         cache_status = status.get("cache") if isinstance(status, dict) else None
