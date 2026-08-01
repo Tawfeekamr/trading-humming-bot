@@ -16,6 +16,13 @@ pub struct RegimeEntry {
     pub regime: i32,       // 0=Ranging, 1=Trending, 2=Danger
     pub confidence: f64,
     pub timestamp: i64,    // Unix millis
+    /// Optional model provenance; omitted by older cache files.
+    #[serde(default)]
+    pub model_version: Option<String>,
+    #[serde(default)]
+    pub artifact_sha256: Option<String>,
+    #[serde(default)]
+    pub feature_contract_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -23,6 +30,16 @@ pub struct RegimeUpdate {
     pub pair: String,
     pub regime: i32,
     pub confidence: f64,
+    /// A caller-supplied positive timestamp is retained; invalid/missing values
+    /// use the receipt time so old producers remain compatible.
+    #[serde(default)]
+    pub timestamp: Option<i64>,
+    #[serde(default)]
+    pub model_version: Option<String>,
+    #[serde(default)]
+    pub artifact_sha256: Option<String>,
+    #[serde(default)]
+    pub feature_contract_hash: Option<String>,
 }
 
 #[derive(Clone)]
@@ -60,27 +77,36 @@ impl RegimeCache {
             state.map.insert(u.pair.clone(), RegimeEntry {
                 regime: u.regime,
                 confidence: u.confidence,
-                timestamp: now,
+                timestamp: u.timestamp.filter(|timestamp| *timestamp > 0).unwrap_or(now),
+                model_version: u.model_version.clone(),
+                artifact_sha256: u.artifact_sha256.clone(),
+                feature_contract_hash: u.feature_contract_hash.clone(),
             });
         }
+    }
+
+    /// Return a TTL-validated entry, including optional model provenance.
+    pub async fn get_entry(&self, pair: &str) -> Option<RegimeEntry> {
+        self.maybe_reload_from_file().await;
+        let state = self.state.read().await;
+        state.map.get(pair).and_then(|entry| {
+            if self.ttl_ms > 0 {
+                let now = chrono::Utc::now().timestamp_millis();
+                if now - entry.timestamp > self.ttl_ms {
+                    return None;
+                }
+            }
+            Some(entry.clone())
+        })
     }
 
     /// Get regime for a pair. Returns (regime, confidence).
     /// Returns None if: pair not found, or entry is older than TTL.
     /// Checks file mtime first — if file changed since last read, reloads.
     pub async fn get(&self, pair: &str) -> Option<(i32, f64)> {
-        self.maybe_reload_from_file().await;
-        let state = self.state.read().await;
-        state.map.get(pair).and_then(|e| {
-            if self.ttl_ms > 0 {
-                let now = chrono::Utc::now().timestamp_millis();
-                if now - e.timestamp > self.ttl_ms {
-                    return None; // Stale — treat as unknown
-                }
-            }
-            Some((e.regime, e.confidence))
-        })
+        self.get_entry(pair).await.map(|entry| (entry.regime, entry.confidence))
     }
+
 
     /// Check if file has been modified since last read. If so, reload.
     /// Acquires a single write lock across stat → read → parse → insert → mtime
@@ -174,8 +200,8 @@ mod tests {
     async fn test_regime_cache_update_and_get() {
         let cache = RegimeCache::new("/tmp/test_regime_cache.json", 0);
         cache.update(&[
-            RegimeUpdate { pair: "BTC-USDT".into(), regime: 0, confidence: 0.85 },
-            RegimeUpdate { pair: "ETH-USDT".into(), regime: 1, confidence: 0.7 },
+            RegimeUpdate { pair: "BTC-USDT".into(), regime: 0, confidence: 0.85, timestamp: None, model_version: None, artifact_sha256: None, feature_contract_hash: None },
+            RegimeUpdate { pair: "ETH-USDT".into(), regime: 1, confidence: 0.7, timestamp: None, model_version: None, artifact_sha256: None, feature_contract_hash: None },
         ]).await;
 
         let btc = cache.get("BTC-USDT").await;
@@ -196,7 +222,7 @@ mod tests {
         // Write via cache
         let cache = RegimeCache::new(path, 0);
         cache.update(&[
-            RegimeUpdate { pair: "BTC-USDT".into(), regime: 2, confidence: 0.9 },
+            RegimeUpdate { pair: "BTC-USDT".into(), regime: 2, confidence: 0.9, timestamp: None, model_version: None, artifact_sha256: None, feature_contract_hash: None },
         ]).await;
         cache.persist().await;
 
@@ -215,7 +241,7 @@ mod tests {
         let _ = std::fs::remove_file(path);
         let cache = RegimeCache::new(path, 0);
         cache.update(&[
-            RegimeUpdate { pair: "BTC-USDT".into(), regime: 1, confidence: 0.8 },
+            RegimeUpdate { pair: "BTC-USDT".into(), regime: 1, confidence: 0.8, timestamp: None, model_version: None, artifact_sha256: None, feature_contract_hash: None },
         ]).await;
         cache.persist().await;
 
@@ -242,6 +268,9 @@ mod tests {
             regime: 0,
             confidence: 0.9,
             timestamp: chrono::Utc::now().timestamp_millis() - 10_000, // 10s ago
+            model_version: None,
+            artifact_sha256: None,
+            feature_contract_hash: None,
         });
         drop(state);
 
@@ -255,11 +284,32 @@ mod tests {
         let cache = RegimeCache::new("/tmp/test_regime_ttl_fresh.json", 180_000); // 3min TTL
 
         cache.update(&[
-            RegimeUpdate { pair: "BTC-USDT".into(), regime: 1, confidence: 0.8 },
+            RegimeUpdate { pair: "BTC-USDT".into(), regime: 1, confidence: 0.8, timestamp: None, model_version: None, artifact_sha256: None, feature_contract_hash: None },
         ]).await;
+
 
         // Just inserted — should be fresh
         let result = cache.get("BTC-USDT").await;
         assert_eq!(result, Some((1, 0.8)));
+    }
+    #[tokio::test]
+    async fn regime_metadata_round_trips_and_old_payload_defaults() {
+        let cache = RegimeCache::new("target/test-regime-cache.json", 60_000);
+        cache.update(&[RegimeUpdate {
+            pair: "BNB-USDT".into(),
+            regime: 0,
+            confidence: 0.81,
+            timestamp: Some(chrono::Utc::now().timestamp_millis()),
+            model_version: Some("rf-bnb-20260801".into()),
+            artifact_sha256: Some("abc".into()),
+            feature_contract_hash: Some("features-v1".into()),
+        }]).await;
+        let entry = cache.get_entry("BNB-USDT").await.unwrap();
+        assert_eq!(entry.model_version.as_deref(), Some("rf-bnb-20260801"));
+        assert_eq!(entry.artifact_sha256.as_deref(), Some("abc"));
+        let old: RegimeUpdate =
+            serde_json::from_str(r#"{"pair":"BNB-USDT","regime":0,"confidence":0.5}"#).unwrap();
+        assert!(old.model_version.is_none());
+        assert!(old.timestamp.is_none());
     }
 }

@@ -119,6 +119,9 @@ struct TrendPositionState {
     /// Original per-unit stop distance, retained after breakeven promotion.
     #[serde(default)]
     initial_risk: f64,
+    /// Entry-time regime snapshot; absent in old state files.
+    #[serde(default)]
+    regime_attribution: Option<crate::strategy::trade_journal::RegimeAttribution>,
 }
 
 #[derive(Default, Clone)]
@@ -156,6 +159,8 @@ pub struct TrendStrategy {
     /// struct carries no reduce_only, so this is the only signal available.
     /// `pub` so tests can inject an entry intent before calling on_fill directly.
     pub pending_entry: Option<OrderSide>,
+    /// Snapshot captured when the current entry intent was emitted.
+    entry_attribution: Option<crate::strategy::trade_journal::RegimeAttribution>,
     /// Quantity already deducted optimistically by reactive exit handling.
     /// Matching reduce-only fills consume this balance instead of deducting a
     /// second time in on_fill.
@@ -237,6 +242,7 @@ impl TrendStrategy {
             atr: Atr::new(14),
             position: None,
             pending_entry: None,
+            entry_attribution: None,
             pending_exit_qty: 0.0,
             position_initial_risk: 0.0,
             last_bar_count: 0,
@@ -280,12 +286,18 @@ impl TrendStrategy {
         // Real audit context: the actual stop/take-profit used + realized R.
         let risk = (entry_price - stop_loss).abs() * amount;
         let r_multiple = if risk > 0.0 { Some(pnl / risk) } else { None };
-        let ctx = crate::strategy::trade_journal::TradeContext {
+        let mut ctx = crate::strategy::trade_journal::TradeContext {
             sl_price: Some(stop_loss),
             tp_price: Some(take_profit),
             r_multiple,
             ..Default::default()
         };
+        if let Some(attribution) = &self.entry_attribution {
+            ctx.context_json = crate::strategy::trade_journal::merge_regime_context_json(
+                ctx.context_json.as_deref(),
+                attribution,
+            );
+        }
         crate::strategy::trade_journal::log_unified("trend", &self.pair, Some(side_str), Some(entry_price), Some(exit_price), Some(amount), pnl, Some(exit_reason), Some(duration), &ctx);
     }
 
@@ -459,6 +471,7 @@ impl TrendStrategy {
                 realized_pnl: self.realized_pnl,
                 pending_exit_qty: self.pending_exit_qty,
                 initial_risk: self.position_initial_risk,
+                regime_attribution: self.entry_attribution.clone(),
             };
             match serde_json::to_string_pretty(&state) {
                 Ok(json) => { let _ = fs::write(&path, json); }
@@ -539,6 +552,7 @@ impl TrendStrategy {
                             pos.last_funding_time = pos.entry_time;
                         }
                         self.position = Some(pos);
+                        self.entry_attribution = state.regime_attribution;
                         self.realized_pnl = state.realized_pnl;
                     }
                     Err(e) => warn!("Failed to parse trend position for {}: {}", self.pair, e),
@@ -988,6 +1002,25 @@ impl Strategy for TrendStrategy {
                     None => quantity,
                 };
                 if quantity > 0.0 {
+                    let regime_at_entry = ctx.regime.map(|regime| match regime {
+                        MarketRegime::Ranging => "ranging",
+                        MarketRegime::Trending => "trending",
+                        MarketRegime::Danger => "danger",
+                    }.to_string());
+                    let gate_decision = if ctx.regime.is_some() {
+                        "allowed"
+                    } else if self.config.regime_gate {
+                        "ml_unavailable"
+                    } else {
+                        "ta_fallback"
+                    };
+                    self.entry_attribution = Some(crate::strategy::trade_journal::RegimeAttribution {
+                        regime_at_entry,
+                        regime_confidence: ctx.regime.map(|_| ctx.regime_confidence),
+                        ml_gate_decision: Some(gate_decision.to_string()),
+                        decision_timestamp: Some(ctx.timestamp),
+                        ..Default::default()
+                    });
                     // Record entry intent: the Fill struct carries no reduce_only,
                     // so on_fill can't otherwise tell this opening fill from a
                     // closing one. Consumed by on_fill when the entry fills.
@@ -1743,6 +1776,7 @@ mod tests {
         };
         let mut v = serde_json::to_value(&TrendPositionState {
             position: pos, realized_pnl: 0.0, pending_exit_qty: 0.0, initial_risk: 0.0,
+            regime_attribution: None,
         }).unwrap();
         // Remove the key so serde's default (0) kicks in on load — exactly the
         // legacy-file scenario this fix guards against. (as_mut Object remove,

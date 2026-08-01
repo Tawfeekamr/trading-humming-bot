@@ -88,6 +88,8 @@ pub struct GridStrategy {
     state_dir: String,
     last_base_balance: f64,
     last_quote_balance: f64,
+    /// Regime/routing snapshot captured with the first inventory entry.
+    entry_attribution: Option<crate::strategy::trade_journal::RegimeAttribution>,
     /// C2: Market sell emitted by `force_flat()` to flatten inventory. Since
     /// `force_flat` returns `()`, the order is stashed here and drained at the
     /// top of the next `on_tick` (which runs immediately after, in the same
@@ -144,6 +146,7 @@ impl GridStrategy {
             state_dir: state_dir.to_string(),
             last_base_balance: 0.0,
             last_quote_balance: 0.0,
+            entry_attribution: None,
             force_flat_close: None,
         };
         me.load_state();
@@ -701,6 +704,19 @@ impl Strategy for GridStrategy {
             self.orders.insert(id.clone(), GridOrder {
                 order_id: id,
             });
+            if self.entry_attribution.is_none() {
+                self.entry_attribution = Some(crate::strategy::trade_journal::RegimeAttribution {
+                    regime_at_entry: ctx.regime.map(|regime| match regime {
+                        MarketRegime::Ranging => "ranging",
+                        MarketRegime::Trending => "trending",
+                        MarketRegime::Danger => "danger",
+                    }.to_string()),
+                    regime_confidence: ctx.regime.map(|_| ctx.regime_confidence),
+                    ml_gate_decision: Some(if ctx.regime.is_some() { "allowed" } else { "ta_fallback" }.to_string()),
+                    decision_timestamp: Some(ctx.timestamp),
+                    ..Default::default()
+                });
+            }
             orders.push(req);
         }
 
@@ -795,14 +811,23 @@ impl Strategy for GridStrategy {
                 let msg = grid_sell_message(&self.pair, &level_key, fill.price, realized, self.total_pnl);
                 tokio::spawn(async move { let _ = tg.send(&msg).await; });
                 // Only the SELL (a realized round-trip) is journaled — like other engines.
-                // Grid audit: which ladder level closed (no single SL/TP — it's a ladder).
-                let grid_ctx = crate::strategy::trade_journal::TradeContext {
+                let mut grid_ctx = crate::strategy::trade_journal::TradeContext {
                     entry_reason: Some(level_key.clone()),
+                    context_json: Some(serde_json::json!({"entry_reason": level_key}).to_string()),
                     ..Default::default()
                 };
+                if let Some(attribution) = &self.entry_attribution {
+                    grid_ctx.context_json = crate::strategy::trade_journal::merge_regime_context_json(
+                        grid_ctx.context_json.as_deref(),
+                        attribution,
+                    );
+                }
                 crate::strategy::trade_journal::log_unified(
                     "grid", &self.pair, Some("BUY"), Some(avg_cost), Some(fill.price),
                     Some(fill.quantity), realized, Some("grid_sell"), None, &grid_ctx);
+                if self.inventory_qty <= 1e-12 {
+                    self.entry_attribution = None;
+                }
             }
         }
         self.save_state_internal();

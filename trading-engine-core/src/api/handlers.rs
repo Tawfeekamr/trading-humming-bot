@@ -277,6 +277,8 @@ pub async fn get_positions() -> impl IntoResponse {
 
 // ── Regime update (pushed by Python ML) ───────────────────────────────
 
+/// Accept the complete RegimeUpdate payload, including optional provenance and
+/// producer timestamp, and pass it through unchanged to the cache.
 pub async fn update_regime(
     State(state): State<AppState>,
     Json(updates): Json<Vec<RegimeUpdate>>,

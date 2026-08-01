@@ -22,12 +22,13 @@ Env:  RUST_ENGINE_URL (default http://rust-bot:3030),
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
+import pickle
 import time
 from typing import Optional
-
-import pandas as pd
 import requests
 
 from src.data.feature_contract import MARKET_FEATURE_COLS, assert_market_feature_contract
@@ -53,6 +54,62 @@ REGIME_NAMES = {0: "ranging", 1: "trending", 2: "danger"}
 def model_path_for(pair: str, model_dir: str) -> str:
     """``ETH-USDT`` → ``models/regime_ETH-USDT_clean.pkl`` (reproducible models only)."""
     return os.path.join(model_dir, f"regime_{pair}_clean.pkl")
+
+def model_metadata(clf: RegimeClassifier, path: str) -> dict[str, str | None]:
+    """Return deterministic model provenance for a regime update.
+
+    The artifact digest is deliberately computed from the bytes on disk rather
+    than from a mutable classifier object.  Feature provenance prefers a model
+    supplied hash and otherwise hashes the canonical ordered feature manifest.
+    """
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"model artifact not found: {path}")
+    digest = hashlib.sha256()
+    with open(path, "rb") as artifact:
+        for chunk in iter(lambda: artifact.read(1024 * 1024), b""):
+            digest.update(chunk)
+    version = getattr(clf, "model_version", None)
+    if version is None:
+        version = getattr(clf, "version", None)
+    if version is None:
+        try:
+            with open(path, "rb") as artifact:
+                serialized = pickle.load(artifact)
+            if isinstance(serialized, dict):
+                version = serialized.get("version")
+        except (EOFError, OSError, pickle.PickleError, ValueError, ImportError):
+            version = None
+    feature_hash = getattr(clf, "feature_contract_hash", None)
+    if feature_hash is None:
+        columns = getattr(clf, "feature_columns", None)
+        if columns is not None:
+            canonical = json.dumps(list(columns), separators=(",", ":"), ensure_ascii=True)
+            feature_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return {
+        "model_version": None if version is None else str(version),
+        "artifact_sha256": digest.hexdigest(),
+        "feature_contract_hash": None if feature_hash is None else str(feature_hash),
+    }
+
+
+def build_regime_update(
+    pair: str,
+    regime: int,
+    confidence: float,
+    metadata: dict[str, str | None],
+    timestamp_ms: int,
+) -> dict:
+    """Build the API payload without changing prediction semantics."""
+    return {
+        "pair": pair,
+        "regime": int(regime),
+        "confidence": float(confidence),
+        "timestamp": int(timestamp_ms),
+        "model_version": metadata.get("model_version"),
+        "artifact_sha256": metadata.get("artifact_sha256"),
+        "feature_contract_hash": metadata.get("feature_contract_hash"),
+    }
+
 
 
 def _declared_feature_contract_ok(clf: RegimeClassifier) -> bool:
@@ -156,8 +213,14 @@ def collect_regime(
         if result is None:
             log.warning("No usable feature row for %s — skipping", pair)
             continue
+        try:
+            metadata = model_metadata(clf, getattr(clf, "model_path", model_path_for(pair, "")))
+        except FileNotFoundError as exc:
+            log.error("Model metadata unavailable for %s: %s — skipping", pair, exc)
+            continue
         regime, confidence = result
-        updates.append({"pair": pair, "regime": regime, "confidence": confidence})
+        timestamp_ms = int(df.index[-1].timestamp() * 1000)
+        updates.append(build_regime_update(pair, regime, confidence, metadata, timestamp_ms))
         log.info(
             "%s → regime=%s(%s) confidence=%.3f",
             pair, regime, REGIME_NAMES.get(regime, "?"), confidence,

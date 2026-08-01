@@ -3,6 +3,7 @@ use chrono::{DateTime, Duration, Utc};
 use rusqlite::Connection;
 use rusqlite_migration::{M, Migrations};
 use serde::Serialize;
+use serde_json::{Map, Value};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::OnceLock;
@@ -91,6 +92,55 @@ pub struct TradeContext {
     pub fees: Option<f64>,
     pub r_multiple: Option<f64>,
     pub context_json: Option<String>,
+}
+
+/// Snapshot of regime and routing decisions at the entry intent. Optional
+/// fields keep old positions and old journal rows readable.
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RegimeAttribution {
+    pub regime_at_entry: Option<String>,
+    pub regime_confidence: Option<f64>,
+    pub regime_model_version: Option<String>,
+    pub regime_artifact_sha256: Option<String>,
+    pub ml_gate_decision: Option<String>,
+    pub router_mode: Option<String>,
+    pub router_action: Option<String>,
+    pub router_engine: Option<String>,
+    pub router_size_mult: Option<f64>,
+    pub decision_timestamp: Option<i64>,
+    pub ml_age_ms: Option<i64>,
+}
+
+/// Merge attribution into an existing JSON object without dropping engine
+/// specific keys. Invalid/non-object legacy values are replaced by an object;
+/// valid existing objects are preserved and extended additively.
+pub fn merge_regime_context_json(
+    existing: Option<&str>,
+    attribution: &RegimeAttribution,
+) -> Option<String> {
+    let mut object = match existing.and_then(|raw| serde_json::from_str::<Value>(raw).ok()) {
+        Some(Value::Object(map)) => map,
+        _ => Map::new(),
+    };
+    let values = [
+        ("regime_at_entry", attribution.regime_at_entry.as_ref().map(|v| Value::String(v.clone()))),
+        ("regime_confidence", attribution.regime_confidence.map(Value::from)),
+        ("regime_model_version", attribution.regime_model_version.as_ref().map(|v| Value::String(v.clone()))),
+        ("regime_artifact_sha256", attribution.regime_artifact_sha256.as_ref().map(|v| Value::String(v.clone()))),
+        ("ml_gate_decision", attribution.ml_gate_decision.as_ref().map(|v| Value::String(v.clone()))),
+        ("router_mode", attribution.router_mode.as_ref().map(|v| Value::String(v.clone()))),
+        ("router_action", attribution.router_action.as_ref().map(|v| Value::String(v.clone()))),
+        ("router_engine", attribution.router_engine.as_ref().map(|v| Value::String(v.clone()))),
+        ("router_size_mult", attribution.router_size_mult.map(Value::from)),
+        ("decision_timestamp", attribution.decision_timestamp.map(Value::from)),
+        ("ml_age_ms", attribution.ml_age_ms.map(Value::from)),
+    ];
+    for (key, value) in values {
+        if let Some(value) = value {
+            object.insert(key.to_string(), value);
+        }
+    }
+    Some(Value::Object(object).to_string())
 }
 
 fn migrations() -> Migrations<'static> {
@@ -818,5 +868,23 @@ mod tests {
         assert_eq!(row.1, Some(0.058));             // tp_price <- take_profits[0]
         assert_eq!(row.2.as_deref(), Some("HIGH")); // entry_reason <- signal_confidence
         assert!(row.3.as_deref().unwrap().contains("\"tp1\":1")); // context_json has tp-hit
+    }
+
+    #[test]
+    fn regime_context_merge_preserves_engine_keys() {
+        let attribution = RegimeAttribution {
+            regime_at_entry: Some("trending".into()),
+            regime_confidence: Some(0.91),
+            regime_model_version: Some("rf-v1".into()),
+            regime_artifact_sha256: Some("abc".into()),
+            ml_gate_decision: Some("allowed".into()),
+            decision_timestamp: Some(123),
+            ..Default::default()
+        };
+        let merged = merge_regime_context_json(Some(r#"{"entry_reason":"buy_0"}"#), &attribution).unwrap();
+        let value: Value = serde_json::from_str(&merged).unwrap();
+        assert_eq!(value["entry_reason"], "buy_0");
+        assert_eq!(value["regime_at_entry"], "trending");
+        assert_eq!(value["regime_confidence"], 0.91);
     }
 }
