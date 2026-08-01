@@ -728,6 +728,7 @@ impl Strategy for GridStrategy {
                     regime_confidence: ctx.regime.map(|_| ctx.regime_confidence),
                     regime_model_version: ctx.regime_model_version.clone(),
                     regime_artifact_sha256: ctx.regime_artifact_sha256.clone(),
+                    regime_feature_contract_hash: ctx.regime_feature_contract_hash.clone(),
                     ml_gate_decision: Some(if ctx.regime.is_some() { "allowed" } else { "ta_fallback" }.to_string()),
                     router_mode: ctx.router_mode.clone(),
                     router_action: ctx.router_action.clone(),
@@ -1386,6 +1387,7 @@ mod tests {
             regime_confidence: Some(0.8),
             regime_model_version: Some("rf-v1".into()),
             regime_artifact_sha256: Some("abc".into()),
+            regime_feature_contract_hash: Some("features-v1".into()),
             ml_gate_decision: Some("ta_fallback".into()),
             router_mode: Some("active".into()),
             router_action: Some("route".into()),
@@ -1399,6 +1401,7 @@ mod tests {
         let value: serde_json::Value =
             serde_json::from_str(context.context_json.as_deref().unwrap()).unwrap();
         assert_eq!(value["entry_reason"], "sell_0");
+        assert_eq!(value["regime_feature_contract_hash"], "features-v1");
         assert_eq!(value["regime_model_version"], "rf-v1");
         assert_eq!(value["router_engine"], "grid");
         assert_eq!(value["ml_age_ms"], 40);

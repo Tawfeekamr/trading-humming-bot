@@ -102,6 +102,7 @@ pub struct RegimeAttribution {
     pub regime_confidence: Option<f64>,
     pub regime_model_version: Option<String>,
     pub regime_artifact_sha256: Option<String>,
+    pub regime_feature_contract_hash: Option<String>,
     pub ml_gate_decision: Option<String>,
     pub router_mode: Option<String>,
     pub router_action: Option<String>,
@@ -127,6 +128,7 @@ pub fn merge_regime_context_json(
         ("regime_confidence", attribution.regime_confidence.map(Value::from)),
         ("regime_model_version", attribution.regime_model_version.as_ref().map(|v| Value::String(v.clone()))),
         ("regime_artifact_sha256", attribution.regime_artifact_sha256.as_ref().map(|v| Value::String(v.clone()))),
+        ("regime_feature_contract_hash", attribution.regime_feature_contract_hash.as_ref().map(|v| Value::String(v.clone()))),
         ("ml_gate_decision", attribution.ml_gate_decision.as_ref().map(|v| Value::String(v.clone()))),
         ("router_mode", attribution.router_mode.as_ref().map(|v| Value::String(v.clone()))),
         ("router_action", attribution.router_action.as_ref().map(|v| Value::String(v.clone()))),
@@ -877,6 +879,7 @@ mod tests {
             regime_confidence: Some(0.91),
             regime_model_version: Some("rf-v1".into()),
             regime_artifact_sha256: Some("abc".into()),
+            regime_feature_contract_hash: Some("features-v1".into()),
             ml_gate_decision: Some("allowed".into()),
             router_mode: Some("active".into()),
             router_action: Some("route".into()),
@@ -891,6 +894,7 @@ mod tests {
         assert_eq!(value["entry_reason"], "buy_0");
         assert_eq!(value["regime_at_entry"], "trending");
         assert_eq!(value["regime_confidence"], 0.91);
+        assert_eq!(value["regime_feature_contract_hash"], "features-v1");
         assert_eq!(value["router_mode"], "active");
         assert_eq!(value["router_action"], "route");
         assert_eq!(value["router_engine"], "trend");
