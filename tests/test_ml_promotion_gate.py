@@ -66,3 +66,22 @@ def test_gate_rejects_missing_or_underfloor_strategy_and_regime_counts():
     }
     assert evaluate(underfloor)["eligible"] is False
     assert "inconclusive_sample" in evaluate(underfloor)["reasons"]
+
+
+def test_flat_regime_counts_are_validated():
+    from src.ml.promotion_gate import evaluate
+
+    metrics = {
+        "trade_count": 140,
+        "ppo_profit_factor": 1.2,
+        "rf_profit_factor": 1.2,
+        "ppo_max_drawdown": 0.05,
+        "rf_max_drawdown": 0.10,
+        "ppo_exposure": 0.52,
+        "rf_exposure": 0.74,
+        "window_count": 3,
+        "trade_counts_by_regime": {"trend": 50},
+    }
+    result = evaluate(metrics)
+    assert result["eligible"] is False
+    assert "inconclusive_sample" in result["reasons"]

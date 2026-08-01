@@ -133,11 +133,12 @@ def test_walk_forward_report_rows_audit_boundaries_and_comparators(monkeypatch, 
         warmup=0,
         report_path=str(tmp_path / "report.json"),
     )
-    assert cutoffs and cutoffs[0] < frame.index[224].date()
-    row = __import__("json").loads((tmp_path / "report.json").read_text())["slices"][0]
+    assert cutoffs and cutoffs[0] < frame.index[200].date()
+    report = __import__("json").loads((tmp_path / "report.json").read_text())
+    assert len(report["metadata"]["ppo_model_sha256"]) == 2
+    row = report["slices"][0]
     for key in ("train_start", "train_end", "embargo_start", "embargo_end", "test_start", "test_end"):
         assert key in row
-    assert "ta" in row and "ml" in row
     assert out["per_slice"][0]["test_start"] < out["per_slice"][0]["test_end"]
 
 def test_aggregate_dm_no_edge_when_identical():

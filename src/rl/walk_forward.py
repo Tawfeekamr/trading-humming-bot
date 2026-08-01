@@ -221,9 +221,10 @@ def run_walk_forward(
     per_slice, failed, model_paths = [], [], []
     for i, (ts, te, vs, ve) in enumerate(slices):
         try:
-            train_end_date = strict_training_end_date(df.index, vs)
+            train_end_date = strict_training_end_date(df.index, te)
             model_path = f"models/rl/_wf_{pair}_slice{i}.zip"
             _train_slice_subprocess(pair, train_end_date, train_bars, timesteps, model_path)
+            model_paths.append(model_path)
             test_df = df.iloc[max(0, vs - warmup):ve]
             ppo_ret, rf_ret, ppo_sum, rf_sum = _evaluate_slice(
                 test_df, model_path, rf_model
