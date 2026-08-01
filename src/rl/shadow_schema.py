@@ -81,6 +81,11 @@ def validate_decision(
     """
     if not isinstance(decision, dict):
         return False, "decision must be an object"
+    for field in ("model_version", "model_sha256"):
+        value = decision.get(field)
+        if not isinstance(value, str) or not value.strip():
+            return False, f"missing or invalid {field}"
+
     if decision.get("mode") not in _VALID_MODES:
         return False, "mode must be shadow"
 

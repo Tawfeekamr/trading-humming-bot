@@ -11,6 +11,14 @@ from src.rl.shadow_journal import log_decision
 from src.rl.shadow_schema import ShadowRoutingDecision, validate_decision
 
 
+def _journal_worker(path: str, action: int, barrier) -> None:
+    barrier.wait()
+    decision = ShadowRoutingDecision.from_action(
+        "ETH-USDT", action, decode_action(action), f"ppo-{action}", model_sha256=f"sha-{action}"
+    )
+    log_decision(path, decision)
+
+
 def _decision(**overrides):
     value = ShadowRoutingDecision.from_action(
         "ETH-USDT",
@@ -41,6 +49,8 @@ def test_shadow_validation_rejects_invalid_and_stale_decisions():
     )
     for invalid in (
         {"engine": "unknown"},
+
+
         {"action": 10},
         {"size_mult": 1.5},
         {"mode": "live"},
@@ -49,6 +59,18 @@ def test_shadow_validation_rejects_invalid_and_stale_decisions():
         candidate = _decision(**invalid)
         ok, reason = validate_decision(candidate, now_ms=1_000, max_age_ms=1_000)
         assert not ok, reason
+
+def test_shadow_validation_requires_model_provenance():
+    for field, value in (
+        ("model_version", ""),
+        ("model_sha256", None),
+        ("model_sha256", 123),
+    ):
+        ok, reason = validate_decision(
+            _decision(**{field: value}), now_ms=1_000, max_age_ms=1_000
+        )
+        assert not ok
+        assert field in reason
 
 
 def test_shadow_validation_rejects_size_not_matching_action_map():
@@ -79,6 +101,25 @@ def test_atomic_journal_appends_jsonl_without_active_cache(tmp_path, monkeypatch
     assert rows[0]["mode"] == "shadow"
     assert active_cache.read_text() == '{"sentinel":true}\n'
     assert calls == []
+
+def test_atomic_journal_preserves_concurrent_process_records(tmp_path):
+    import multiprocessing
+
+    context = multiprocessing.get_context("spawn")
+    shadow_path = str(tmp_path / "concurrent.jsonl")
+    barrier = context.Barrier(2)
+    workers = [
+        context.Process(target=_journal_worker, args=(shadow_path, action, barrier))
+        for action in (0, 1)
+    ]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join(timeout=30)
+        assert worker.exitcode == 0
+
+    rows = [json.loads(line) for line in (tmp_path / "concurrent.jsonl").read_text().splitlines()]
+    assert {row["action"] for row in rows} == {0, 1}
 
 
 def test_live_router_shadow_loop_never_posts_or_writes_active_cache(
