@@ -183,13 +183,13 @@ trend:
   trailing_stop_atr_mult: 2.0   # Chandelier Exit multiplier. WAS 2.5 (dead field,
                                 # never read); live trail was actually 3.0 via the
                                 # atr_trailing_mult serde default. Tightened to 2.0.
-  rr_ratio: 2.0
+  rr_ratio: 2.0                # Legacy compatibility; hybrid exits use fixed 1R / 1.5R targets
   sl_buffer_pct: 0.2
   max_drawdown_pct: 10.0
   daily_loss_limit_pct: 5.0
   timeframe: "1h"
-  # TP scaling: TP1=1R close 33%, TP2=1.5R close 50% remaining, TP3=2R close 80% (10% runner)
-  runner_pct: 10                # Gemini: leave 10% runner after final TP, trail closes it
+  # Hybrid exits: TP1=1R closes 33% of current quantity; TP2=1.5R closes 50%.
+  # Chandelier trailing manages the remaining runner; there is no fixed TP3.
 
 # ── Fee Optimization ───────────────────────────────────────────
 fee_optimization:

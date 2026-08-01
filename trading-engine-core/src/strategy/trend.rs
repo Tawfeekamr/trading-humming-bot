@@ -91,23 +91,18 @@ pub struct TrendPosition {
 }
 
 impl TrendPosition {
-    pub fn calculate_tp_levels(entry_price: f64, stop_loss: f64, risk_reward_ratio: f64, runner_pct: f64, side: OrderSide) -> Vec<TpLevel> {
+    pub fn calculate_tp_levels(entry_price: f64, stop_loss: f64, _risk_reward_ratio: f64, _runner_pct: f64, side: OrderSide) -> Vec<TpLevel> {
         // Signed per-unit risk, always positive in the trade's profit direction:
         // long → stop below entry (entry−stop > 0); short → stop above (stop−entry > 0).
         let risk = match side {
             OrderSide::Buy => entry_price - stop_loss,
             OrderSide::Sell => stop_loss - entry_price,
         }.max(0.0);
-        // Guard: a missing/zero RR would place TP3 at the entry price, making it
-        // fire instantly. Fall back to 2:1 so the position always has real targets.
-        let rr = if risk_reward_ratio > 0.0 { risk_reward_ratio } else { 2.0 };
-        let tp3_close = if runner_pct > 0.0 { 1.0 - runner_pct } else { 1.0 };
         // Profit lies in the trade's direction: above entry for longs, below for shorts.
         let sign = match side { OrderSide::Buy => 1.0, OrderSide::Sell => -1.0 };
         vec![
             TpLevel { price: entry_price + sign * risk * 1.0, close_pct: 0.33, filled: false },
             TpLevel { price: entry_price + sign * risk * 1.5, close_pct: 0.50, filled: false },
-            TpLevel { price: entry_price + sign * risk * rr, close_pct: tp3_close, filled: false },
         ]
     }
 }
@@ -465,6 +460,19 @@ impl TrendStrategy {
                 match serde_json::from_str::<TrendPositionState>(&content) {
                     Ok(state) => {
                         let mut pos = state.position;
+                        // Positions written by the trailing-only model have no
+                        // target ladder. Migrate them on load; the restored flag
+                        // below ensures overdue targets are reconciled without
+                        // emitting catch-up exit orders.
+                        if pos.tp_levels.is_empty() {
+                            pos.tp_levels = TrendPosition::calculate_tp_levels(
+                                pos.entry_price,
+                                pos.stop_loss,
+                                self.config.risk_reward_ratio,
+                                0.0,
+                                pos.side,
+                            );
+                        }
                         pos.restored = true; // reconcile on the first on_tick after load
                         // Back-fill the funding clock for old state files written
                         // before last_funding_time existed (serde default 0). A
@@ -602,12 +610,12 @@ impl Strategy for TrendStrategy {
                 let entry = pos.entry_price;
                 let qty = pos.remaining_qty;
                 let sl = pos.stop_loss;
-                let tp3 = pos.tp_levels.last().map(|t| t.price).unwrap_or(entry);
+                let tp_target = pos.tp_levels.last().map(|t| t.price).unwrap_or(entry);
                 let et = pos.entry_time;
                 let pnl = trade_pnl(side, entry, current_price, qty);
                 self.realized_pnl += pnl;
                 self.pending_entry = None;
-                self.log_close(side, entry, current_price, qty, pnl, sl, tp3, "force_flat", ctx.timestamp, et);
+                self.log_close(side, entry, current_price, qty, pnl, sl, tp_target, "force_flat", ctx.timestamp, et);
                 self.notify_exit(current_price, pnl, "force_flat");
                 let (_ot, price_opt) = exit_order_req(perp_attached, side, current_price);
                 orders.push(OrderRequest {
@@ -786,8 +794,8 @@ impl Strategy for TrendStrategy {
                 self.realized_pnl += pnl;
                 self.position = None;
                 self.pending_entry = None;
-                if let Some((s, ep, sl, tp3, et)) = snap {
-                    self.log_close(s, ep, current_price, qty, pnl, sl, tp3, reason, ctx.timestamp, et);
+                if let Some((s, ep, sl, tp_target, et)) = snap {
+                    self.log_close(s, ep, current_price, qty, pnl, sl, tp_target, reason, ctx.timestamp, et);
                 }
                 self.notify_exit(current_price, pnl, reason);
                 orders.push(OrderRequest {
@@ -812,7 +820,7 @@ impl Strategy for TrendStrategy {
                         pos.remaining_qty -= sell_qty;
                         let pnl = trade_pnl(tp_side, tp_entry, current_price, sell_qty);
                         self.realized_pnl += pnl;
-                        let reason = match idx { 0 => "tp1", 1 => "tp2", _ => "tp3" };
+                        let reason = if idx == 0 { "tp1" } else { "tp2" };
                         tp_exits.push((sell_qty, pnl, reason));
                         let (ot, price_opt) = exit_order_req(perp_attached, tp_side, current_price);
                         orders.push(OrderRequest {
@@ -826,8 +834,8 @@ impl Strategy for TrendStrategy {
             }
             // Journal TP fills now that `pos` is no longer borrowed.
             for (qty, pnl, reason) in &tp_exits {
-                if let Some((s, ep, sl, tp3, et)) = snap {
-                    self.log_close(s, ep, current_price, *qty, *pnl, sl, tp3, reason, ctx.timestamp, et);
+                if let Some((s, ep, sl, tp_target, et)) = snap {
+                    self.log_close(s, ep, current_price, *qty, *pnl, sl, tp_target, reason, ctx.timestamp, et);
                 }
                 self.notify_exit(current_price, *pnl, reason);
             }
@@ -845,8 +853,8 @@ impl Strategy for TrendStrategy {
                     self.realized_pnl += pnl;
                     self.position = None;
                     self.pending_entry = None;
-                    if let Some((s, ep, sl, tp3, et)) = snap {
-                        self.log_close(s, ep, current_price, qty, pnl, sl, tp3, "signal_exit", ctx.timestamp, et);
+                    if let Some((s, ep, sl, tp_target, et)) = snap {
+                        self.log_close(s, ep, current_price, qty, pnl, sl, tp_target, "signal_exit", ctx.timestamp, et);
                     }
                     self.notify_exit(current_price, pnl, "signal_exit");
                     let (ot, price_opt) = exit_order_req(perp_attached, side, current_price);
@@ -945,11 +953,13 @@ impl Strategy for TrendStrategy {
         // remaining quantity — exit paths already booked PnL at detection time.
         if let Some(side) = self.pending_entry.take() {
             let stop_loss = self.calculate_stop_loss(fill.price, side);
-            // No fixed TPs — let winners run via breakeven promotion + Chandelier
-            // trail (exit redesign). calculate_tp_levels is retained for the
-            // restore-reconciliation path below (old state files with TPs) and
-            // optional far-TPs in the future.
-            let tp_levels = Vec::new();
+            let tp_levels = TrendPosition::calculate_tp_levels(
+                fill.price,
+                stop_loss,
+                self.config.risk_reward_ratio,
+                0.0,
+                side,
+            );
             self.position = Some(TrendPosition {
                 side, entry_price: fill.price, stop_loss,
                 quantity: fill.quantity, remaining_qty: fill.quantity,
@@ -1279,21 +1289,24 @@ mod tests {
     }
 
     #[test]
-    fn short_tp_levels_are_below_entry_and_descending() {
+    fn hybrid_tp_levels_are_side_aware_and_have_no_tp3() {
         let s = warmed_strategy(true);
         let short_stop = s.calculate_stop_loss(100.0, OrderSide::Sell); // > 100
         let tps = TrendPosition::calculate_tp_levels(100.0, short_stop, 2.0, 0.10, OrderSide::Sell);
-        assert_eq!(tps.len(), 3);
+        assert_eq!(tps.len(), 2);
         assert!(tps[0].price < 100.0, "short TP1 below entry: {}", tps[0].price);
-        assert!(tps[2].price < tps[1].price && tps[1].price < tps[0].price,
-            "short TPs descend in profit direction: {:?}",
-            tps.iter().map(|t| t.price).collect::<Vec<_>>());
-        let risk = short_stop - 100.0; // short risk is stop-entry (>0)
-        assert!((tps[2].price - (100.0 - risk * 2.0)).abs() < 1e-6, "TP3 = entry − risk·RR");
-        // Long path unchanged: above entry, ascending.
+        assert!(tps[1].price < tps[0].price, "short TPs descend in profit direction: {:?}", tps);
+        let risk = short_stop - 100.0;
+        assert!((tps[0].price - (100.0 - risk)).abs() < 1e-6);
+        assert!((tps[1].price - (100.0 - risk * 1.5)).abs() < 1e-6);
+        assert_eq!((tps[0].close_pct, tps[1].close_pct), (0.33, 0.50));
+
         let long_stop = s.calculate_stop_loss(100.0, OrderSide::Buy);
         let ltps = TrendPosition::calculate_tp_levels(100.0, long_stop, 2.0, 0.10, OrderSide::Buy);
-        assert!(ltps[0].price > 100.0 && ltps[2].price > ltps[1].price, "long TPs unchanged");
+        assert_eq!(ltps.len(), 2);
+        let long_risk = 100.0 - long_stop;
+        assert!((ltps[0].price - (100.0 + long_risk)).abs() < 1e-6);
+        assert!((ltps[1].price - (100.0 + long_risk * 1.5)).abs() < 1e-6);
     }
 
     #[test]
@@ -1319,7 +1332,7 @@ mod tests {
     fn short_position_stops_out_with_buy_order_and_negative_pnl() {
         let mut s = warmed_strategy(true);
         let short_stop = s.calculate_stop_loss(100.0, OrderSide::Sell); // > 100, e.g. ~102
-        // No TPs in the new exit design — initial stop is the only exit before +1R.
+        // No target has been reached; the initial stop is the only exit before +1R.
         s.position = Some(TrendPosition {
             side: OrderSide::Sell, entry_price: 100.0, stop_loss: short_stop,
             quantity: 2.0, remaining_qty: 2.0, trailing_stop: None,
@@ -1340,9 +1353,8 @@ mod tests {
 
     #[test]
     fn short_position_promotes_to_breakeven_at_1r() {
-        // Exit redesign: with no TPs, a SHORT that reaches +1R no longer fires a
-        // partial TP1 — instead the merged exit block promotes stop_loss to
-        // entry (breakeven) and the position stays open to let the trail run.
+        // A SHORT that reaches +1R promotes stop_loss to entry while the
+        // hybrid targets remain available for later partial exits.
         let mut s = warmed_strategy(true);
         let short_stop = s.calculate_stop_loss(100.0, OrderSide::Sell); // > 100
         let risk = short_stop - 100.0;
@@ -1355,7 +1367,7 @@ mod tests {
         // Price falls to +1R (entry − risk) → breakeven promotion fires; no exit.
         let ctx = tick_at(100.0 - risk);
         let _ = run_tick(&mut s, ctx);
-        let pos = s.position.as_ref().expect("position stays open at +1R (no TPs to fire)");
+        let pos = s.position.as_ref().expect("position stays open at +1R");
         assert!((pos.stop_loss - pos.entry_price).abs() < 1e-9,
             "SHORT +1R: stop_loss must be promoted to breakeven (entry): got stop={}",
             pos.stop_loss);
@@ -1378,7 +1390,7 @@ mod tests {
         });
         let ctx = tick_at(100.0 + risk);
         let _ = run_tick(&mut s, ctx);
-        let pos = s.position.as_ref().expect("position stays open at +1R (no TPs)");
+        let pos = s.position.as_ref().expect("position stays open at +1R");
         assert!((pos.stop_loss - pos.entry_price).abs() < 1e-9,
             "LONG +1R: stop_loss promoted to breakeven (entry): got stop={}", pos.stop_loss);
     }
@@ -1405,7 +1417,7 @@ mod tests {
     #[test]
     fn trailing_stop_exits_full_quantity() {
         // LONG: push price up (ratchet trail), then reverse below trail → exit
-        // fires on the FULL remaining qty (no partial-TP ladder ahead of it).
+        // fires on the FULL remaining qty after any target partials.
         let mut s = warmed_strategy(false);
         let long_stop = s.calculate_stop_loss(100.0, OrderSide::Buy);
         s.position = Some(TrendPosition {

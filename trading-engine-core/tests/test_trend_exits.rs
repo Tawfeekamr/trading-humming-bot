@@ -123,39 +123,48 @@ async fn test_stop_loss_triggers_exit() {
     assert!(strategy.position().is_none(), "Position should be cleared after stop loss exit");
 }
 
-/// Test 2: Breakeven promotion at +1R (replaces old TP1 test — no more TPs)
-/// The new exit design promotes stop_loss to entry when price reaches +1R,
-/// instead of closing 33% at a TP level. Position stays open (let winners run).
+/// Test 2: Breakeven promotion and TP1 partial close at +1R.
 #[tokio::test]
-async fn test_breakeven_promotion_at_1r() {
+async fn test_breakeven_and_tp1_partial_at_1r() {
     let config = default_trend_config();
     let telegram = trading_engine_core::notifications::TelegramBot::new("", "");
-    let mut strategy = TrendStrategy::new("BTCUSDT", &config, telegram);
+    let mut strategy = TrendStrategy::new("TP1-PARTIAL-USDT", &config, telegram);
     warmup(&mut strategy, 50000.0);
     enter_position(&mut strategy, 50000.0, 0.1).await;
 
     let sl = strategy.calculate_stop_loss(50000.0, OrderSide::Buy);
-    let risk = 50000.0 - sl; // entry - stop = per-unit risk
-
-    // Tick at +1R (the breakeven threshold)
+    let risk = 50000.0 - sl;
     let mut bars = Vec::new();
-    let ctx = make_tick(50000.0 + risk, &mut bars);
-    let orders = strategy.on_tick(&ctx).await.unwrap();
+    let orders = strategy.on_tick(&make_tick(50000.0 + risk, &mut bars)).await.unwrap();
 
-    // No sell order at +1R (the new design lets winners run — no TP to close)
-    let sells: Vec<_> = orders.iter().filter(|o| o.side == OrderSide::Sell).collect();
-    assert!(sells.is_empty(), "No sell at +1R (no TPs): got {:?}", sells);
-
-    // Position remains open with stop promoted to breakeven (≈ entry)
-    let pos = strategy.position().expect("position stays open at +1R");
-    assert!(
-        (pos.stop_loss - 50000.0).abs() < 50.0,
-        "stop promoted to ≈ entry (50000): got {}",
-        pos.stop_loss
-    );
+    let sell = orders.iter().find(|o| o.side == OrderSide::Sell && o.reduce_only)
+        .expect("TP1 should emit a reduce-only sell at +1R");
+    assert!((sell.quantity - 0.033).abs() < 1e-9, "TP1 closes 33% of initial qty");
+    let pos = strategy.position().expect("runner remains after TP1");
+    assert!((pos.remaining_qty - 0.067).abs() < 1e-9);
+    assert!((pos.stop_loss - 50000.0).abs() < 50.0, "stop promoted to breakeven");
+    assert!(pos.tp_levels[0].filled);
 }
 
-/// Test 3: Trailing exit closes full position (replaces old all-TPs test)
+/// TP2 closes 50% of the quantity remaining after TP1, leaving the runner.
+#[tokio::test]
+async fn test_tp2_closes_half_of_remaining_quantity() {
+    let config = default_trend_config();
+    let telegram = trading_engine_core::notifications::TelegramBot::new("", "");
+    let mut strategy = TrendStrategy::new("TP2-PARTIAL-USDT", &config, telegram);
+    warmup(&mut strategy, 50000.0);
+    enter_position(&mut strategy, 50000.0, 0.1).await;
+
+    let sl = strategy.calculate_stop_loss(50000.0, OrderSide::Buy);
+    let risk = 50000.0 - sl;
+    let mut bars = Vec::new();
+    let _ = strategy.on_tick(&make_tick(50000.0 + risk * 1.5, &mut bars)).await.unwrap();
+    let pos = strategy.position().expect("runner remains after both targets");
+    assert!((pos.remaining_qty - 0.0335).abs() < 1e-9, "TP2 closes 50% of post-TP1 qty");
+    assert!(pos.tp_levels.iter().all(|tp| tp.filled));
+}
+
+/// Test 3: Chandelier trailing exits the remaining runner after both targets.
 /// Push price up (ratchet trail above entry), then reverse below trail → exit.
 #[tokio::test]
 async fn test_trailing_exit_closes_full_position() {
@@ -181,8 +190,8 @@ async fn test_trailing_exit_closes_full_position() {
     let sell = orders.iter().find(|o| o.side == OrderSide::Sell && o.reduce_only);
     assert!(sell.is_some(), "reduce-only sell exit order produced: {:?}", orders);
     assert!(
-        (sell.unwrap().quantity - 0.1).abs() < 0.001,
-        "full remaining qty exited"
+        (sell.unwrap().quantity - 0.0335).abs() < 0.001,
+        "full remaining runner qty exited"
     );
 
     // 3) No more exit orders on subsequent tick (position is gone).
@@ -249,44 +258,41 @@ async fn test_direction_flip_exit() {
         "Direction flip should trigger sell order, got {:?}", orders
     );
 }
-
-/// Test 6: A position restored from disk must NOT be liquidated by a catch-up
-/// burst of TP/exit orders on the first live tick. TPs already below the
-/// current price are reconciled as filled; the bot resumes managing the position.
+/// A trailing-only persisted position with empty tp_levels is migrated to the
+/// two-target ladder, and restore reconciliation emits no catch-up exits.
 #[tokio::test]
-async fn test_restored_position_skips_catchup_exit_burst() {
+async fn test_restored_position_backfills_hybrid_targets_without_exits() {
     let config = default_trend_config();
-    let pair = "RESTORE-USDT"; // unique pair → isolated state file
+    let pair = "RESTORE-HYBRID-USDT";
 
-    // 1. Enter + persist a position (on_fill writes data/RESTORE_USDT_trend_position.json).
     let tg1 = trading_engine_core::notifications::TelegramBot::new("", "");
     let mut s1 = TrendStrategy::new(pair, &config, tg1);
     warmup(&mut s1, 50000.0);
     enter_position(&mut s1, 50000.0, 0.1).await;
     drop(s1);
 
-    // 2. Fresh instance loads it (simulates a restart).
+    let path = format!("data/{}_trend_position.json", pair.replace("-", "_"));
+    let content = std::fs::read_to_string(&path).expect("persisted position");
+    let mut state: serde_json::Value = serde_json::from_str(&content).unwrap();
+    state["position"]["tp_levels"] = serde_json::json!([]);
+    std::fs::write(&path, serde_json::to_string(&state).unwrap()).unwrap();
+
     let tg2 = trading_engine_core::notifications::TelegramBot::new("", "");
     let mut s2 = TrendStrategy::new(pair, &config, tg2);
-    assert!(s2.position().is_some(), "position restored from disk");
-    warmup(&mut s2, 50000.0);
-
-    // 3. Tick at a price well above ALL TP levels.
+    let pos = s2.position().expect("position restored from disk");
+    assert_eq!(pos.tp_levels.len(), 2, "empty persisted ladder is backfilled");
     let sl = s2.calculate_stop_loss(50000.0, OrderSide::Buy);
-    let tp_levels = TrendPosition::calculate_tp_levels(50000.0, sl, config.risk_reward_ratio, 0.10, OrderSide::Buy);
-    let high_price = tp_levels[2].price + 5000.0;
+    let high_price = TrendPosition::calculate_tp_levels(
+        50000.0, sl, config.risk_reward_ratio, 0.0, OrderSide::Buy
+    )[1].price + 5000.0;
+    warmup(&mut s2, 50000.0);
     let mut bars = Vec::new();
-    let ctx = make_tick(high_price, &mut bars);
-    let orders = s2.on_tick(&ctx).await.unwrap();
+    let orders = s2.on_tick(&make_tick(high_price, &mut bars)).await.unwrap();
+    assert!(orders.is_empty(), "restore must not fire catch-up exits");
+    assert!(s2.position().is_some(), "restored position survives first tick");
+    assert!(s2.position().unwrap().tp_levels.iter().all(|tp| tp.filled));
 
-    // 4. No catch-up burst: no sells, position survives, overdue TPs reconciled as filled.
-    assert!(orders.is_empty(), "restored position must not fire catch-up exits, got {:?}", orders);
-    assert!(s2.position().is_some(), "restored position must survive the restart tick");
-    let pos = s2.position().unwrap();
-    assert!(pos.tp_levels.iter().all(|tp| tp.filled), "overdue TPs reconciled as filled");
-
-    // cleanup the isolated state file
-    let _ = std::fs::remove_file(format!("data/{}_trend_position.json", pair.replace("-", "_")));
+    let _ = std::fs::remove_file(path);
 }
 
 /// Step 1: the Chandelier trail MUST read `trailing_stop_atr_mult` (not the old

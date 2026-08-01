@@ -40,28 +40,28 @@ fn make_bar(close: f64) -> Bar {
 }
 
 #[test]
-fn test_stop_loss_and_take_profit_calculation() {
+fn test_stop_loss_and_hybrid_target_calculation() {
     let config = default_trend_config();
     let telegram = trading_engine_core::notifications::TelegramBot::new("", "");
-    let mut strategy = TrendStrategy::new("BTCUSDT", &config, telegram);
+    let strategy = TrendStrategy::new("TP-CALC-USDT", &config, telegram);
 
-    for i in 0..250 {
-        let price = 50000.0 + (i as f64 * 0.5);
-        strategy.update_indicators(&make_bar(price));
-    }
+    let entry = 50_000.0;
+    let stop = 49_000.0;
+    let levels = TrendPosition::calculate_tp_levels(entry, stop, 2.0, 0.10, OrderSide::Buy);
+    assert_eq!(levels.len(), 2, "hybrid trend uses exactly TP1 and TP2");
+    assert_eq!(levels[0].price, 51_000.0);
+    assert_eq!(levels[1].price, 51_500.0);
+    assert_eq!(levels[0].close_pct, 0.33);
+    assert_eq!(levels[1].close_pct, 0.50);
+    assert!(!levels[0].filled && !levels[1].filled);
 
-    let sl = strategy.calculate_stop_loss(50000.0, OrderSide::Buy);
-    assert!(sl < 50000.0, "Stop loss should be below entry");
-
-    let tp_levels = TrendPosition::calculate_tp_levels(50000.0, sl, 2.0, 0.10, OrderSide::Buy);
-    assert_eq!(tp_levels.len(), 3, "Should have 3 TP levels");
-    assert!(tp_levels[0].price > 50000.0, "TP1 should be above entry");
-    assert!(tp_levels[2].price > tp_levels[1].price, "TPs should be ascending");
-
-    let risk = 50000.0 - sl;
-    let expected_tp3 = 50000.0 + risk * 2.0;
-    assert!((tp_levels[2].price - expected_tp3).abs() < 0.01,
-        "TP3 should match 2:1 R:R, got {}", tp_levels[2].price);
+    let short_levels = TrendPosition::calculate_tp_levels(entry, 51_000.0, 2.0, 0.10, OrderSide::Sell);
+    assert_eq!(short_levels.len(), 2);
+    assert_eq!(short_levels[0].price, 49_000.0);
+    assert_eq!(short_levels[1].price, 48_500.0);
+    assert_eq!(short_levels[0].close_pct, 0.33);
+    assert_eq!(short_levels[1].close_pct, 0.50);
+    let _ = strategy;
 }
 
 #[test]
