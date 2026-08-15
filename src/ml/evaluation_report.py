@@ -21,11 +21,15 @@ def _as_array(values: Sequence[float], name: str) -> np.ndarray:
 
 
 def _drawdown(returns: np.ndarray) -> float:
+    """CANONICAL MaxDD: multiplicative equity (cumprod), pooled by
+    concatenation. Per-bar returns are equity ratios, so drawdown must be
+    measured on the compounded curve; the previous additive construction
+    (1 + cumsum) overstated drawdown for large moves (e.g. BNB PPO 0.326
+    additive vs 0.293 multiplicative on identical data — audit batch 2).
+    """
     if not len(returns):
         return 0.0
-    # The evaluator passes normalized per-step PnL. An additive equity curve
-    # makes fees (also normalized PnL) and the reported net PnL comparable.
-    equity = 1.0 + np.cumsum(returns)
+    equity = np.cumprod(1.0 + np.asarray(returns, dtype=np.float64))
     peaks = np.maximum.accumulate(equity)
     with np.errstate(divide="ignore", invalid="ignore"):
         drawdowns = np.where(peaks > 0, (peaks - equity) / peaks, 0.0)

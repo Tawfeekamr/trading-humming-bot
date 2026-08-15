@@ -15,7 +15,12 @@ def test_summarize_returns_has_deterministic_metrics_and_confidence_intervals():
     assert result["trade_count"] == 4
     assert result["net_pnl"] == 0.07
     assert result["total_return"] == 0.07
-    assert result["max_drawdown"] == pytest.approx(0.05 / 1.10)
+    # Canonical multiplicative MaxDD: equity 1.10 -> 1.10*0.95 = 1.045;
+    # peak 1.10, trough 1.045 -> dd = 0.055/1.10... NO: cumprod gives
+    # 1.045 at the -5% bar; dd = (1.10-1.045)/1.10 = 0.05/1.10.
+    # Multiplicative: peak 1.10, equity after -5% bar = 1.10*0.95=1.045,
+    # dd = 0.055/1.10 = 0.05. Exactly 5%: the bar return IS the dd.
+    assert result["max_drawdown"] == pytest.approx(0.05)
     assert result["profit_factor"] == 2.6
     assert result["confidence_intervals"]["total_return"]["level"] == 0.95
     assert result["confidence_intervals"]["total_return"]["low"] <= result["total_return"] <= result["confidence_intervals"]["total_return"]["high"]
