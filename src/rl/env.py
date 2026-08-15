@@ -687,4 +687,5 @@ class TradingEnv(gym.Env):
             "size_mult": float(self._current_size_mult),
             "step": int(self._step_count),
             "bar_idx": int(self._bar_idx),
+            "position_value": float(self._position_value()),
         }

@@ -30,6 +30,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from src.rl.exposure_match import (  # noqa: E402
     percentile_of,
     random_entry_returns,
+    random_entry_returns_capital_weighted,
     scaled_buy_hold_returns_constant,
 )
 from src.rl.risk_stats import max_drawdown, sharpe_annualized  # noqa: E402
@@ -64,8 +65,11 @@ def main() -> int:
         print(f"insufficient pooled bars: {n}", file=sys.stderr)
         return 1
 
-    # PPO's realised exposure: fraction of bars with a non-zero return.
-    ppo_exposure = float(np.mean(ppo != 0.0))
+    # PPO's realised exposure — reported under BOTH definitions.
+    exposure_defs = json.loads(Path("reports/exposure_definitions.json").read_text())
+    pair_defs = exposure_defs[args.pair]
+    ppo_capital_exposure = pair_defs["ppo"]["capital_weighted_exposure"]
+    ppo_time_in_market = pair_defs["ppo"]["time_in_market"]
     # Trade-length proxy: contiguous runs of non-zero returns.
     runs, run = [], 0
     for r in ppo:
@@ -82,16 +86,19 @@ def main() -> int:
     bh = ta
 
     # 1. Scaled buy & hold at PPO's exposure fraction.
-    scaled = scaled_buy_hold_returns_constant(bh, ppo_exposure)
+    # Baselines matched on CAPITAL-WEIGHTED exposure (canonical, batch 2
+    # task 2): the previous run matched B&H on capital fraction but random
+    # entries on time-in-market — not the same footing.
+    scaled = scaled_buy_hold_returns_constant(bh, ppo_capital_exposure)
     scaled_maxdd = max_drawdown(scaled)
     scaled_total = float(np.sum(np.log1p(scaled)))
 
     # 2. Random-entry baselines.
     dd_dist, ret_dist = [], []
     for seed in range(args.seeds):
-        rret, expo, trades = random_entry_returns(
-            bh, target_exposure=ppo_exposure, avg_trade_length=avg_trade_length,
-            seed=seed,
+        rret, expo, trades = random_entry_returns_capital_weighted(
+            bh, target_capital_exposure=ppo_capital_exposure,
+            avg_trade_length=avg_trade_length, seed=seed,
         )
         dd_dist.append(max_drawdown(rret))
         ret_dist.append(float(np.sum(np.log1p(rret))))
@@ -108,7 +115,9 @@ def main() -> int:
     report = {
         "pair": args.pair,
         "pooled_bars": n,
-        "ppo_exposure": ppo_exposure,
+        "ppo_time_in_market": ppo_time_in_market,
+        "ppo_capital_weighted_exposure": ppo_capital_exposure,
+        "baseline_matching_definition": "capital_weighted_exposure",
         "ppo_avg_trade_length_bars": avg_trade_length,
         "ppo": {
             "max_drawdown": ppo_maxdd,

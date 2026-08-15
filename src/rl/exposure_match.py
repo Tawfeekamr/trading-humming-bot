@@ -51,6 +51,10 @@ def random_entry_returns(
     the buy & hold return; flat bars earn 0.
 
     Returns ``(returns, realised_exposure_fraction, trade_count)``.
+
+    NOTE: matching is on TIME-IN-MARKET (fraction of invested bars). For
+    matching on CAPITAL-WEIGHTED exposure see
+    ``random_entry_returns_capital_weighted``.
     """
     bh = np.asarray(bh_returns, dtype=np.float64)
     n = len(bh)
@@ -84,6 +88,34 @@ def random_entry_returns(
             i += 1
     exposure_frac = float(np.mean(returns != 0.0)) if n else 0.0
     return returns, exposure_frac, trades
+
+
+def random_entry_returns_capital_weighted(
+    bh_returns: np.ndarray,
+    target_capital_exposure: float,
+    avg_trade_length: int,
+    seed: int,
+) -> tuple[np.ndarray, float, int]:
+    """Random-entry baseline matched on CAPITAL-WEIGHTED exposure.
+
+    Positions are held at full notional for ``avg_trade_length``-mean runs,
+    but at a fractional size chosen so mean capital exposure equals the
+    target: fraction = target / realised_time_in_market_fraction.
+
+    Returns ``(returns, realised_capital_exposure, trade_count)``.
+    """
+    returns, time_frac, trades = random_entry_returns(
+        bh_returns, min(0.99, max(0.01, float(target_capital_exposure) * 4)),
+        avg_trade_length, seed,
+    )
+    # Time-in-market of the random runs ~ 4x target (clamped); rescale the
+    # position size so mean capital exposure hits the target exactly.
+    size = float(target_capital_exposure) / max(time_frac, 1e-9)
+    scaled = returns * size
+    realised = float(np.mean(np.abs(scaled) > 0) * size)
+    # realised mean(|notional|/equity) = size * fraction of invested bars
+    invested = float(np.mean(returns != 0.0))
+    return scaled, size * invested, trades
 
 
 def percentile_of(value: float, distribution: np.ndarray) -> float:

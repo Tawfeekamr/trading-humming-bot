@@ -1,0 +1,30 @@
+{
+  "BNBUSDT": {
+    "ppo": {
+      "capital_weighted_exposure": 0.052469611181865466,
+      "time_in_market": 0.5418981481481481
+    },
+    "rf": {
+      "capital_weighted_exposure": 0.6054342071572218,
+      "time_in_market": 0.7601851851851852
+    },
+    "ta": {
+      "capital_weighted_exposure": 1.0,
+      "time_in_market": 1.0
+    }
+  },
+  "ETHUSDT": {
+    "ppo": {
+      "capital_weighted_exposure": 0.04267613393157086,
+      "time_in_market": 0.580787037037037
+    },
+    "rf": {
+      "capital_weighted_exposure": 0.21098550435512572,
+      "time_in_market": 0.6141203703703703
+    },
+    "ta": {
+      "capital_weighted_exposure": 1.0,
+      "time_in_market": 1.0
+    }
+  }
+}

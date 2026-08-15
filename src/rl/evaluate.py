@@ -272,6 +272,7 @@ def _run_model(env: TradingEnv, router) -> dict:
     in_position_flags: list[bool] = []
     engine_flags: list[str] = []
     bar_indices: list[int] = []
+    position_values: list[float] = []
 
     done = False
     while not done:
@@ -287,6 +288,7 @@ def _run_model(env: TradingEnv, router) -> dict:
         in_position_flags.append(bool(info.get("in_position", False)))
         engine_flags.append(str(info.get("engine", "flat")))
         bar_indices.append(int(info.get("bar_idx", -1)))
+        position_values.append(float(info.get("position_value", 0.0)))
         done = term or trunc
 
     exposure_array = np.asarray(
@@ -335,6 +337,14 @@ def _run_model(env: TradingEnv, router) -> dict:
         "profit_factor": float(profit_factor),
         "max_drawdown": max_dd,
         "time_in_market": float(time_in_market),
+        # Capital-weighted exposure: mean(|position notional| / equity).
+        # DISTINCT from time_in_market (engine != flat): grid bars with zero
+        # inventory count as deployed in time_in_market but hold no capital —
+        # the two diverged by 58% vs 15% on the same ETH run (audit batch 2).
+        "capital_weighted_exposure": (
+            float(np.mean([v / e for v, e in zip(position_values, equity_curve[1:]) if e > 0]))
+            if position_values else 0.0
+        ),
         "fees": fees,
         # Preserve the existing human-facing keys consumed by callers.
         "Total Return": f"{total_return * 100:.2f}%",

@@ -1,4 +1,5 @@
 {
+  "baseline_matching_definition": "capital_weighted_exposure",
   "drawdown_advantage_survives_exposure_matching": false,
   "pair": "BNBUSDT",
   "pooled_bars": 4314,
@@ -8,26 +9,27 @@
     "total_log_return": -0.29974194925731235
   },
   "ppo_avg_trade_length_bars": 5,
-  "ppo_exposure": 0.1520630505331479,
+  "ppo_capital_weighted_exposure": 0.052469611181865466,
   "ppo_percentile_in_random_distribution": {
-    "max_drawdown": 95.0,
-    "total_log_return": 2.0
+    "max_drawdown": 100.0,
+    "total_log_return": 0.0
   },
+  "ppo_time_in_market": 0.5418981481481481,
   "random_entry_baseline": {
     "max_drawdown": {
-      "median": 0.17067521569620886,
-      "p5": 0.07999978320161269,
-      "p95": 0.2867703519765349
+      "median": 0.05084022680307444,
+      "p5": 0.02676039814710592,
+      "p95": 0.08769929625173002
     },
     "seeds": 200,
     "total_log_return": {
-      "median": 0.008108453912515242,
-      "p5": -0.2510995580366016,
-      "p95": 0.23693948458926922
+      "median": 0.0002519638463740698,
+      "p5": -0.05564105612457891,
+      "p95": 0.07561186933053037
     }
   },
   "scaled_buy_hold_at_same_exposure": {
-    "max_drawdown": 0.0972128604653091,
-    "total_log_return": 0.0038656153109924915
+    "max_drawdown": 0.03451294168456884,
+    "total_log_return": 0.001758033062102038
   }
 }
