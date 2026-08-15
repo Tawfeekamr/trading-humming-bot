@@ -283,10 +283,31 @@ def _train_slice_subprocess(
     the OOS slice; ``--months`` is sized to cover ``train_bars`` (rounds up, so
     the model may see slightly more than the strict slice — the eval boundary
     is what matters and the guard enforces it).
+
+    If an existing model's provenance sidecar matches (same pair, train-end,
+    timesteps), it is reused — training is seeded and deterministic on the
+    same data window, and PPO training dominates the run's wall-clock.
     """
+    import json
     import math
     import subprocess
     import sys
+    from pathlib import Path
+
+    sidecar = Path(f"{model_path}.json")
+    if Path(model_path).exists() and sidecar.exists():
+        try:
+            existing = json.loads(sidecar.read_text())
+        except (json.JSONDecodeError, OSError):
+            existing = None
+        if existing is not None and (
+            existing.get("pair") == pair
+            and str(existing.get("data_end", existing.get("train_end", "")))
+            .startswith(str(train_end_date))
+            and int(existing.get("timesteps", 0)) == timesteps
+        ):
+            print(f"  reusing cached PPO slice model {model_path} (sidecar matches)", flush=True)
+            return model_path
 
     months = max(1, math.ceil(train_bars / 720))  # ~720 bars / 30 days
     cmd = [
