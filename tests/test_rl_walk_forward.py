@@ -121,7 +121,7 @@ def test_walk_forward_report_rows_audit_boundaries_and_comparators(monkeypatch, 
         lambda pair, train_end, *args: cutoffs.append(train_end) or "model.zip",
     )
 
-    def fake_eval(test_df, ppo_model_path=None, rf_model_path=None, warmup=100):
+    def fake_eval(test_df, *_args, ppo_model_path=None, rf_model_path=None, warmup=100):
         # Return a series indexed on the slice's real test window: first test
         # bar is warmup+1 (env anchors on the last warmup bar).
         n = 100
@@ -145,7 +145,7 @@ def test_walk_forward_report_rows_audit_boundaries_and_comparators(monkeypatch, 
             "ta": {"returns": returns.copy(), "summary": {}},
         }
 
-    monkeypatch.setattr(wf, "_evaluate_slice_aligned", fake_eval)
+    monkeypatch.setattr(wf, "_evaluate_slice_isolated", fake_eval)
     monkeypatch.setattr(
         wf,
         "train_fold_rf",

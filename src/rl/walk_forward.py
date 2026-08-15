@@ -323,6 +323,64 @@ def _train_slice_subprocess(
     return model_path
 
 
+def _evaluate_slice_isolated(test_df, ppo_model_path, rf_model_path, warmup, pair, fold_idx):
+    """Evaluate one slice in a subprocess and read back the persisted CSVs.
+
+    The parent walk-forward process segfaulted (EXIT=139, reproducible)
+    when loading a PPO model after repeated training-subprocess churn —
+    torch/native-library state corruption. Evaluating each slice in its own
+    short-lived process sidesteps the corrupted state entirely; the CSV
+    audit trail (already required by Task 5) doubles as the IPC channel.
+    """
+    import json
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    out_dir = Path(f"reports/returns/_tmp_{pair}_{fold_idx}")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    df_csv = out_dir / "test_df.csv"
+    test_df.to_csv(df_csv)
+
+    script = (
+        "import sys, json; sys.path.insert(0, '.')\n"
+        "import pandas as pd\n"
+        "from src.rl.walk_forward import _evaluate_slice_aligned\n"
+        f"test_df = pd.read_csv({str(df_csv)!r}, index_col=0, parse_dates=True)\n"
+        f"aligned = _evaluate_slice_aligned(test_df, {ppo_model_path!r}, {rf_model_path!r}, warmup={warmup})\n"
+        "for name in ('ppo', 'rf', 'ta'):\n"
+        f"    aligned[name]['returns'].rename('return').to_csv({str(out_dir)!r} + '/' + name + '.csv', index_label='timestamp')\n"
+        "import numpy as _np\n"
+        "for n2 in ('ppo', 'rf'):\n"
+        f"    _np.savetxt({str(out_dir)!r} + '/' + n2 + '_exposure.csv', _np.asarray(aligned[n2]['summary'].get('exposure_array', [])), delimiter=',')\n"
+        "summary = {n: {k: v for k, v in aligned[n]['summary'].items() if not hasattr(v, 'shape') and k != 'timestamps'} for n in ('ppo', 'rf')}\n"
+        f"open({str(out_dir / 'summary.json')!r}, 'w').write(json.dumps(summary, default=str))\n"
+    )
+    subprocess.run(
+        [sys.executable, "-c", script], check=True,
+        capture_output=True, text=True,
+    )
+
+    import pandas as pd
+
+    aligned_out = {
+        name: {"returns": pd.read_csv(out_dir / f"{name}.csv", index_col=0, parse_dates=True)["return"]}
+        for name in ("ppo", "rf", "ta")
+    }
+    summary = json.loads((out_dir / "summary.json").read_text())
+    aligned_out["ppo"]["summary"] = summary["ppo"]
+    aligned_out["rf"]["summary"] = summary["rf"]
+    aligned_out["ta"]["summary"] = {}
+    # Exposure arrays are ndarrays (not JSON-serializable) — persisted as CSVs.
+    for _n in ("ppo", "rf"):
+        _exp_csv = out_dir / f"{_n}_exposure.csv"
+        if _exp_csv.exists() and _exp_csv.stat().st_size > 0:
+            aligned_out[_n]["summary"]["exposure_array"] = np.loadtxt(
+                _exp_csv, delimiter=","
+            )
+    return aligned_out
+
+
 def _evaluate_slice(test_df, ppo_model_path: str, rf_model_path: str, warmup: int = 100):
     """Run PPO + RF through the OOS slice; return (ppo_returns, rf_returns, ppo, rf).
 
@@ -568,25 +626,21 @@ def run_walk_forward(
             # the FIRST TEST BAR (vs+1 in frame coords) — the aligned
             # evaluator enforces this and timestamp-aligns all comparators.
             test_df = df.iloc[max(0, vs - warmup):ve]
-            aligned = _evaluate_slice_aligned(test_df, model_path, slice_rf_model, warmup=warmup)
+            aligned = _evaluate_slice_isolated(
+                test_df, model_path, slice_rf_model, warmup, pair, i
+            )
 
-            def _persist_returns():
-                """Write the raw timestamped return series for this slice
-                (audit trail: reports/returns/<PAIR>_<comparator>_<fold>.csv)."""
-                from pathlib import Path
+            if returns_dir:
+                from pathlib import Path as _P
+                from shutil import copyfile as _copy
 
-                if not returns_dir:
-                    return
-                out = Path(returns_dir)
-                out.mkdir(parents=True, exist_ok=True)
-                for name in ("ppo", "rf", "ta"):
-                    series = aligned[name]["returns"]
-                    series.rename("return").to_csv(
-                        out / f"{pair}_{name}_fold{i}.csv",
-                        index_label="timestamp",
+                _out = _P(returns_dir)
+                _out.mkdir(parents=True, exist_ok=True)
+                for _name in ("ppo", "rf", "ta"):
+                    _copy(
+                        _P(f"reports/returns/_tmp_{pair}_{i}/{_name}.csv"),
+                        _out / f"{pair}_{_name}_fold{i}.csv",
                     )
-
-            _persist_returns()
 
             declared_test_start = df.index[vs]
             for name in ("ppo", "rf", "ta"):
