@@ -1,0 +1,737 @@
+{
+  "metadata": {
+    "data_bars": 17304,
+    "data_end": "2026-07-05",
+    "data_sha256": "f3b80320abea042a203af6162465824feaf0b79ffacaab4d97e2f180d3aecbb6",
+    "embargo_bars": 70,
+    "feature_hash": null,
+    "fees": 0.0,
+    "fold_rf_manifests": [
+      {
+        "calibration_samples": 638,
+        "class_distribution": {
+          "0": 1592,
+          "1": 877,
+          "2": 1141
+        },
+        "data_hash": "3d58cd8499a47a8a7ba4fc80362563c4d6fdbacb1b2fe5e4bf908da871828b23",
+        "feature_contract_hash": "17a72786d09ce4fb7fe31c4b885b2ecd1f9e21e13b74e625d89d9890006e51a0",
+        "fold_bars": 4320,
+        "git_sha": "353cb252fde5b661fe5b9d531917c51059a9a43a",
+        "model_path": "models/rl/_wf_ETHUSDT_fold_rf_0_4320.pkl",
+        "pair": "ETHUSDT",
+        "seed": 42,
+        "source_commit": "353cb252fde5b661fe5b9d531917c51059a9a43a",
+        "train_end": "2025-01-10 23:00:00+00:00",
+        "train_start": "2024-07-15 00:00:00+00:00",
+        "trained_at": "2026-08-15",
+        "training_samples": 3610
+      },
+      {
+        "calibration_samples": 638,
+        "class_distribution": {
+          "0": 1166,
+          "1": 823,
+          "2": 1621
+        },
+        "data_hash": "cd1d29378f4356522c24088652413eb5fb0e405f0707292c445221e5ca8e1d7e",
+        "feature_contract_hash": "17a72786d09ce4fb7fe31c4b885b2ecd1f9e21e13b74e625d89d9890006e51a0",
+        "fold_bars": 4320,
+        "git_sha": "353cb252fde5b661fe5b9d531917c51059a9a43a",
+        "model_path": "models/rl/_wf_ETHUSDT_fold_rf_2160_6480.pkl",
+        "pair": "ETHUSDT",
+        "seed": 42,
+        "source_commit": "353cb252fde5b661fe5b9d531917c51059a9a43a",
+        "train_end": "2025-04-10 23:00:00+00:00",
+        "train_start": "2024-10-13 00:00:00+00:00",
+        "trained_at": "2026-08-15",
+        "training_samples": 3610
+      },
+      {
+        "calibration_samples": 638,
+        "class_distribution": {
+          "0": 1120,
+          "1": 765,
+          "2": 1725
+        },
+        "data_hash": "5be09b5e0cfa80422fa576ae1facae4fb30b2f43eacfa9ebbaca39a222317807",
+        "feature_contract_hash": "17a72786d09ce4fb7fe31c4b885b2ecd1f9e21e13b74e625d89d9890006e51a0",
+        "fold_bars": 4320,
+        "git_sha": "353cb252fde5b661fe5b9d531917c51059a9a43a",
+        "model_path": "models/rl/_wf_ETHUSDT_fold_rf_4320_8640.pkl",
+        "pair": "ETHUSDT",
+        "seed": 42,
+        "source_commit": "353cb252fde5b661fe5b9d531917c51059a9a43a",
+        "train_end": "2025-07-09 23:00:00+00:00",
+        "train_start": "2025-01-11 00:00:00+00:00",
+        "trained_at": "2026-08-15",
+        "training_samples": 3610
+      },
+      {
+        "calibration_samples": 638,
+        "class_distribution": {
+          "0": 1367,
+          "1": 930,
+          "2": 1313
+        },
+        "data_hash": "7f9bb8c54a7047e71763d11ade33b7dff84d678a0aa8f7259d0d906599e315d8",
+        "feature_contract_hash": "17a72786d09ce4fb7fe31c4b885b2ecd1f9e21e13b74e625d89d9890006e51a0",
+        "fold_bars": 4320,
+        "git_sha": "353cb252fde5b661fe5b9d531917c51059a9a43a",
+        "model_path": "models/rl/_wf_ETHUSDT_fold_rf_6480_10800.pkl",
+        "pair": "ETHUSDT",
+        "seed": 42,
+        "source_commit": "353cb252fde5b661fe5b9d531917c51059a9a43a",
+        "train_end": "2025-10-07 23:00:00+00:00",
+        "train_start": "2025-04-11 00:00:00+00:00",
+        "trained_at": "2026-08-15",
+        "training_samples": 3610
+      },
+      {
+        "calibration_samples": 638,
+        "class_distribution": {
+          "0": 1225,
+          "1": 929,
+          "2": 1456
+        },
+        "data_hash": "651c1f799b071cc01b91478081c92333199830316b0ab42e386ef16f2bf9d764",
+        "feature_contract_hash": "17a72786d09ce4fb7fe31c4b885b2ecd1f9e21e13b74e625d89d9890006e51a0",
+        "fold_bars": 4320,
+        "git_sha": "353cb252fde5b661fe5b9d531917c51059a9a43a",
+        "model_path": "models/rl/_wf_ETHUSDT_fold_rf_8640_12960.pkl",
+        "pair": "ETHUSDT",
+        "seed": 42,
+        "source_commit": "353cb252fde5b661fe5b9d531917c51059a9a43a",
+        "train_end": "2026-01-05 23:00:00+00:00",
+        "train_start": "2025-07-10 00:00:00+00:00",
+        "trained_at": "2026-08-15",
+        "training_samples": 3610
+      },
+      {
+        "calibration_samples": 638,
+        "class_distribution": {
+          "0": 1361,
+          "1": 648,
+          "2": 1601
+        },
+        "data_hash": "7b49139ce37bb117f3ced2d3b5376e911731e9d3d9bf4ecbf0580b6f68d79800",
+        "feature_contract_hash": "17a72786d09ce4fb7fe31c4b885b2ecd1f9e21e13b74e625d89d9890006e51a0",
+        "fold_bars": 4320,
+        "git_sha": "353cb252fde5b661fe5b9d531917c51059a9a43a",
+        "model_path": "models/rl/_wf_ETHUSDT_fold_rf_10800_15120.pkl",
+        "pair": "ETHUSDT",
+        "seed": 42,
+        "source_commit": "353cb252fde5b661fe5b9d531917c51059a9a43a",
+        "train_end": "2026-04-05 23:00:00+00:00",
+        "train_start": "2025-10-08 00:00:00+00:00",
+        "trained_at": "2026-08-15",
+        "training_samples": 3610
+      }
+    ],
+    "fold_specific_rf": true,
+    "history_end": "2026-07-05",
+    "history_start": "2024-07-15",
+    "pair": "ETHUSDT",
+    "ppo_model_paths": [
+      "models/rl/_wf_ETHUSDT_slice0.zip",
+      "models/rl/_wf_ETHUSDT_slice1.zip",
+      "models/rl/_wf_ETHUSDT_slice2.zip",
+      "models/rl/_wf_ETHUSDT_slice3.zip",
+      "models/rl/_wf_ETHUSDT_slice4.zip",
+      "models/rl/_wf_ETHUSDT_slice5.zip"
+    ],
+    "ppo_model_sha256": [
+      "4d0106de46613c95a5a387e4790c46d5d9f25fa027ecf60697ab9e9b87a1bfd0",
+      "678cbe679c34cd15b476da6b47d6c6971fa15c58ea7ecb138a947f726755dc8e",
+      "de4814ae748949d064431a4fc5d0229762482fbaa9b0af085cecf825b7a61d53",
+      "0974f73391a7d6492d1ff7a1c413f7249e9544709055fb5bd0186e8c1bb9bdfe",
+      "bd78893b9a12556736ed584a8da7c76d8782a7b94cfeaaae01047639e614ba64",
+      "07d24510d0b9faef56c0341ce7ac74ec41c90919f88591683759a0dfc2a63847"
+    ],
+    "rf_model": "models/regime_ETH-USDT.pkl",
+    "rf_model_sha256": "ccbce7373669344e747b084018bd75b1d9b1c02fa2fb5032fa104c3d814f81ab",
+    "slippage": 0.0,
+    "source_commit": "7e5feaf831c01a22a9c2098a0544cb720c7ebd5a",
+    "step_bars": 2160,
+    "test_bars": 720,
+    "train_bars": 4320
+  },
+  "metrics": {
+    "gate_metrics": {
+      "ppo_exposure": 0.5806675938803895,
+      "ppo_max_drawdown": 0.17157056803055315,
+      "ppo_profit_factor": 0.7945077626977822,
+      "ppo_total_return": -0.13098926355779017,
+      "rf_exposure": 0.614047287899861,
+      "rf_max_drawdown": 0.27322272705819894,
+      "rf_profit_factor": 0.9001533983175212,
+      "rf_total_return": -0.22319938131989078,
+      "trade_count": 46,
+      "trade_counts_by_regime": {},
+      "trade_counts_by_strategy": {
+        "ppo": 46,
+        "rf": 136,
+        "ta": 6
+      },
+      "window_count": 6
+    },
+    "ml": {
+      "confidence_intervals": {
+        "max_drawdown": {
+          "high": 0.6031537972223203,
+          "level": 0.95,
+          "low": 0.11752776283278135
+        },
+        "net_pnl": {
+          "high": 0.1027594676121027,
+          "level": 0.95,
+          "low": -0.5574731392962728
+        },
+        "profit_factor": {
+          "high": 1.0502598705700015,
+          "level": 0.95,
+          "low": 0.7688955326978026
+        },
+        "time_in_market": {
+          "high": 0.6288827074640705,
+          "level": 0.95,
+          "low": 0.5989800649049606
+        },
+        "total_return": {
+          "high": 0.1027594676121027,
+          "level": 0.95,
+          "low": -0.5574731392962728
+        }
+      },
+      "fees": 0.22892484427542492,
+      "max_drawdown": 0.27322272705819894,
+      "net_pnl": -0.22319938131989078,
+      "profit_factor": 0.9001533983175212,
+      "time_in_market": 0.614047287899861,
+      "total_return": -0.22319938131989078,
+      "trade_count": 136
+    },
+    "ppo": {
+      "confidence_intervals": {
+        "max_drawdown": {
+          "high": 0.37078076700737717,
+          "level": 0.95,
+          "low": 0.05965212153003826
+        },
+        "net_pnl": {
+          "high": 0.0737887844992952,
+          "level": 0.95,
+          "low": -0.34364607327927504
+        },
+        "profit_factor": {
+          "high": 1.1368566002734242,
+          "level": 0.95,
+          "low": 0.5571874667870306
+        },
+        "time_in_market": {
+          "high": 0.5957348168752897,
+          "level": 0.95,
+          "low": 0.5651367640241075
+        },
+        "total_return": {
+          "high": 0.0737887844992952,
+          "level": 0.95,
+          "low": -0.34364607327927504
+        }
+      },
+      "fees": 0.10302787510901763,
+      "max_drawdown": 0.17157056803055315,
+      "net_pnl": -0.13098926355779017,
+      "profit_factor": 0.7945077626977822,
+      "time_in_market": 0.5806675938803895,
+      "total_return": -0.13098926355779017,
+      "trade_count": 46
+    },
+    "ppo_vs_rf": {
+      "dm_p": 0.6653146837204453,
+      "dm_stat": 0.432587208787236,
+      "n": 4314
+    },
+    "promotion": {
+      "eligible": false,
+      "reasons": [
+        "inconclusive_sample",
+        "no_risk_adjusted_improvement_or_return_parity"
+      ]
+    },
+    "rf": {
+      "confidence_intervals": {
+        "max_drawdown": {
+          "high": 0.6031537972223203,
+          "level": 0.95,
+          "low": 0.11752776283278135
+        },
+        "net_pnl": {
+          "high": 0.1027594676121027,
+          "level": 0.95,
+          "low": -0.5574731392962728
+        },
+        "profit_factor": {
+          "high": 1.0502598705700015,
+          "level": 0.95,
+          "low": 0.7688955326978026
+        },
+        "time_in_market": {
+          "high": 0.6288827074640705,
+          "level": 0.95,
+          "low": 0.5989800649049606
+        },
+        "total_return": {
+          "high": 0.1027594676121027,
+          "level": 0.95,
+          "low": -0.5574731392962728
+        }
+      },
+      "fees": 0.22892484427542492,
+      "max_drawdown": 0.27322272705819894,
+      "net_pnl": -0.22319938131989078,
+      "profit_factor": 0.9001533983175212,
+      "time_in_market": 0.614047287899861,
+      "total_return": -0.22319938131989078,
+      "trade_count": 136
+    },
+    "risk_inference": {
+      "hac_lag": 9,
+      "maxdd_diff_ppo_minus_rf": {
+        "block_length": 10,
+        "bootstrap": "politis-romano stationary",
+        "ci95": [
+          -0.34177196641876373,
+          0.08974718945674533
+        ],
+        "estimate": -0.08156019905565062
+      },
+      "sharpe_all_bars": {
+        "ppo": -1.7435282391321143,
+        "rf": -1.859481008407784
+      },
+      "sharpe_invested_bars_only": {
+        "note": "excluding flat bars; inflates Sharpe for low-exposure strategies \u2014 read next to time_in_market",
+        "ppo": -4.472045515472575,
+        "rf": -3.014982259942921
+      },
+      "sortino_diff_ppo_minus_rf": {
+        "bootstrap": "politis-romano stationary",
+        "ci95": [
+          -1.6442478413616413,
+          2.566535340704063
+        ],
+        "estimate": 0.5683933739803287
+      }
+    },
+    "ta": {
+      "confidence_intervals": {
+        "max_drawdown": {
+          "high": 0.7991490391183131,
+          "level": 0.95,
+          "low": 0.13849388985721534
+        },
+        "net_pnl": {
+          "high": 1.4563175369077688,
+          "level": 0.95,
+          "low": -0.5696595381890677
+        },
+        "profit_factor": {
+          "high": 1.1453543250145326,
+          "level": 0.95,
+          "low": 0.9484708900678362
+        },
+        "time_in_market": {
+          "high": 1.0,
+          "level": 0.95,
+          "low": 1.0
+        },
+        "total_return": {
+          "high": 1.4563175369077688,
+          "level": 0.95,
+          "low": -0.5696595381890677
+        }
+      },
+      "fees": 0.0,
+      "max_drawdown": 0.3526970275380765,
+      "net_pnl": 0.44827863154164993,
+      "profit_factor": 1.04266607960257,
+      "time_in_market": 1.0,
+      "total_return": 0.44827863154164993,
+      "trade_count": 6
+    },
+    "ta_vs_ml": {
+      "dm_p": 0.14266089048589747,
+      "dm_stat": 1.4659537380379724,
+      "n": 4314
+    }
+  },
+  "slices": [
+    {
+      "embargo_end": "2025-01-13 21:00:00+00:00",
+      "embargo_start": "2025-01-11 00:00:00+00:00",
+      "ml": {
+        "Final Equity": "$8679.27",
+        "Max Drawdown": "14.75%",
+        "Sharpe Ratio": "-8.22",
+        "Time in Market": "41.5%",
+        "Total Return": "-13.21%",
+        "Win Rate": "20.83%",
+        "fees": 0.036602167683363655,
+        "max_drawdown": 0.14752068530655765,
+        "net_pnl": -1320.72598257149,
+        "profit_factor": 0.6069649694414972,
+        "time_in_market": 0.4152777777777778,
+        "total_return": -0.132072598257149,
+        "trade_count": 24,
+        "wins": 5
+      },
+      "ppo": {
+        "Final Equity": "$9818.67",
+        "Max Drawdown": "7.69%",
+        "Sharpe Ratio": "-0.74",
+        "Time in Market": "33.1%",
+        "Total Return": "-1.81%",
+        "Win Rate": "75.00%",
+        "fees": 0.018335474766586785,
+        "max_drawdown": 0.07686947366975742,
+        "net_pnl": -181.33095084622437,
+        "profit_factor": 0.9017087800500109,
+        "time_in_market": 0.33055555555555555,
+        "total_return": -0.018133095084622436,
+        "trade_count": 4,
+        "wins": 3
+      },
+      "rf": {
+        "Final Equity": "$8679.27",
+        "Max Drawdown": "14.75%",
+        "Sharpe Ratio": "-8.22",
+        "Time in Market": "41.5%",
+        "Total Return": "-13.21%",
+        "Win Rate": "20.83%",
+        "fees": 0.036602167683363655,
+        "max_drawdown": 0.14752068530655765,
+        "net_pnl": -1320.72598257149,
+        "profit_factor": 0.6069649694414972,
+        "time_in_market": 0.4152777777777778,
+        "total_return": -0.132072598257149,
+        "trade_count": 24,
+        "wins": 5
+      },
+      "slice": 0,
+      "ta": {
+        "time_in_market": 1.0,
+        "trade_count": 1
+      },
+      "test_end": "2025-02-12 21:00:00+00:00",
+      "test_start": "2025-01-13 22:00:00+00:00",
+      "train_end": "2025-01-10 23:00:00+00:00",
+      "train_start": "2024-07-15 00:00:00+00:00"
+    },
+    {
+      "embargo_end": "2025-04-13 21:00:00+00:00",
+      "embargo_start": "2025-04-11 00:00:00+00:00",
+      "ml": {
+        "Final Equity": "$10634.12",
+        "Max Drawdown": "17.80%",
+        "Sharpe Ratio": "2.05",
+        "Time in Market": "75.4%",
+        "Total Return": "6.34%",
+        "Win Rate": "23.08%",
+        "fees": 0.05118747773061269,
+        "max_drawdown": 0.17802007760005203,
+        "net_pnl": 634.1190311623523,
+        "profit_factor": 1.1098153783245557,
+        "time_in_market": 0.7541666666666667,
+        "total_return": 0.06341190311623522,
+        "trade_count": 26,
+        "wins": 6
+      },
+      "ppo": {
+        "Final Equity": "$9968.42",
+        "Max Drawdown": "0.83%",
+        "Sharpe Ratio": "-0.64",
+        "Time in Market": "78.1%",
+        "Total Return": "-0.32%",
+        "Win Rate": "100.00%",
+        "fees": 0.012044810695384552,
+        "max_drawdown": 0.008296963462039902,
+        "net_pnl": -31.577160271479443,
+        "profit_factor": 0.9387553937575468,
+        "time_in_market": 0.7805555555555556,
+        "total_return": -0.003157716027147944,
+        "trade_count": 5,
+        "wins": 5
+      },
+      "rf": {
+        "Final Equity": "$10634.12",
+        "Max Drawdown": "17.80%",
+        "Sharpe Ratio": "2.05",
+        "Time in Market": "75.4%",
+        "Total Return": "6.34%",
+        "Win Rate": "23.08%",
+        "fees": 0.05118747773061269,
+        "max_drawdown": 0.17802007760005203,
+        "net_pnl": 634.1190311623523,
+        "profit_factor": 1.1098153783245557,
+        "time_in_market": 0.7541666666666667,
+        "total_return": 0.06341190311623522,
+        "trade_count": 26,
+        "wins": 6
+      },
+      "slice": 1,
+      "ta": {
+        "time_in_market": 1.0,
+        "trade_count": 1
+      },
+      "test_end": "2025-05-13 21:00:00+00:00",
+      "test_start": "2025-04-13 22:00:00+00:00",
+      "train_end": "2025-04-10 23:00:00+00:00",
+      "train_start": "2024-10-13 00:00:00+00:00"
+    },
+    {
+      "embargo_end": "2025-07-12 21:00:00+00:00",
+      "embargo_start": "2025-07-10 00:00:00+00:00",
+      "ml": {
+        "Final Equity": "$10056.77",
+        "Max Drawdown": "7.63%",
+        "Sharpe Ratio": "0.40",
+        "Time in Market": "64.9%",
+        "Total Return": "0.57%",
+        "Win Rate": "34.38%",
+        "fees": 0.04984446914363779,
+        "max_drawdown": 0.07634311535816193,
+        "net_pnl": 56.76916951338171,
+        "profit_factor": 1.0177108130196322,
+        "time_in_market": 0.6486111111111111,
+        "total_return": 0.005676916951338171,
+        "trade_count": 32,
+        "wins": 11
+      },
+      "ppo": {
+        "Final Equity": "$10189.59",
+        "Max Drawdown": "1.45%",
+        "Sharpe Ratio": "2.40",
+        "Time in Market": "62.2%",
+        "Total Return": "1.90%",
+        "Win Rate": "42.86%",
+        "fees": 0.01207277757456051,
+        "max_drawdown": 0.014494073785338905,
+        "net_pnl": 189.5946066556753,
+        "profit_factor": 1.280950261394417,
+        "time_in_market": 0.6222222222222222,
+        "total_return": 0.01895946066556753,
+        "trade_count": 7,
+        "wins": 3
+      },
+      "rf": {
+        "Final Equity": "$10056.77",
+        "Max Drawdown": "7.63%",
+        "Sharpe Ratio": "0.40",
+        "Time in Market": "64.9%",
+        "Total Return": "0.57%",
+        "Win Rate": "34.38%",
+        "fees": 0.04984446914363779,
+        "max_drawdown": 0.07634311535816193,
+        "net_pnl": 56.76916951338171,
+        "profit_factor": 1.0177108130196322,
+        "time_in_market": 0.6486111111111111,
+        "total_return": 0.005676916951338171,
+        "trade_count": 32,
+        "wins": 11
+      },
+      "slice": 2,
+      "ta": {
+        "time_in_market": 1.0,
+        "trade_count": 1
+      },
+      "test_end": "2025-08-11 21:00:00+00:00",
+      "test_start": "2025-07-12 22:00:00+00:00",
+      "train_end": "2025-07-09 23:00:00+00:00",
+      "train_start": "2025-01-11 00:00:00+00:00"
+    },
+    {
+      "embargo_end": "2025-10-10 21:00:00+00:00",
+      "embargo_start": "2025-10-08 00:00:00+00:00",
+      "ml": {
+        "Final Equity": "$9271.17",
+        "Max Drawdown": "12.74%",
+        "Sharpe Ratio": "-4.78",
+        "Time in Market": "51.5%",
+        "Total Return": "-7.29%",
+        "Win Rate": "30.43%",
+        "fees": 0.031777120330716294,
+        "max_drawdown": 0.127386590709413,
+        "net_pnl": -728.8327036897317,
+        "profit_factor": 0.7477713530655974,
+        "time_in_market": 0.5152777777777777,
+        "total_return": -0.07288327036897317,
+        "trade_count": 23,
+        "wins": 7
+      },
+      "ppo": {
+        "Final Equity": "$9676.92",
+        "Max Drawdown": "4.90%",
+        "Sharpe Ratio": "-3.75",
+        "Time in Market": "60.0%",
+        "Total Return": "-3.23%",
+        "Win Rate": "63.64%",
+        "fees": 0.014556220992537618,
+        "max_drawdown": 0.048958629616098225,
+        "net_pnl": -323.08007039039694,
+        "profit_factor": 0.6709366633665272,
+        "time_in_market": 0.6,
+        "total_return": -0.032308007039039695,
+        "trade_count": 11,
+        "wins": 7
+      },
+      "rf": {
+        "Final Equity": "$9271.17",
+        "Max Drawdown": "12.74%",
+        "Sharpe Ratio": "-4.78",
+        "Time in Market": "51.5%",
+        "Total Return": "-7.29%",
+        "Win Rate": "30.43%",
+        "fees": 0.031777120330716294,
+        "max_drawdown": 0.127386590709413,
+        "net_pnl": -728.8327036897317,
+        "profit_factor": 0.7477713530655974,
+        "time_in_market": 0.5152777777777777,
+        "total_return": -0.07288327036897317,
+        "trade_count": 23,
+        "wins": 7
+      },
+      "slice": 3,
+      "ta": {
+        "time_in_market": 1.0,
+        "trade_count": 1
+      },
+      "test_end": "2025-11-09 21:00:00+00:00",
+      "test_start": "2025-10-10 22:00:00+00:00",
+      "train_end": "2025-10-07 23:00:00+00:00",
+      "train_start": "2025-04-11 00:00:00+00:00"
+    },
+    {
+      "embargo_end": "2026-01-08 21:00:00+00:00",
+      "embargo_start": "2026-01-06 00:00:00+00:00",
+      "ml": {
+        "Final Equity": "$9835.66",
+        "Max Drawdown": "8.72%",
+        "Sharpe Ratio": "-0.96",
+        "Time in Market": "54.4%",
+        "Total Return": "-1.64%",
+        "Win Rate": "21.43%",
+        "fees": 0.03018530162399772,
+        "max_drawdown": 0.08723693433568654,
+        "net_pnl": -164.34362560043883,
+        "profit_factor": 0.9494302411031053,
+        "time_in_market": 0.5444444444444444,
+        "total_return": -0.016434362560043884,
+        "trade_count": 14,
+        "wins": 3
+      },
+      "ppo": {
+        "Final Equity": "$8904.83",
+        "Max Drawdown": "12.00%",
+        "Sharpe Ratio": "-6.25",
+        "Time in Market": "64.6%",
+        "Total Return": "-10.95%",
+        "Win Rate": "31.25%",
+        "fees": 0.03569314804392151,
+        "max_drawdown": 0.12003185613383639,
+        "net_pnl": -1095.1721778901356,
+        "profit_factor": 0.5263973806575475,
+        "time_in_market": 0.6458333333333334,
+        "total_return": -0.10951721778901356,
+        "trade_count": 16,
+        "wins": 5
+      },
+      "rf": {
+        "Final Equity": "$9835.66",
+        "Max Drawdown": "8.72%",
+        "Sharpe Ratio": "-0.96",
+        "Time in Market": "54.4%",
+        "Total Return": "-1.64%",
+        "Win Rate": "21.43%",
+        "fees": 0.03018530162399772,
+        "max_drawdown": 0.08723693433568654,
+        "net_pnl": -164.34362560043883,
+        "profit_factor": 0.9494302411031053,
+        "time_in_market": 0.5444444444444444,
+        "total_return": -0.016434362560043884,
+        "trade_count": 14,
+        "wins": 3
+      },
+      "slice": 4,
+      "ta": {
+        "time_in_market": 1.0,
+        "trade_count": 1
+      },
+      "test_end": "2026-02-07 21:00:00+00:00",
+      "test_start": "2026-01-08 22:00:00+00:00",
+      "train_end": "2026-01-05 23:00:00+00:00",
+      "train_start": "2025-07-10 00:00:00+00:00"
+    },
+    {
+      "embargo_end": "2026-04-08 21:00:00+00:00",
+      "embargo_start": "2026-04-06 00:00:00+00:00",
+      "ml": {
+        "Final Equity": "$9313.59",
+        "Max Drawdown": "8.06%",
+        "Sharpe Ratio": "-6.48",
+        "Time in Market": "80.7%",
+        "Total Return": "-6.86%",
+        "Win Rate": "11.76%",
+        "fees": 0.029328307763096778,
+        "max_drawdown": 0.08058296697124934,
+        "net_pnl": -686.4109970100089,
+        "profit_factor": 0.6612873597652675,
+        "time_in_market": 0.8069444444444445,
+        "total_return": -0.0686410997010009,
+        "trade_count": 17,
+        "wins": 2
+      },
+      "ppo": {
+        "Final Equity": "$10148.34",
+        "Max Drawdown": "0.71%",
+        "Sharpe Ratio": "5.83",
+        "Time in Market": "50.6%",
+        "Total Return": "1.48%",
+        "Win Rate": "0.00%",
+        "fees": 0.01032544303602666,
+        "max_drawdown": 0.0070580375801136954,
+        "net_pnl": 148.3400318397271,
+        "profit_factor": 1.6602613180774113,
+        "time_in_market": 0.5055555555555555,
+        "total_return": 0.014834003183972709,
+        "trade_count": 3,
+        "wins": 0
+      },
+      "rf": {
+        "Final Equity": "$9313.59",
+        "Max Drawdown": "8.06%",
+        "Sharpe Ratio": "-6.48",
+        "Time in Market": "80.7%",
+        "Total Return": "-6.86%",
+        "Win Rate": "11.76%",
+        "fees": 0.029328307763096778,
+        "max_drawdown": 0.08058296697124934,
+        "net_pnl": -686.4109970100089,
+        "profit_factor": 0.6612873597652675,
+        "time_in_market": 0.8069444444444445,
+        "total_return": -0.0686410997010009,
+        "trade_count": 17,
+        "wins": 2
+      },
+      "slice": 5,
+      "ta": {
+        "time_in_market": 1.0,
+        "trade_count": 1
+      },
+      "test_end": "2026-05-08 21:00:00+00:00",
+      "test_start": "2026-04-08 22:00:00+00:00",
+      "train_end": "2026-04-05 23:00:00+00:00",
+      "train_start": "2025-10-08 00:00:00+00:00"
+    }
+  ]
+}

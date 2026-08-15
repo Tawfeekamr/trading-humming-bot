@@ -1,0 +1,41 @@
+{
+  "commit_sha": "7e5feaf831c01a22a9c2098a0544cb720c7ebd5a",
+  "library_versions": {
+    "numpy": "2.5.2",
+    "pandas": "3.0.5",
+    "scikit-learn": "1.6.1",
+    "stable-baselines3": "2.9.0",
+    "torch": "2.13.0"
+  },
+  "pairs": {
+    "BNBUSDT": {
+      "data_bars": 17304,
+      "data_end": "2026-07-05",
+      "data_sha256": "5c16c9cb6868d6cc6656e13c9f83b9ae37f034929368ebc58dfccf9f09730b1b",
+      "embargo_bars": 70,
+      "fold_specific_rf": true,
+      "source_commit": "7e5feaf831c01a22a9c2098a0544cb720c7ebd5a",
+      "step_bars": 2160,
+      "test_bars": 720,
+      "train_bars": 4320
+    },
+    "ETHUSDT": {
+      "data_bars": 17304,
+      "data_end": "2026-07-05",
+      "data_sha256": "f3b80320abea042a203af6162465824feaf0b79ffacaab4d97e2f180d3aecbb6",
+      "embargo_bars": 70,
+      "fold_specific_rf": true,
+      "source_commit": "7e5feaf831c01a22a9c2098a0544cb720c7ebd5a",
+      "step_bars": 2160,
+      "test_bars": 720,
+      "train_bars": 4320
+    }
+  },
+  "run_type": "corrected-protocol walk-forward (audit fix 2026-08-15)",
+  "seeds": {
+    "bootstrap": 42,
+    "fold_rf": 42,
+    "ppo": 42
+  },
+  "wall_clock_utc": "2026-08-15T03:05:18.227613+00:00"
+}

@@ -1,0 +1,33 @@
+{
+  "drawdown_advantage_survives_exposure_matching": true,
+  "pair": "ETHUSDT",
+  "pooled_bars": 4314,
+  "ppo": {
+    "max_drawdown": 0.16540606421939374,
+    "sharpe_all_bars": -1.7435282391321365,
+    "total_log_return": -0.1367881440329188
+  },
+  "ppo_avg_trade_length_bars": 5,
+  "ppo_exposure": 0.15229485396383866,
+  "ppo_percentile_in_random_distribution": {
+    "max_drawdown": 31.0,
+    "total_log_return": 12.5
+  },
+  "random_entry_baseline": {
+    "max_drawdown": {
+      "median": 0.20771859930387537,
+      "p5": 0.09589798673406612,
+      "p95": 0.3324433299216479
+    },
+    "seeds": 200,
+    "total_log_return": {
+      "median": 0.061918821637508815,
+      "p5": -0.26354704292497594,
+      "p95": 0.3563497692543317
+    }
+  },
+  "scaled_buy_hold_at_same_exposure": {
+    "max_drawdown": 0.09866409153686341,
+    "total_log_return": 0.06534788005798621
+  }
+}
