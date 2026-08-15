@@ -1,0 +1,84 @@
+{
+  "BNBUSDT": {
+    "by_predicted_regime": {
+      "DANGER": {
+        "bars": 1008,
+        "fwd_dd_beyond_3pct_rate": 0.5625,
+        "fwd_return_positive_rate": 0.38492063492063494,
+        "mean_fwd_maxdd_pct": -4.1798895451587175,
+        "mean_fwd_return_pct": -0.9768796686385087,
+        "share": 0.2503725782414307
+      },
+      "RANGING": {
+        "bars": 2369,
+        "fwd_dd_beyond_3pct_rate": 0.1650485436893204,
+        "fwd_return_positive_rate": 0.5500211059518785,
+        "mean_fwd_maxdd_pct": -1.955156226807508,
+        "mean_fwd_return_pct": 0.15147009891995933,
+        "share": 0.5884252359662195
+      },
+      "TRENDING": {
+        "bars": 649,
+        "fwd_dd_beyond_3pct_rate": 0.2295839753466872,
+        "fwd_return_positive_rate": 0.6702619414483821,
+        "mean_fwd_maxdd_pct": -2.3091371861757084,
+        "mean_fwd_return_pct": 0.4208751738072321,
+        "share": 0.16120218579234974
+      }
+    },
+    "danger_share": 0.2503725782414307,
+    "false_danger": {
+      "bars": 388,
+      "mean_foregone_per_bar_pp": 3.049400301610543,
+      "rate_within_danger": 0.38492063492063494,
+      "total_foregone_return_pp": 1183.1673170248907
+    },
+    "missed_danger": {
+      "bars": 540,
+      "mean_fwd_return_when_missed_pct": -2.01734350089134,
+      "rate_within_nondanger": 0.17892644135188868
+    },
+    "n_bars": 4026
+  },
+  "ETHUSDT": {
+    "by_predicted_regime": {
+      "DANGER": {
+        "bars": 1583,
+        "fwd_dd_beyond_3pct_rate": 0.5123183828174352,
+        "fwd_return_positive_rate": 0.47252053063802907,
+        "mean_fwd_maxdd_pct": -3.8101791907008318,
+        "mean_fwd_return_pct": -0.3761690877714757,
+        "share": 0.39319423745653254
+      },
+      "RANGING": {
+        "bars": 1563,
+        "fwd_dd_beyond_3pct_rate": 0.3666026871401152,
+        "fwd_return_positive_rate": 0.5015994881637876,
+        "mean_fwd_maxdd_pct": -2.778152579124037,
+        "mean_fwd_return_pct": 0.0035069877140374976,
+        "share": 0.38822652757078985
+      },
+      "TRENDING": {
+        "bars": 880,
+        "fwd_dd_beyond_3pct_rate": 0.37272727272727274,
+        "fwd_return_positive_rate": 0.6,
+        "mean_fwd_maxdd_pct": -2.926499718986844,
+        "mean_fwd_return_pct": 1.2743765731023604,
+        "share": 0.2185792349726776
+      }
+    },
+    "danger_share": 0.39319423745653254,
+    "false_danger": {
+      "bars": 748,
+      "mean_foregone_per_bar_pp": 2.9985424722589906,
+      "rate_within_danger": 0.47252053063802907,
+      "total_foregone_return_pp": 2242.909769249725
+    },
+    "missed_danger": {
+      "bars": 901,
+      "mean_fwd_return_when_missed_pct": -1.7103063864199919,
+      "rate_within_nondanger": 0.3688088415882112
+    },
+    "n_bars": 4026
+  }
+}
