@@ -476,6 +476,16 @@ def run_walk_forward(
 
     print(f"[{pair}] loading history {history_start} -> {history_end}")
     df = load_klines(pair, history_start, history_end)
+    # Data provenance: hash the loaded OHLCV frame so every emitted report is
+    # tied to the exact evaluation data (audit fix: pinning the date alone
+    # does not pin the data — cache contents can change).
+    import hashlib as _hashlib
+
+    _frame_csv = df[[
+        c for c in ("open", "high", "low", "close", "volume") if c in df.columns
+    ]].to_csv().encode()
+    data_end_str = str(history_end)
+    data_sha256 = _hashlib.sha256(_frame_csv).hexdigest()
     slices = walk_forward_slices(
         len(df), train_bars, test_bars, step_bars, embargo_bars=embargo_bars
     )
@@ -699,6 +709,9 @@ def run_walk_forward(
             test_bars=test_bars, step_bars=step_bars,
             fold_rf_manifests=fold_rf_manifests,
             fold_specific_rf=fold_specific_rf,
+            data_end=data_end_str,
+            data_sha256=data_sha256,
+            data_bars=len(df),
         )
         write_report(report_path, metadata, report, report_slices)
     return {
@@ -734,9 +747,16 @@ def main() -> int:
     parser.add_argument("--feature-hash", default=None)
     parser.add_argument("--fees", type=float, default=0.0)
     parser.add_argument("--slippage", type=float, default=0.0)
+    parser.add_argument(
+        "--data-end",
+        required=True,
+        help="Pinned evaluation end date (YYYY-MM-DD). Required: the moving "
+        "date.today() default made runs unreproducible against cached "
+        "slice models.",
+    )
     args = parser.parse_args()
 
-    history_end = date.today()
+    history_end = date.fromisoformat(args.data_end)
     history_start = history_end - timedelta(days=30 * args.months)
 
     results = []

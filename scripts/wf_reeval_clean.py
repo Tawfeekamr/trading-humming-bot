@@ -23,10 +23,21 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 
 def main() -> int:
-    pair = sys.argv[1] if len(sys.argv) > 1 else "ETHUSDT"
+    args = sys.argv[1:]
+    if not args or "--data-end" not in args:
+        print(
+            "usage: wf_reeval_clean.py PAIR [RF_MODEL] --data-end YYYY-MM-DD\n"
+            "--data-end is REQUIRED: a moving date.today() default made reruns "
+            "shift history windows relative to the cached slice models.",
+            file=sys.stderr,
+        )
+        return 2
+    data_end = args[args.index("--data-end") + 1]
+    positional = [a for a in args if not a.startswith("--") and a != data_end]
+    pair = positional[0] if positional else "ETHUSDT"
     rf = (
-        sys.argv[2]
-        if len(sys.argv) > 2
+        positional[1]
+        if len(positional) > 1
         else f"models/regime_{pair.replace('USDT', '-USDT')}_clean.pkl"
     )
     # Must match the sweep that produced the cached slice models.
@@ -39,7 +50,7 @@ def main() -> int:
         walk_forward_slices,
     )
 
-    end = date.today()
+    end = date.fromisoformat(data_end)
     start = end - timedelta(days=30 * months)
     df = load_klines(pair, start, end)
     slices = walk_forward_slices(len(df), train_bars, test_bars, step_bars)
