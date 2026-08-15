@@ -1,0 +1,294 @@
+{
+  "across_seed": {
+    "BNBUSDT": {
+      "max_drawdown": {
+        "max": 0.3124,
+        "mean": 0.10192999999999999,
+        "min": 0.007,
+        "sd": 0.09198934775287844
+      },
+      "paired_stat_vs_rf": {
+        "max": 0.8,
+        "mean": -0.043199999999999995,
+        "min": -0.922,
+        "sd": 0.5679732035932681
+      },
+      "sharpe_all_bars": {
+        "max": 7.872,
+        "mean": -1.2388,
+        "min": -5.312,
+        "sd": 3.8021956498844194
+      },
+      "time_in_market": {
+        "max": 0.7277777777777777,
+        "mean": 0.5580555555555555,
+        "min": 0.38055555555555554,
+        "sd": 0.10533932531011447
+      },
+      "total_return_pct": {
+        "max": 4.69,
+        "mean": -5.499999999999999,
+        "min": -22.99,
+        "sd": 7.966265122376984
+      }
+    },
+    "ETHUSDT": {
+      "max_drawdown": {
+        "max": 0.1508,
+        "mean": 0.07513,
+        "min": 0.0315,
+        "sd": 0.03815932520367727
+      },
+      "paired_stat_vs_rf": {
+        "max": 1.981,
+        "mean": 0.9402000000000001,
+        "min": -0.031,
+        "sd": 0.6309330867849617
+      },
+      "sharpe_all_bars": {
+        "max": 3.707,
+        "mean": -1.3507000000000002,
+        "min": -4.491,
+        "sd": 2.4242687577906867
+      },
+      "time_in_market": {
+        "max": 0.7111111111111111,
+        "mean": 0.6086111111111112,
+        "min": 0.33055555555555555,
+        "sd": 0.09837177528559454
+      },
+      "total_return_pct": {
+        "max": 5.39,
+        "mean": -2.88,
+        "min": -9.08,
+        "sd": 4.438549312556976
+      }
+    }
+  },
+  "per_seed": {
+    "BNBUSDT": [
+      {
+        "capital_weighted_exposure": 0.0526108883899479,
+        "fold": 0,
+        "max_drawdown": 0.1904,
+        "paired_stat_vs_rf": -0.922,
+        "seed": 42,
+        "sharpe_all_bars": -5.312,
+        "sharpe_invested": -5.364,
+        "time_in_market": 0.7277777777777777,
+        "total_return_pct": -14.64
+      },
+      {
+        "capital_weighted_exposure": 0.010972456507774255,
+        "fold": 0,
+        "max_drawdown": 0.0136,
+        "paired_stat_vs_rf": 0.456,
+        "seed": 7,
+        "sharpe_all_bars": -1.457,
+        "sharpe_invested": -1.46,
+        "time_in_market": 0.6277777777777778,
+        "total_return_pct": -0.44
+      },
+      {
+        "capital_weighted_exposure": 0.11550203004571669,
+        "fold": 0,
+        "max_drawdown": 0.1744,
+        "paired_stat_vs_rf": -0.04,
+        "seed": 123,
+        "sharpe_all_bars": -0.873,
+        "sharpe_invested": -0.873,
+        "time_in_market": 0.4791666666666667,
+        "total_return_pct": -5.41
+      },
+      {
+        "capital_weighted_exposure": 0.061034554513030276,
+        "fold": 0,
+        "max_drawdown": 0.0363,
+        "paired_stat_vs_rf": 0.18,
+        "seed": 2024,
+        "sharpe_all_bars": -2.202,
+        "sharpe_invested": -2.205,
+        "time_in_market": 0.6111111111111112,
+        "total_return_pct": -2.18
+      },
+      {
+        "capital_weighted_exposure": 0.020682819139657613,
+        "fold": 0,
+        "max_drawdown": 0.0744,
+        "paired_stat_vs_rf": -0.09,
+        "seed": 999,
+        "sharpe_all_bars": -2.169,
+        "sharpe_invested": -2.174,
+        "time_in_market": 0.41805555555555557,
+        "total_return_pct": -4.37
+      },
+      {
+        "capital_weighted_exposure": 0.07563946091645103,
+        "fold": 3,
+        "max_drawdown": 0.1054,
+        "paired_stat_vs_rf": -0.705,
+        "seed": 42,
+        "sharpe_all_bars": -4.944,
+        "sharpe_invested": -4.97,
+        "time_in_market": 0.5875,
+        "total_return_pct": -9.12
+      },
+      {
+        "capital_weighted_exposure": 0.24019963406885558,
+        "fold": 3,
+        "max_drawdown": 0.3124,
+        "paired_stat_vs_rf": -0.618,
+        "seed": 7,
+        "sharpe_all_bars": -2.486,
+        "sharpe_invested": -2.491,
+        "time_in_market": 0.49444444444444446,
+        "total_return_pct": -22.99
+      },
+      {
+        "capital_weighted_exposure": 0.0692427513475256,
+        "fold": 3,
+        "max_drawdown": 0.0368,
+        "paired_stat_vs_rf": 0.752,
+        "seed": 123,
+        "sharpe_all_bars": 3.22,
+        "sharpe_invested": 3.227,
+        "time_in_market": 0.5902777777777778,
+        "total_return_pct": 4.69
+      },
+      {
+        "capital_weighted_exposure": 0.0661245432418583,
+        "fold": 3,
+        "max_drawdown": 0.0686,
+        "paired_stat_vs_rf": -0.245,
+        "seed": 2024,
+        "sharpe_all_bars": -4.037,
+        "sharpe_invested": -4.05,
+        "time_in_market": 0.6638888888888889,
+        "total_return_pct": -4.49
+      },
+      {
+        "capital_weighted_exposure": 0.019028761868813606,
+        "fold": 3,
+        "max_drawdown": 0.007,
+        "paired_stat_vs_rf": 0.8,
+        "seed": 999,
+        "sharpe_all_bars": 7.872,
+        "sharpe_invested": 8.127,
+        "time_in_market": 0.38055555555555554,
+        "total_return_pct": 3.95
+      }
+    ],
+    "ETHUSDT": [
+      {
+        "capital_weighted_exposure": 0.04599472846251462,
+        "fold": 0,
+        "max_drawdown": 0.0769,
+        "paired_stat_vs_rf": 1.324,
+        "seed": 42,
+        "sharpe_all_bars": -0.741,
+        "sharpe_invested": -0.742,
+        "time_in_market": 0.33055555555555555,
+        "total_return_pct": -1.81
+      },
+      {
+        "capital_weighted_exposure": 0.09420021139272035,
+        "fold": 0,
+        "max_drawdown": 0.0789,
+        "paired_stat_vs_rf": 1.347,
+        "seed": 7,
+        "sharpe_all_bars": 0.067,
+        "sharpe_invested": 0.067,
+        "time_in_market": 0.6513888888888889,
+        "total_return_pct": -0.23
+      },
+      {
+        "capital_weighted_exposure": 0.03397312701848346,
+        "fold": 0,
+        "max_drawdown": 0.036,
+        "paired_stat_vs_rf": 1.759,
+        "seed": 123,
+        "sharpe_all_bars": 0.37,
+        "sharpe_invested": 0.37,
+        "time_in_market": 0.6041666666666666,
+        "total_return_pct": 0.41
+      },
+      {
+        "capital_weighted_exposure": 0.03468640511984524,
+        "fold": 0,
+        "max_drawdown": 0.1508,
+        "paired_stat_vs_rf": 0.357,
+        "seed": 2024,
+        "sharpe_all_bars": -2.741,
+        "sharpe_invested": -2.747,
+        "time_in_market": 0.7111111111111111,
+        "total_return_pct": -9.08
+      },
+      {
+        "capital_weighted_exposure": 0.05008994895743628,
+        "fold": 0,
+        "max_drawdown": 0.1284,
+        "paired_stat_vs_rf": 0.44,
+        "seed": 999,
+        "sharpe_all_bars": -2.837,
+        "sharpe_invested": -2.846,
+        "time_in_market": 0.6194444444444445,
+        "total_return_pct": -8.79
+      },
+      {
+        "capital_weighted_exposure": 0.02819758344522587,
+        "fold": 3,
+        "max_drawdown": 0.049,
+        "paired_stat_vs_rf": 0.674,
+        "seed": 42,
+        "sharpe_all_bars": -3.75,
+        "sharpe_invested": -3.767,
+        "time_in_market": 0.6,
+        "total_return_pct": -3.23
+      },
+      {
+        "capital_weighted_exposure": 0.055480601142028685,
+        "fold": 3,
+        "max_drawdown": 0.0315,
+        "paired_stat_vs_rf": 1.981,
+        "seed": 7,
+        "sharpe_all_bars": 3.707,
+        "sharpe_invested": 3.718,
+        "time_in_market": 0.6763888888888889,
+        "total_return_pct": 5.39
+      },
+      {
+        "capital_weighted_exposure": 0.09632790176348216,
+        "fold": 3,
+        "max_drawdown": 0.0964,
+        "paired_stat_vs_rf": -0.031,
+        "seed": 123,
+        "sharpe_all_bars": -4.491,
+        "sharpe_invested": -4.501,
+        "time_in_market": 0.6541666666666667,
+        "total_return_pct": -7.56
+      },
+      {
+        "capital_weighted_exposure": 0.08887621548859656,
+        "fold": 3,
+        "max_drawdown": 0.0642,
+        "paired_stat_vs_rf": 0.418,
+        "seed": 2024,
+        "sharpe_all_bars": -3.547,
+        "sharpe_invested": -3.552,
+        "time_in_market": 0.6208333333333333,
+        "total_return_pct": -4.45
+      },
+      {
+        "capital_weighted_exposure": 0.07177103908680513,
+        "fold": 3,
+        "max_drawdown": 0.0392,
+        "paired_stat_vs_rf": 1.133,
+        "seed": 999,
+        "sharpe_all_bars": 0.456,
+        "sharpe_invested": 0.456,
+        "time_in_market": 0.6180555555555556,
+        "total_return_pct": 0.55
+      }
+    ]
+  }
+}
