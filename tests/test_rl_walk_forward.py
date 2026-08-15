@@ -12,18 +12,32 @@ import numpy as np
 def test_walk_forward_slices_basic():
     from src.rl.walk_forward import walk_forward_slices
 
+    # Explicit embargo=0 keeps this a pure-window test; the DEFAULT embargo
+    # is now 70 (see test_walk_forward_slices_default_embargo).
     slices = walk_forward_slices(
-        series_len=1000, train_bars=400, test_bars=100, step_bars=100
+        series_len=1000, train_bars=400, test_bars=100, step_bars=100,
+        embargo_bars=0,
     )
     assert len(slices) == 6  # i = 0,100,200,300,400,500
     assert slices[0] == (0, 400, 400, 500)
     assert slices[-1] == (500, 900, 900, 1000)
 
 
+def test_walk_forward_slices_default_embargo():
+    """Default embargo must equal the max-feature-lookback constant (70)."""
+    from src.rl.walk_forward import DEFAULT_EMBARGO_BARS, walk_forward_slices
+
+    assert DEFAULT_EMBARGO_BARS == 70  # sma_50/vwap_50 + RSI EWM tail bound
+    slices = walk_forward_slices(1000, 400, 100, 100)
+    for ts, te, vs, ve in slices:
+        assert vs - te == DEFAULT_EMBARGO_BARS
+        assert ts < te < vs < ve
+
+
 def test_walk_forward_slices_train_strictly_before_test():
     from src.rl.walk_forward import walk_forward_slices
 
-    for ts, te, vs, ve in walk_forward_slices(1000, 400, 100, 100):
+    for ts, te, vs, ve in walk_forward_slices(1000, 400, 100, 100, embargo_bars=0):
         assert te == vs  # contiguous, no gap, no overlap
         assert te > ts and ve > vs
         assert ve <= 1000
@@ -49,7 +63,7 @@ def test_walk_forward_slices_empty_when_data_too_short():
 def test_walk_forward_slices_step_one():
     from src.rl.walk_forward import walk_forward_slices
 
-    slices = walk_forward_slices(500, 300, 100, 1)
+    slices = walk_forward_slices(500, 300, 100, 1, embargo_bars=0)
     assert slices[0] == (0, 300, 300, 400)
     assert slices[1] == (1, 301, 301, 401)
     assert slices[-1][3] == 500  # last test ends exactly at series end

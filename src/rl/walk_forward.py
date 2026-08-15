@@ -25,12 +25,23 @@ from typing import Sequence
 import numpy as np
 
 
+# Default train/test embargo, in bars. Sized to the maximum feature lookback
+# in the canonical 14-feature contract (src/data/feature_contract.py) so no
+# test-window feature can be computed from any bar inside the training window:
+#   - largest explicit rolling windows: sma_50 / vwap(50) / OBV z-score(50) = 50 bars
+#   - MACD(12,26,9) = 34; Aroon(25) = 25; fractal dimension = 30; ADX(14) ≈ 27
+#   - RSI uses Wilder EWM (alpha=1/14, adjust=False): infinite support with
+#     weight decaying at (13/14)^k — oldest-bar weight < 1% after ~64 bars.
+# 70 covers every finite window with margin and bounds the EWM tail < 0.6%.
+DEFAULT_EMBARGO_BARS = 70
+
+
 def walk_forward_slices(
     series_len: int,
     train_bars: int,
     test_bars: int,
     step_bars: int,
-    embargo_bars: int = 0,
+    embargo_bars: int = DEFAULT_EMBARGO_BARS,
 ) -> list[tuple[int, int, int, int]]:
     """Rolling chronological splits with an optional train/test embargo gap."""
     if train_bars <= 0 or test_bars <= 0 or step_bars <= 0 or embargo_bars < 0:
@@ -315,7 +326,7 @@ def run_walk_forward(
     step_bars: int,
     timesteps: int,
     warmup: int = 100,
-    embargo_bars: int = 0,
+    embargo_bars: int = DEFAULT_EMBARGO_BARS,
     report_path: str | None = None,
     feature_hash: str | None = None,
     fees: float = 0.0,
@@ -561,7 +572,7 @@ def main() -> int:
     parser.add_argument("--train-bars", type=int, default=4320)   # ~6 months
     parser.add_argument("--test-bars", type=int, default=720)     # ~1 month
     parser.add_argument("--step-bars", type=int, default=2160)    # ~3 months
-    parser.add_argument("--embargo-bars", type=int, default=0)
+    parser.add_argument("--embargo-bars", type=int, default=DEFAULT_EMBARGO_BARS)
     parser.add_argument("--timesteps", type=int, default=1_000_000)
     parser.add_argument("--months", type=int, default=24, help="Total history to load.")
     parser.add_argument("--report-dir", default="reports")
