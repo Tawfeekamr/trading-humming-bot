@@ -1,0 +1,98 @@
+{
+  "BNBUSDT": {
+    "corr_bh_vs_excess": -0.9283481470565925,
+    "folds": [
+      {
+        "bh_pct": 1.59,
+        "fold": 0,
+        "ppo_minus_bh": -16.24,
+        "ppo_pct": -14.64,
+        "rf_pct": -3.53
+      },
+      {
+        "bh_pct": 14.23,
+        "fold": 1,
+        "ppo_minus_bh": -13.77,
+        "ppo_pct": 0.46,
+        "rf_pct": 1.85
+      },
+      {
+        "bh_pct": 17.22,
+        "fold": 2,
+        "ppo_minus_bh": -15.87,
+        "ppo_pct": 1.35,
+        "rf_pct": -9.22
+      },
+      {
+        "bh_pct": -10.21,
+        "fold": 3,
+        "ppo_minus_bh": 1.08,
+        "ppo_pct": -9.12,
+        "rf_pct": -2.59
+      },
+      {
+        "bh_pct": -27.13,
+        "fold": 4,
+        "ppo_minus_bh": 21.94,
+        "ppo_pct": -5.19,
+        "rf_pct": -13.3
+      },
+      {
+        "bh_pct": 7.56,
+        "fold": 5,
+        "ppo_minus_bh": -8.59,
+        "ppo_pct": -1.03,
+        "rf_pct": 5.86
+      }
+    ],
+    "n": 6
+  },
+  "ETHUSDT": {
+    "corr_bh_vs_excess": -0.9951728894871177,
+    "folds": [
+      {
+        "bh_pct": -14.36,
+        "fold": 0,
+        "ppo_minus_bh": 12.54,
+        "ppo_pct": -1.81,
+        "rf_pct": -13.21
+      },
+      {
+        "bh_pct": 69.64,
+        "fold": 1,
+        "ppo_minus_bh": -69.96,
+        "ppo_pct": -0.32,
+        "rf_pct": 6.34
+      },
+      {
+        "bh_pct": 43.63,
+        "fold": 2,
+        "ppo_minus_bh": -41.73,
+        "ppo_pct": 1.9,
+        "rf_pct": 0.57
+      },
+      {
+        "bh_pct": -7.11,
+        "fold": 3,
+        "ppo_minus_bh": 3.88,
+        "ppo_pct": -3.23,
+        "rf_pct": -7.29
+      },
+      {
+        "bh_pct": -32.66,
+        "fold": 4,
+        "ppo_minus_bh": 21.71,
+        "ppo_pct": -10.95,
+        "rf_pct": -1.64
+      },
+      {
+        "bh_pct": 5.7,
+        "fold": 5,
+        "ppo_minus_bh": -4.21,
+        "ppo_pct": 1.48,
+        "rf_pct": -6.86
+      }
+    ],
+    "n": 6
+  }
+}
