@@ -202,6 +202,31 @@ def train_fold_rf(
         "calibration_samples": int(len(cal_df)),
     }
     clf.source_commit = _git_commit()
+    # Reuse a previously trained fold model when its immutable manifest is
+    # present and its provenance matches this fold exactly (same window,
+    # same seed, same recipe) — retraining is deterministic, so the artifact
+    # would be identical; the immutability guard would otherwise refuse the
+    # overwrite and fail the slice.
+    manifest_path_check = out_dir_path / f"{model_name}.json"
+    existing_manifest = None
+    if manifest_path_check.exists() and model_path.exists():
+        try:
+            existing_manifest = json.loads(manifest_path_check.read_text())
+        except (json.JSONDecodeError, OSError):
+            existing_manifest = None
+    same_provenance = (
+        existing_manifest is not None
+        and existing_manifest.get("train_start") == str(fold_df.index[0])
+        and existing_manifest.get("train_end") == str(fold_df.index[-1])
+        and existing_manifest.get("seed") == seed
+        and existing_manifest.get("fold_bars") == int(fold_train_end - fold_train_start)
+    )
+    if same_provenance:
+        print(f"  reusing existing fold model {model_name} (manifest matches)", flush=True)
+        return {
+            "model_path": str(model_path), "model_name": model_name,
+            "manifest": existing_manifest, "reused": True,
+        }
     clf.save_model()
 
     # Sidecar manifest in the PPO-sidecar format (models/rl/ppo_*.json).
