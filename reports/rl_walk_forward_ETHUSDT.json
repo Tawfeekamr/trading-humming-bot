@@ -307,13 +307,20 @@
         "estimate": -0.08156019905565062
       },
       "sharpe_all_bars": {
+        "annualisation_factor": 93.59487165438073,
         "ppo": -1.7435282391321143,
         "rf": -1.859481008407784
       },
       "sharpe_invested_bars_only": {
-        "note": "excluding flat bars; inflates Sharpe for low-exposure strategies \u2014 read next to time_in_market",
-        "ppo": -4.472045515472575,
-        "rf": -3.014982259942921
+        "definition": "non-zero-return bars; annualised by sqrt(8760*invested_fraction)",
+        "ppo": {
+          "annualisation_factor": 36.53,
+          "sharpe": -1.7452
+        },
+        "rf": {
+          "annualisation_factor": 57.74,
+          "sharpe": -1.8601
+        }
       },
       "sortino_diff_ppo_minus_rf": {
         "bootstrap": "politis-romano stationary",

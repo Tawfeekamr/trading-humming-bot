@@ -49,6 +49,31 @@ def sharpe_annualized(returns: np.ndarray, bars_per_year: int = 8760) -> float:
     return float(np.mean(r) / sd * np.sqrt(bars_per_year))
 
 
+def invested_bars_sharpe(returns: np.ndarray, bars_per_year: int = 8760) -> tuple[float, float]:
+    """Sharpe over invested bars ONLY, annualised by the invested-bar rate.
+
+    A strategy invested f% of bars experiences ~f*bars_per_year invested
+    bars per year; annualising the invested-bar Sharpe by sqrt(8760)
+    (batch-1 mistake) uses the full-year factor on a subset of bars and
+    OVERSTATES the ratio by sqrt(1/f) — e.g. f=0.15 inflates 2.6x.
+
+    Returns (sharpe, annualisation_factor_used).
+    """
+    r = np.asarray(returns, dtype=np.float64)
+    invested = r[r != 0.0]
+    if len(invested) < 2:
+        return 0.0, 0.0
+    frac = len(invested) / len(r)
+    factor = np.sqrt(bars_per_year * frac)
+    sd = float(np.std(invested))
+    if sd == 0:
+        return 0.0, float(factor)
+    return float(np.mean(invested) / sd * factor), float(factor)
+
+
+
+
+
 def _autoblock_length(x: np.ndarray) -> int:
     """Politis & White (2004) automatic block-length choice (simplified
     median-based rule): B = 1.19 * (sqrt(n) * c)^... — practical shortcut:

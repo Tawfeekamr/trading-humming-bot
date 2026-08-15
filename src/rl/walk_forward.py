@@ -717,6 +717,7 @@ def run_walk_forward(
     # series that includes flat bars mechanically rewards low-exposure
     # strategies; both variants are reported).
     from src.rl.risk_stats import (
+        invested_bars_sharpe as _invested_sharpe,
         max_drawdown as _max_dd,
         sharpe_annualized as _sharpe,
         sortino as _sortino,
@@ -748,10 +749,13 @@ def run_walk_forward(
                 "ppo": _sharpe(ppo_pooled), "rf": _sharpe(rf_pooled),
             },
             "sharpe_invested_bars_only": {
-                "ppo": _sharpe(ppo_pooled[ppo_pooled != 0.0]),
-                "rf": _sharpe(rf_pooled[rf_pooled != 0.0]),
-                "note": "excluding flat bars; inflates Sharpe for low-exposure "
-                        "strategies — read next to time_in_market",
+                name: dict(zip(("sharpe", "annualisation_factor"),
+                               _invested_sharpe(series)))
+                for name, series in (("ppo", ppo_pooled), ("rf", rf_pooled))
+            } | {
+                "definition": "non-zero-return bars; annualised by "
+                              "sqrt(8760 * invested_fraction) — the bar-1 "
+                              "version wrongly used sqrt(8760) on a subset",
             },
             "hac_lag": __import__("src.rl.evaluate", fromlist=["x"]).newey_west_lag(
                 len(ppo_pooled)
