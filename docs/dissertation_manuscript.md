@@ -37,9 +37,9 @@ Special thanks are also due to the faculty members of the Department of Computer
 
 Cryptocurrency markets exhibit extreme non-stationarity, where static quantitative trading strategies systematically bleed capital when market regimes transition between ranging, trending, and market-wide crisis states. This dissertation addresses the "single-strategy trap" by proposing a **regime-aware multi-asset execution framework** powered by a supervised Random Forest classifier with isotonic probability calibration and cross-asset correlation gating. 
 
-Operating across a 4-asset basket (`ETH`, `BNB`, `XRP`, `DOGE`), the system dynamically routes capital between specialized execution engines (Grid, Trend, Swing, and Mean-Reversion). We cast the regime-switched execution problem into a formal Markov Decision Process (MDP) and conduct a controlled empirical benchmark comparing our calibrated supervised routing policy against Deep Q-Networks (DQN) and Proximal Policy Optimization (PPO) agents under realistic market frictions ($0.20\%$ round-trip fee, slippage, $14\text{ ms}$ co-located AWS EC2 execution). 
+Operating across a 4-asset basket (`ETH`, `BNB`, `XRP`, `DOGE`), the system routes capital between the two production execution engines (Grid, Trend) with additional strategy prototypes (Swing, Mean-Reversion) explored in research backtests. We cast the regime-switched routing problem into a formal Markov Decision Process (MDP) and conduct a controlled empirical benchmark comparing our calibrated supervised routing policy against Proximal Policy Optimization (PPO) agents under simulated market frictions (fees and slippage in the bar-level replay environment).
 
-Empirical walk-forward out-of-sample results demonstrate that the proposed supervised ML-gated framework achieves an annualized Sharpe ratio of **1.85**, a Sortino ratio of **2.40**, and reduces maximum drawdown to **$-0.4\%$** (compared to $-3.8\%$ for un-gated execution and $-12.4\%$ for the passive Buy & Hold benchmark). Diebold–Mariano significance tests ($p = 0.14$) confirm that reinforcement learning agents do not yield a statistically significant improvement over calibrated supervised regime routing, pre-registering a valid finding that supervised regime gating provides an optimal, highly interpretable baseline for algorithmic multi-asset execution.
+Empirical walk-forward out-of-sample results demonstrate that the proposed supervised ML-gated framework achieves an annualized Sharpe ratio of **1.85**, a Sortino ratio of **2.40**, and reduces maximum drawdown to **$-0.4\%$** (compared to $-3.8\%$ for un-gated execution and $-12.4\%$ for the passive Buy & Hold benchmark). Paired mean-difference tests on realised returns with Newey–West HAC standard errors (corrected protocol; previously mislabelled "Diebold–Mariano") found no statistically significant improvement from reinforcement-learning routing over calibrated supervised regime routing. *(Result numbers in this abstract predate the corrected evaluation protocol and are pending regeneration.)*
 
 ---
 
@@ -111,11 +111,11 @@ Traditional quantitative execution suffers from the **Single-Strategy Trap**:
 3. **Cross-Asset Contagion**: Altcoin trading bots operating in isolation fail to account for systemic market panic driven by Bitcoin (`BTC`), purchasing falling knives during market-wide crashes.
 
 ## 1.3 Research Aims & Objectives
-This dissertation constructs a production-grade multi-engine trading framework as the experimental apparatus to benchmark supervised regime routing against Deep Reinforcement Learning (DQN, PPO) under realistic market frictions.
+This dissertation constructs a production-grade multi-engine trading framework as the experimental apparatus to benchmark supervised regime routing against Deep Reinforcement Learning (PPO) under simulated market frictions (fees and slippage in the bar-level replay environment).
 
 ## 1.4 Research Questions & Hypotheses
 ### Research Question
-*Can reinforcement learning agents (DQN, PPO) learn a regime-switched multi-engine execution policy that outperforms a calibrated supervised routing baseline on risk-adjusted return and maximum drawdown within a shared execution environment?*
+*Can reinforcement learning agents (PPO) learn a regime-switched multi-engine routing policy that outperforms a calibrated supervised routing baseline on risk-adjusted return and maximum drawdown within a shared execution environment?*
 
 ### Hypotheses
 - **`SH1`**: The regime-gated hybrid framework exhibits lower maximum drawdown than standalone Grid or Trend strategies.
@@ -152,7 +152,7 @@ Each asset features 14 engineered technical indicators computed in Rust/Python:
 11. **Volume Ratio**: $\frac{V_t}{\text{SMA}_{20}(V)}$
 12. **Close Location Value**: $\text{CLV}_t = \frac{(P_{\text{close}} - P_{\text{low}}) - (P_{\text{high}} - P_{\text{close}})}{P_{\text{high}} - P_{\text{low}}}$
 13. **Log Returns**: $\ln(P_t / P_{t-1})$
-14. **Cross-Asset Volatility Correlation**: Coupling coefficient to BTC.
+14. **Aroon Oscillator (25)**: Trend-direction persistence measure, $100 \times \frac{\text{bars since high} - \text{bars since low}}{25}$.
 
 ## 3.3 Supervised Random Forest Classifier & Isotonic Calibration
 The regime classifier estimates class probabilities $\hat{P}(Y=y | X)$ for $y \in \{\text{RANGING}, \text{TRENDING}, \text{DANGER}\}$. Uncalibrated tree probabilities are calibrated via **Isotonic Regression**:
@@ -160,7 +160,10 @@ The regime classifier estimates class probabilities $\hat{P}(Y=y | X)$ for $y \i
 $$m^* = \arg\min_{m} \sum_{i=1}^N \left( y_i - m(\hat{P}_i) \right)^2 \quad \text{subject to } m(a) \le m(b) \ \forall a \le b$$
 
 ### Expected Calibration Error (ECE)
-$$\text{ECE} = \sum_{b=1}^B \frac{|B_b|}{N} \left| \text{acc}(B_b) - \text{conf}(B_b) \right| = 0.03$$
+$$\text{ECE} = \sum_{b=1}^B \frac{|B_b|}{N} \left| \text{acc}(B_b) - \text{conf}(B_b) \right|$$
+
+*(The previously reported ECE = 0.03 is withdrawn pending a retained,
+traceable calibration artifact for the current models.)*
 
 ## 3.5 Asymmetric & Geometric Grid Spacing
 $$\text{Spacing}_n = \text{Base Spacing} \cdot (1 + \alpha)^n, \quad \alpha = 0.10$$
@@ -178,21 +181,24 @@ $$\text{Size}_n = \text{Base Size} \cdot (1 + \beta)^n, \quad \beta = 0.08$$
 | **Un-gated Baseline (Control)** | $+\$153$ | $0.41$ | $0.52$ | $-3.8\%$ | $1.02$ | $+0.04$ | $0.22$ |
 | **Supervised ML-Gated (Proposed)** | **$+\$9$** | **$1.85$** | **$2.40$** | **$-0.4\%$** | **$1.38$** | **$+0.18^*$** | **$0.08$** |
 
-## 4.2 Diebold–Mariano Statistical Hypothesis Testing
-To test if RL outperforms the supervised baseline ($\text{CH3}$), we compute the Diebold–Mariano statistic on pairwise loss differential $d_t = e_{\text{Supervised}, t}^2 - e_{\text{RL}, t}^2$:
+## 4.2 Statistical Hypothesis Testing
 
-$$DM = \frac{\bar{d}}{\sqrt{\frac{\widehat{\text{Var}}(\bar{d})}{T}}} = 1.48 \implies p = 0.14 > 0.05$$
-
-**Conclusion**: Pre-registered finding confirmed ($\text{CH3}$ validated). Supervised regime gating provides an optimal baseline; RL complexity yields no statistically significant improvement.
+*(Section under revision.)* The previously reported squared-error
+Diebold–Mariano formulation (DM = 1.48, p = 0.14) did not correspond to any
+implemented test and has been removed. The implemented statistic is a paired
+mean-difference test on realised per-bar returns with Newey–West HAC
+standard errors; corrected results from the fixed evaluation protocol
+(timestamp-aligned walk-forward, fold-specific RF baseline, 70-bar embargo)
+will replace this section.
 
 ---
 
 # Chapter 5: Conclusion & Future Research
 
 ## 5.1 Summary of Contributions
-1. Developed a multi-engine execution platform co-located on AWS EC2 (Tokyo) with $14\text{ ms}$ latency.
-2. Verified that Random Forest regime classification with isotonic probability calibration ($\text{ECE}=0.03$) and BTC cross-asset risk gating reduces maximum drawdown from $-12.4\%$ to $-0.4\%$.
-3. Established a Diebold–Mariano statistical benchmark proving that supervised regime gating is sufficient and competitive with RL policies.
+1. Developed a multi-engine trading platform deployed on AWS EC2 (Tokyo).
+2. Verified that Random Forest regime classification with isotonic probability calibration and BTC cross-asset risk gating reduces maximum drawdown relative to un-gated execution. *(Quantitative claim pending regeneration under the corrected protocol.)*
+3. Established a statistical benchmark (paired mean-difference test with Newey–West HAC errors on timestamp-aligned, embargoed walk-forward returns) finding no significant return edge of supervised regime routing over RL policies; RL's observed benefit is drawdown and exposure control.
 
 ---
 
