@@ -148,6 +148,34 @@ def train_fold_rf(
     from src.ml.regime_classifier import RegimeClassifier
 
     fold_df = df.iloc[fold_train_start:fold_train_end]
+
+    # Reuse a previously trained fold model when its manifest matches this
+    # fold exactly (same window, same seed, same recipe) — checked BEFORE
+    # training so a rerun costs nothing. Retraining is deterministic, so
+    # the artifact would be identical; the immutability guard would refuse
+    # the overwrite and fail the slice.
+    out_dir_path = Path(out_dir)
+    out_dir_path.mkdir(parents=True, exist_ok=True)
+    model_name = f"_wf_{pair}_fold_rf_{fold_train_start}_{fold_train_end}.pkl"
+    model_path = out_dir_path / model_name
+    sidecar_path = out_dir_path / f"{model_name}.json"
+    if sidecar_path.exists() and model_path.exists():
+        try:
+            existing = json.loads(sidecar_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            existing = None
+        if existing is not None and (
+            existing.get("train_start") == str(fold_df.index[0])
+            and existing.get("train_end") == str(fold_df.index[-1])
+            and existing.get("seed") == seed
+            and existing.get("fold_bars") == int(fold_train_end - fold_train_start)
+        ):
+            print(f"  reusing existing fold model {model_name} (manifest matches)", flush=True)
+            return {
+                "model_path": str(model_path), "model_name": model_name,
+                "manifest": existing, "reused": True,
+            }
+
     feats = calculate_technical_features(fold_df.copy())
     labeled = generate_regime_labels_nowcast(feats)
     labeled = labeled[labeled["regime_label"] >= 0]
@@ -164,11 +192,6 @@ def train_fold_rf(
     X_cal, y_cal = cal_df[MARKET_FEATURE_COLS], cal_df["regime_label"]
 
     from sklearn.ensemble import RandomForestClassifier
-
-    out_dir_path = Path(out_dir)
-    out_dir_path.mkdir(parents=True, exist_ok=True)
-    model_name = f"_wf_{pair}_fold_rf_{fold_train_start}_{fold_train_end}.pkl"
-    model_path = out_dir_path / model_name
 
     clf = RegimeClassifier(model_path=str(model_path), model_type="random_forest")
     clf.pair = pair
@@ -202,31 +225,6 @@ def train_fold_rf(
         "calibration_samples": int(len(cal_df)),
     }
     clf.source_commit = _git_commit()
-    # Reuse a previously trained fold model when its immutable manifest is
-    # present and its provenance matches this fold exactly (same window,
-    # same seed, same recipe) — retraining is deterministic, so the artifact
-    # would be identical; the immutability guard would otherwise refuse the
-    # overwrite and fail the slice.
-    manifest_path_check = out_dir_path / f"{model_name}.json"
-    existing_manifest = None
-    if manifest_path_check.exists() and model_path.exists():
-        try:
-            existing_manifest = json.loads(manifest_path_check.read_text())
-        except (json.JSONDecodeError, OSError):
-            existing_manifest = None
-    same_provenance = (
-        existing_manifest is not None
-        and existing_manifest.get("train_start") == str(fold_df.index[0])
-        and existing_manifest.get("train_end") == str(fold_df.index[-1])
-        and existing_manifest.get("seed") == seed
-        and existing_manifest.get("fold_bars") == int(fold_train_end - fold_train_start)
-    )
-    if same_provenance:
-        print(f"  reusing existing fold model {model_name} (manifest matches)", flush=True)
-        return {
-            "model_path": str(model_path), "model_name": model_name,
-            "manifest": existing_manifest, "reused": True,
-        }
     clf.save_model()
 
     # Sidecar manifest in the PPO-sidecar format (models/rl/ppo_*.json).
@@ -253,8 +251,7 @@ def train_fold_rf(
         "seed": seed,
         "trained_at": datetime.now(timezone.utc).date().isoformat(),
     }
-    manifest_path = out_dir_path / f"{model_name}.json"
-    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True))
+    sidecar_path.write_text(json.dumps(manifest, indent=2, sort_keys=True))
     return {"model_path": str(model_path), "model_name": model_name,
             "manifest": manifest}
 
