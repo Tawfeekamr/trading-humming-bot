@@ -235,14 +235,22 @@ def _check_oos_boundary(
 
 
 def _run_model(env: TradingEnv, router) -> dict:
-    """Run a router deterministically while retaining legacy display keys."""
+    """Run a router deterministically while retaining legacy display keys.
+
+    The result carries a ``timestamps`` index (one per collected return) so
+    downstream consumers can align comparators by timestamp instead of by
+    position — length-based truncation silently misaligns series when one
+    comparator starts or ends on a different bar.
+    """
     obs, info = env.reset(seed=42)
 
+    frame_index = getattr(env, "frame_index", None)
     equity_curve = [info["equity"]]
     step_returns = []
     turnover = []
     in_position_flags: list[bool] = []
     engine_flags: list[str] = []
+    bar_indices: list[int] = []
 
     done = False
     while not done:
@@ -257,6 +265,7 @@ def _run_model(env: TradingEnv, router) -> dict:
         turnover.append(float(info.get("turnover", 0.0)))
         in_position_flags.append(bool(info.get("in_position", False)))
         engine_flags.append(str(info.get("engine", "flat")))
+        bar_indices.append(int(info.get("bar_idx", -1)))
         done = term or trunc
 
     exposure_array = np.asarray(
@@ -291,6 +300,12 @@ def _run_model(env: TradingEnv, router) -> dict:
     return {
         "returns_array": returns,
         "equity_curve": eq_array,
+        "timestamps": (
+            frame_index[bar_indices]
+            if frame_index is not None and len(bar_indices) == len(returns)
+            and all(b >= 0 for b in bar_indices)
+            else None
+        ),
         "trade_count": trades,
         "exposure_array": exposure_array,
         "wins": wins,

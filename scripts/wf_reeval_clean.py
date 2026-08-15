@@ -33,7 +33,11 @@ def main() -> int:
     train_bars, test_bars, step_bars, months, warmup = 4320, 720, 2160, 24, 100
 
     from src.rl.data import load_klines
-    from src.rl.walk_forward import _evaluate_slice, aggregate_dm, walk_forward_slices
+    from src.rl.walk_forward import (
+        _evaluate_slice_aligned,
+        aggregate_dm,
+        walk_forward_slices,
+    )
 
     end = date.today()
     start = end - timedelta(days=30 * months)
@@ -46,12 +50,26 @@ def main() -> int:
         model = f"models/rl/_wf_{pair}_slice{i}.zip"
         try:
             test_df = df.iloc[max(0, vs - warmup):ve]
-            p, r, ps, rs = _evaluate_slice(test_df, model, rf)
-            ppo_ret.append(np.asarray(p, dtype=np.float64))
-            rf_ret.append(np.asarray(r, dtype=np.float64))
+            aligned = _evaluate_slice_aligned(test_df, model, rf, warmup=warmup)
+            # Boundary assertion: no comparator may report a timestamp at or
+            # before the last warmup bar of the declared test window.
+            last_warmup_ts = df.index[vs - 1] if vs >= 1 else None
+            for name in ("ppo", "rf"):
+                series_ts = aligned[name]["returns"].index
+                if not len(series_ts):
+                    raise AssertionError(f"slice {i}: {name} produced zero returns")
+                if last_warmup_ts is not None and series_ts[0] <= last_warmup_ts:
+                    raise AssertionError(
+                        f"slice {i}: {name} first timestamp {series_ts[0]} "
+                        f"precedes declared test boundary {df.index[vs]}"
+                    )
+            ppo_s = aligned["ppo"]["returns"]
+            rf_s = aligned["rf"]["returns"]
+            ppo_ret.append(ppo_s.to_numpy(dtype=np.float64))
+            rf_ret.append(rf_s.to_numpy(dtype=np.float64))
             print(
-                f"  slice {i}: PPO {ps['Total Return']} | "
-                f"RF {rs['Total Return']}",
+                f"  slice {i}: PPO {aligned['ppo']['summary']['Total Return']} | "
+                f"RF {aligned['rf']['summary']['Total Return']}",
                 flush=True,
             )
         except Exception as e:  # noqa: BLE001

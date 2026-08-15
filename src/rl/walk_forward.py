@@ -134,27 +134,141 @@ def _train_slice_subprocess(
     return model_path
 
 
-def _evaluate_slice(test_df, ppo_model_path: str, rf_model_path: str):
-    """Run PPO + RF through the OOS slice; return (ppo_returns, rf_returns)."""
+def _evaluate_slice(test_df, ppo_model_path: str, rf_model_path: str, warmup: int = 100):
+    """Run PPO + RF through the OOS slice; return (ppo_returns, rf_returns, ppo, rf).
+
+    ``warmup`` is the number of prepended warmup bars. It is passed to the
+    env as ``warmup_bars`` so the first collected return lands exactly on the
+    first bar AFTER the declared test boundary — previously the env's default
+    of 50 let PPO/RF collect ~49 pre-boundary bars.
+    """
     from src.rl.env import EnvConfig, TradingEnv
     from src.rl.evaluate import _run_model
     from src.rl.router import PPORouter, SupervisedRegimeRouter
 
-    config = EnvConfig(window_length=len(test_df))
+    config = EnvConfig(window_length=len(test_df), warmup_bars=warmup)
     env = TradingEnv(test_df, config)
     ppo = _run_model(env, PPORouter(ppo_model_path))
     rf = _run_model(env, SupervisedRegimeRouter(rf_model_path))
     return ppo["returns_array"], rf["returns_array"], ppo, rf
 
 
-def _technical_analysis_returns(test_df, warmup: int) -> np.ndarray:
-    """Passive TA comparator: close-to-close returns after indicator warmup."""
-    closes = np.asarray(test_df["close"], dtype=np.float64)
-    start = min(max(0, warmup), len(closes))
-    closes = closes[start:]
+def _evaluate_slice_aligned(test_df, ppo_model_path: str | None = None,
+                            rf_model_path: str | None = None, warmup: int = 100):
+    """Boundary-strict evaluation of one slice for all three comparators.
+
+    Returns ``{"ppo": {"returns": Series, "summary": dict}, "rf": ..., "ta": ...}``
+    where every ``returns`` Series is indexed by the timestamp of the bar that
+    produced it, and all three share the IDENTICAL index (inner join).
+
+    The first return's timestamp is the bar immediately after the warmup
+    anchor, i.e. the first bar of the declared test window (the env executes
+    the action chosen on bar ``warmup`` through bar ``warmup + 1``).
+    """
+    from src.rl.env import EnvConfig, TradingEnv
+    from src.rl.evaluate import _run_model
+    from src.rl.router import PPORouter, SupervisedRegimeRouter
+
+    config = EnvConfig(window_length=len(test_df), warmup_bars=warmup)
+    env = TradingEnv(test_df, config)
+
+    summaries = {}
+    if ppo_model_path:
+        summaries["ppo"] = _strip_padding_returns(_run_model(env, PPORouter(ppo_model_path)))
+    if rf_model_path:
+        summaries["rf"] = _strip_padding_returns(_run_model(env, SupervisedRegimeRouter(rf_model_path)))
+
+    result = {
+        name: {"returns": _to_timestamped(summary, test_df), "summary": summary}
+        for name, summary in summaries.items()
+    }
+    result["ta"] = {
+        "returns": _technical_analysis_returns(test_df, warmup),
+        "summary": {},
+    }
+    # Inner join on timestamps so every comparator shares the identical
+    # index; alignment by position is forbidden downstream.
+    keys = [k for k in ("ppo", "rf", "ta") if k in result]
+    joined = align_on_timestamps(*(result[k]["returns"] for k in keys))
+    for k, series in zip(keys, joined):
+        result[k]["returns"] = series
+    return result
+
+
+def _to_timestamped(summary: dict, test_df) -> "pd.Series":
+    """Convert a _run_model summary into a timestamp-indexed return series."""
+    import pandas as pd
+
+    ts = summary.get("timestamps")
+    if ts is None:
+        raise AssertionError(
+            "_run_model did not expose timestamps; cannot align by timestamp"
+        )
+    return pd.Series(np.asarray(summary["returns_array"], dtype=np.float64), index=ts)
+
+
+def _strip_padding_returns(summary: dict) -> dict:
+    """Drop the terminal padding step the env emits after the last real bar.
+
+    When the env runs out of bars it clamps ``bar_idx`` to the final index
+    and returns ``truncated=True`` with a 0.0 reward — that step produced no
+    bar, so its "return" is padding and its timestamp duplicates the last
+    real bar's. Timestamped consumers drop it via the duplicate index here.
+    """
+    import pandas as pd
+
+    ts = summary.get("timestamps")
+    if ts is None or not len(ts):
+        return summary
+    keep = ~pd.Index(ts).duplicated(keep="first")
+    if keep.all():
+        return summary
+    return {
+        **summary,
+        "returns_array": np.asarray(summary["returns_array"])[keep.to_numpy()]
+        if hasattr(keep, "to_numpy") else np.asarray(summary["returns_array"])[keep],
+        "timestamps": pd.Index(ts)[keep],
+    }
+
+
+def align_on_timestamps(*series) -> tuple:
+    """Inner-join series on their DatetimeIndex; log when lengths change."""
+    import logging
+
+    log = logging.getLogger(__name__)
+    names = [getattr(s, "name", None) or f"s{i}" for i, s in enumerate(series)]
+    joined_index = series[0].index
+    for s in series[1:]:
+        joined_index = joined_index.intersection(s.index)
+    out = tuple(s.loc[joined_index] for s in series)
+    if any(len(s) != len(joined_index) for s in series):
+        log.info(
+            "timestamp alignment dropped rows: inputs %s -> aligned %d "
+            "(joined index %s..%s)",
+            {name: len(s) for name, s in zip(names, series)},
+            len(joined_index),
+            joined_index[0] if len(joined_index) else None,
+            joined_index[-1] if len(joined_index) else None,
+        )
+    return out
+
+
+def _technical_analysis_returns(test_df, warmup: int) -> "pd.Series":
+    """Passive TA comparator: close-to-close returns after indicator warmup.
+
+    Timestamp-indexed: the return of bar ``k`` is attributed to bar ``k``'s
+    timestamp, matching the PPO/RF attribution (the action chosen on bar
+    ``k-1`` executes through bar ``k``).
+    """
+    import pandas as pd
+
+    closes = test_df["close"]
+    start = min(max(0, warmup + 1), len(closes))
+    closes = closes.iloc[start - 1 :]  # include prior close for the first diff
     if len(closes) < 2:
-        return np.array([], dtype=np.float64)
-    return np.diff(closes) / closes[:-1]
+        return pd.Series(np.array([], dtype=np.float64), dtype=np.float64)
+    rets = closes.pct_change().iloc[1:]
+    return rets
 
 
 def _report_metadata(pair: str, rf_model: str, ppo_models: list[str], **extra) -> dict:
@@ -222,21 +336,59 @@ def run_walk_forward(
     ppo_returns, rf_returns, ta_returns = [], [], []
     ppo_exposure, rf_exposure, ta_exposure = [], [], []
     per_slice, failed, model_paths = [], [], []
+    boundary_report: list[dict] = []
     for i, (ts, te, vs, ve) in enumerate(slices):
         try:
             train_end_date = strict_training_end_date(df.index, te)
             model_path = f"models/rl/_wf_{pair}_slice{i}.zip"
             _train_slice_subprocess(pair, train_end_date, train_bars, timesteps, model_path)
             model_paths.append(model_path)
+            # Frame = [warmup prefix][test bars]. The declared test-slice
+            # start is df.index[vs]; the first collected return must land on
+            # the FIRST TEST BAR (vs+1 in frame coords) — the aligned
+            # evaluator enforces this and timestamp-aligns all comparators.
             test_df = df.iloc[max(0, vs - warmup):ve]
-            ppo_ret, rf_ret, ppo_sum, rf_sum = _evaluate_slice(
-                test_df, model_path, rf_model
-            )
-            ppo_ret = np.asarray(ppo_ret, dtype=np.float64)
-            rf_ret = np.asarray(rf_ret, dtype=np.float64)
-            ta_ret = _technical_analysis_returns(test_df, warmup)
-            n = min(len(ppo_ret), len(rf_ret), len(ta_ret))
-            ppo_ret, rf_ret, ta_ret = ppo_ret[:n], rf_ret[:n], ta_ret[:n]
+            aligned = _evaluate_slice_aligned(test_df, model_path, rf_model, warmup=warmup)
+
+            declared_test_start = df.index[vs]
+            for name in ("ppo", "rf", "ta"):
+                series_ts = aligned[name]["returns"].index
+                if len(series_ts) == 0:
+                    raise AssertionError(
+                        f"slice {i}: {name} produced zero aligned returns"
+                    )
+                # The first test bar is the bar after the warmup anchor.
+                # Assert no comparator reports any timestamp at or before
+                # the last warmup bar (which would mean pre-boundary bars
+                # leaked into the pooled OOS series).
+                last_warmup_ts = df.index[vs - 1] if vs >= 1 else None
+                if last_warmup_ts is not None and series_ts[0] <= last_warmup_ts:
+                    raise AssertionError(
+                        f"slice {i}: {name} first timestamp {series_ts[0]} "
+                        f"precedes declared test boundary {declared_test_start}"
+                    )
+            boundary_report.append({
+                "slice": i,
+                "declared_test_start": str(declared_test_start),
+                **{
+                    name: {
+                        "first_ts": str(aligned[name]["returns"].index[0]),
+                        "last_ts": str(aligned[name]["returns"].index[-1]),
+                        "rows": len(aligned[name]["returns"]),
+                    }
+                    for name in ("ppo", "rf", "ta")
+                },
+            })
+
+            ppo_s = aligned["ppo"]["returns"]
+            rf_s = aligned["rf"]["returns"]
+            ta_s = aligned["ta"]["returns"]
+            ppo_sum = aligned["ppo"]["summary"]
+            rf_sum = aligned["rf"]["summary"]
+            ppo_ret = ppo_s.to_numpy(dtype=np.float64)
+            rf_ret = rf_s.to_numpy(dtype=np.float64)
+            ta_ret = ta_s.to_numpy(dtype=np.float64)
+            n = len(ppo_ret)  # all three share the identical joined index
             ppo_returns.append(ppo_ret)
             rf_returns.append(rf_ret)
             ta_returns.append(ta_ret)
@@ -387,6 +539,7 @@ def run_walk_forward(
     return {
         "pair": pair, "slices": len(slices), "ok": len(per_slice),
         "failed": failed, "per_slice": per_slice,
+        "boundary_report": boundary_report,
         "ppo_returns": ppo_returns, "rf_returns": rf_returns,
         "ml_returns": rf_returns, "ta_returns": ta_returns,
         "dm_stat": stat, "dm_p": p, "n": n,

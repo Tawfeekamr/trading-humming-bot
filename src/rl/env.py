@@ -172,6 +172,9 @@ class TradingEnv(gym.Env):
                 raise ValueError(f"df missing required column: {col}")
 
         self._raw_df = df
+        # Exposed so evaluators can map each collected return to its bar's
+        # timestamp (alignment by timestamp, not by array position).
+        self.frame_index = df.index
 
         # Precompute features and indicators ONCE on the full frame (cheap O(N)
         # pandas/numpy ops); per-step work is then pure lookup + arithmetic).

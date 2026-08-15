@@ -107,20 +107,31 @@ def test_walk_forward_report_rows_audit_boundaries_and_comparators(monkeypatch, 
         lambda pair, train_end, *args: cutoffs.append(train_end) or "model.zip",
     )
 
-    def fake_eval(*args):
-        returns = np.full(100, 0.001)
+    def fake_eval(test_df, ppo_model_path=None, rf_model_path=None, warmup=100):
+        # Return a series indexed on the slice's real test window: first test
+        # bar is warmup+1 (env anchors on the last warmup bar).
+        n = 100
+        start = test_df.index[min(warmup + 1, len(test_df) - 1)]
+        returns = pd.Series(
+            np.full(n, 0.001),
+            index=pd.date_range(start, periods=n, freq="h", tz="UTC", name="ts"),
+        )
         summary = {
-            "returns_array": returns,
-            "exposure_array": np.ones(100),
+            "returns_array": returns.to_numpy(),
+            "exposure_array": np.ones(n),
             "trade_count": 120,
             "fees": 0.125,
             "Total Return": "10.00%",
             "Max Drawdown": "1.00%",
             "profit_factor": 1.5,
         }
-        return returns, returns, summary, summary
+        return {
+            "ppo": {"returns": returns, "summary": summary},
+            "rf": {"returns": returns.copy(), "summary": dict(summary)},
+            "ta": {"returns": returns.copy(), "summary": {}},
+        }
 
-    monkeypatch.setattr(wf, "_evaluate_slice", fake_eval)
+    monkeypatch.setattr(wf, "_evaluate_slice_aligned", fake_eval)
     out = wf.run_walk_forward(
         "ETHUSDT",
         "rf.pkl",
