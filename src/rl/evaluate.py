@@ -4,8 +4,8 @@
 
 Runs a trained PPO Agent, the Supervised Baseline, and passive Buy & Hold
 over an Out-Of-Sample (OOS) window. Computes core metrics (Sharpe, MaxDD,
-Win Rate) and runs the Diebold-Mariano test on the return differentials to
-assess statistical significance.
+Win Rate) and runs a paired mean-difference test with Newey-West HAC
+standard errors on the return differentials to assess significance.
 
 Usage::
 
@@ -450,10 +450,12 @@ def main():
 | **Time in Market** | 100.0% | {rf_results["Time in Market"]} | {ppo_results["Time in Market"]} |
 | **Final Equity** | ${bh_eq[-1]:.2f} | {rf_results["Final Equity"]} | {ppo_results["Final Equity"]} |
 
-## Diebold-Mariano Test (PPO vs Supervised)
-*Null Hypothesis: Both models have identical predictive/trading accuracy.*
+## Paired Mean-Difference Test (PPO vs Supervised)
+*Null Hypothesis: E[r_ppo - r_rf] = 0 on per-bar realised returns
+(Newey-West HAC standard errors). Not a Diebold-Mariano test — DM is
+defined on forecast-loss differentials.*
 
-- **DM Statistic**: {dm_stat:.4f}
+- **Statistic**: {dm_stat:.4f}
 - **P-Value**: {dm_p:.4f}
 
 **Conclusion**: """
