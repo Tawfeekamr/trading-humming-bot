@@ -111,6 +111,138 @@ def aggregate_dm(
     return stat, p, n
 
 
+def train_fold_rf(
+    pair: str,
+    df,
+    fold_train_start: int,
+    fold_train_end: int,
+    *,
+    out_dir: str = "models/rl",
+    seed: int = 42,
+) -> dict:
+    """Train one RF regime classifier on a single fold's training window.
+
+    Fixes audit defect #3: previously ONE clean RF artifact (trained over a
+    long window) was reused for every cached PPO slice, so early test windows
+    were scored by a model that had seen later periods. This trains strictly
+    on ``df.iloc[fold_train_start:fold_train_end]`` with the same recipe as
+    ``src.ml.train_regime`` (RF n=200, depth-full, min_samples_leaf=5,
+    isotonic calibration on the temporal tail).
+
+    Emits a provenance manifest matching the PPO sidecar format
+    (train window, data hash, feature-contract hash, source commit, seed,
+    timestamp) next to the artifact.
+    """
+    import hashlib
+    import json
+    import subprocess
+    from datetime import date, datetime, timezone
+    from pathlib import Path
+
+    from src.data.feature_contract import FEATURE_SCHEMA_VERSION, MARKET_FEATURE_COLS
+    from src.data.feature_engineering import calculate_technical_features
+    from src.data.label_generation import generate_regime_labels_nowcast
+    from src.ml.regime_classifier import RegimeClassifier
+
+    fold_df = df.iloc[fold_train_start:fold_train_end]
+    feats = calculate_technical_features(fold_df.copy())
+    labeled = generate_regime_labels_nowcast(feats)
+    labeled = labeled[labeled["regime_label"] >= 0]
+    labeled = labeled.dropna(subset=MARKET_FEATURE_COLS)
+    if labeled.empty:
+        raise ValueError(
+            f"fold [{fold_train_start},{fold_train_end}) has no labeled rows"
+        )
+
+    labeled = labeled.sort_index()
+    split = int(len(labeled) * 0.85)
+    train_df, cal_df = labeled.iloc[:split], labeled.iloc[split:]
+    X_tr, y_tr = train_df[MARKET_FEATURE_COLS], train_df["regime_label"]
+    X_cal, y_cal = cal_df[MARKET_FEATURE_COLS], cal_df["regime_label"]
+
+    from sklearn.ensemble import RandomForestClassifier
+
+    out_dir_path = Path(out_dir)
+    out_dir_path.mkdir(parents=True, exist_ok=True)
+    model_name = f"_wf_{pair}_fold_rf_{fold_train_start}_{fold_train_end}.pkl"
+    model_path = out_dir_path / model_name
+
+    clf = RegimeClassifier(model_path=str(model_path), model_type="random_forest")
+    clf.pair = pair
+    clf.timeframe = "1h"
+    clf.train_start = str(fold_df.index[0])
+    clf.train_end = str(fold_df.index[-1])
+    clf.label_params = {
+        "window_bars": 24,
+        "return_threshold": 0.02,
+        "danger_drawdown_threshold": -0.03,
+    }
+    clf.model = RandomForestClassifier(
+        n_estimators=200,
+        max_depth=None,
+        min_samples_leaf=5,
+        max_features="sqrt",
+        class_weight="balanced_subsample",
+        n_jobs=-1,
+        random_state=seed,
+    )
+    clf.train(X_tr, y_tr)
+    clf.calibrate(X_cal, y_cal)
+    clf.feature_columns = list(MARKET_FEATURE_COLS)
+    clf.feature_schema_version = FEATURE_SCHEMA_VERSION
+    clf.class_distribution = {
+        int(k): int(v) for k, v in y_tr.value_counts().items()
+    }
+    clf.training_samples = int(len(train_df))
+    clf.metrics = {
+        "training_samples": int(len(train_df)),
+        "calibration_samples": int(len(cal_df)),
+    }
+    clf.source_commit = _git_commit()
+    clf.save_model()
+
+    # Sidecar manifest in the PPO-sidecar format (models/rl/ppo_*.json).
+    data_bytes = fold_df[["open", "high", "low", "close", "volume"]].to_csv().encode()
+    data_hash = hashlib.sha256(data_bytes).hexdigest()
+    contract_hash = hashlib.sha256(
+        json.dumps(list(MARKET_FEATURE_COLS), separators=(",", ":")).encode()
+    ).hexdigest()
+    manifest = {
+        "pair": pair,
+        "model_path": str(model_path),
+        "git_sha": clf.source_commit,
+        "source_commit": clf.source_commit,
+        "data_hash": data_hash,
+        "train_start": str(fold_df.index[0]),
+        "train_end": str(fold_df.index[-1]),
+        "fold_bars": int(fold_train_end - fold_train_start),
+        "training_samples": int(len(train_df)),
+        "calibration_samples": int(len(cal_df)),
+        "class_distribution": {
+            str(k): int(v) for k, v in y_tr.value_counts().items()
+        },
+        "feature_contract_hash": contract_hash,
+        "seed": seed,
+        "trained_at": datetime.now(timezone.utc).date().isoformat(),
+    }
+    manifest_path = out_dir_path / f"{model_name}.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True))
+    return {"model_path": str(model_path), "model_name": model_name,
+            "manifest": manifest}
+
+
+def _git_commit() -> str:
+    import subprocess
+
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], text=True, timeout=2,
+            stderr=subprocess.DEVNULL,
+        ).strip() or "unknown"
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+
+
 # ---------------------------------------------------------------------------
 # Orchestration (heavy deps imported lazily; not unit-tested — validated via
 # the tiny end-to-end smoke in main()).
@@ -331,8 +463,15 @@ def run_walk_forward(
     feature_hash: str | None = None,
     fees: float = 0.0,
     slippage: float = 0.0,
+    fold_specific_rf: bool = True,
 ) -> dict:
-    """Full chronological walk-forward with PPO/RF and TA/ML comparisons."""
+    """Full chronological walk-forward with PPO/RF and TA/ML comparisons.
+
+    ``fold_specific_rf=True`` (default) trains one RF baseline per fold on
+    that fold's training window only (audit fix #3), instead of reusing one
+    long-window artifact across all folds. Pass the shared artifact path via
+    ``rf_model`` when ``fold_specific_rf=False``.
+    """
     from src.rl.data import load_klines
 
     print(f"[{pair}] loading history {history_start} -> {history_end}")
@@ -347,6 +486,7 @@ def run_walk_forward(
     ppo_returns, rf_returns, ta_returns = [], [], []
     ppo_exposure, rf_exposure, ta_exposure = [], [], []
     per_slice, failed, model_paths = [], [], []
+    fold_rf_manifests: list[dict] = []
     boundary_report: list[dict] = []
     for i, (ts, te, vs, ve) in enumerate(slices):
         try:
@@ -354,12 +494,24 @@ def run_walk_forward(
             model_path = f"models/rl/_wf_{pair}_slice{i}.zip"
             _train_slice_subprocess(pair, train_end_date, train_bars, timesteps, model_path)
             model_paths.append(model_path)
+            slice_rf_model = rf_model
+            if fold_specific_rf:
+                fold = train_fold_rf(pair, df, ts, te, out_dir="models/rl")
+                slice_rf_model = fold["model_path"]
+                fold_rf_manifests.append(fold["manifest"])
+                print(
+                    f"  fold RF {i}: window {fold['manifest']['train_start']}"
+                    f" -> {fold['manifest']['train_end']}, "
+                    f"samples={fold['manifest']['training_samples']}, "
+                    f"classes={fold['manifest']['class_distribution']}",
+                    flush=True,
+                )
             # Frame = [warmup prefix][test bars]. The declared test-slice
             # start is df.index[vs]; the first collected return must land on
             # the FIRST TEST BAR (vs+1 in frame coords) — the aligned
             # evaluator enforces this and timestamp-aligns all comparators.
             test_df = df.iloc[max(0, vs - warmup):ve]
-            aligned = _evaluate_slice_aligned(test_df, model_path, rf_model, warmup=warmup)
+            aligned = _evaluate_slice_aligned(test_df, model_path, slice_rf_model, warmup=warmup)
 
             declared_test_start = df.index[vs]
             for name in ("ppo", "rf", "ta"):
@@ -545,12 +697,15 @@ def run_walk_forward(
             feature_hash=feature_hash, fees=fees, slippage=slippage,
             embargo_bars=embargo_bars, train_bars=train_bars,
             test_bars=test_bars, step_bars=step_bars,
+            fold_rf_manifests=fold_rf_manifests,
+            fold_specific_rf=fold_specific_rf,
         )
         write_report(report_path, metadata, report, report_slices)
     return {
         "pair": pair, "slices": len(slices), "ok": len(per_slice),
         "failed": failed, "per_slice": per_slice,
         "boundary_report": boundary_report,
+        "fold_rf_manifests": fold_rf_manifests,
         "ppo_returns": ppo_returns, "rf_returns": rf_returns,
         "ml_returns": rf_returns, "ta_returns": ta_returns,
         "dm_stat": stat, "dm_p": p, "n": n,

@@ -146,6 +146,14 @@ def test_walk_forward_report_rows_audit_boundaries_and_comparators(monkeypatch, 
         }
 
     monkeypatch.setattr(wf, "_evaluate_slice_aligned", fake_eval)
+    monkeypatch.setattr(
+        wf,
+        "train_fold_rf",
+        lambda *a, **k: {"model_path": "rf.pkl", "model_name": "rf.pkl",
+                         "manifest": {"train_start": "x", "train_end": "y",
+                                      "training_samples": 1,
+                                      "class_distribution": {}}},
+    )
     out = wf.run_walk_forward(
         "ETHUSDT",
         "rf.pkl",
