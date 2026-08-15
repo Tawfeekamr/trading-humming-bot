@@ -294,7 +294,7 @@ def _train_slice_subprocess(
     import sys
     from pathlib import Path
 
-    sidecar = Path(f"{model_path}.json")
+    sidecar = Path(model_path).with_suffix(".json")
     if Path(model_path).exists() and sidecar.exists():
         try:
             existing = json.loads(sidecar.read_text())
