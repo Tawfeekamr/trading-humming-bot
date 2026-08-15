@@ -55,23 +55,44 @@ _CAVEATS = """
 """
 
 
-def _diebold_mariano_test(
-    returns_a: np.ndarray, returns_b: np.ndarray, max_lag: int = 5
-) -> tuple[float, float]:
-    """Diebold-Mariano test with Newey-West HAC variance.
+def newey_west_lag(n: int) -> int:
+    """Standard automatic HAC lag rule: floor(4 * (n/100)^(2/9)).
 
-    Tests the null hypothesis that the two models have the same accuracy.
-    Here we treat negative return as 'loss'.
-    Positive DM stat means model A outperforms model B.
+    Replaces the previous fixed max_lag=5, which was arbitrary and
+    under-lagged for the pooled n~4600 series (autocorrelation beyond lag 5
+    was left unaccounted, deflating the HAC variance).
+    """
+    if n < 2:
+        return 1
+    return max(1, int(np.floor(4 * (n / 100.0) ** (2.0 / 9.0))))
+
+
+def paired_mean_difference_hac_test(
+    returns_a: np.ndarray, returns_b: np.ndarray, max_lag: int | None = None
+) -> tuple[float, float]:
+    """Paired mean-difference test on realised returns with Newey-West HAC
+    standard errors.
+
+    NOT a Diebold-Mariano test. DM is defined on forecast-loss
+    differentials d_t = L(e_a,t) - L(e_b,t); this function instead tests
+    H0: E[r_a - r_b] = 0 on realised per-bar returns, using a Bartlett-kernel
+    HAC variance so overlapping-position autocorrelation is handled. It was
+    renamed from ``_diebold_mariano_test`` (audit Task 7) because the old
+    name misdescribed the statistic.
+
+    Positive stat means A's mean return exceeds B's.
     """
     from scipy.stats import norm
 
-    d = returns_a - returns_b
+    d = np.asarray(returns_a) - np.asarray(returns_b)
     d_mean = np.mean(d)
     n = len(d)
 
     if n < 2:
         return 0.0, 1.0
+
+    if max_lag is None:
+        max_lag = newey_west_lag(n)
 
     # Newey-West HAC Variance (Bartlett kernel)
     gamma_0 = np.var(d, ddof=0)
@@ -414,7 +435,7 @@ def main():
     ppo_ret_trim = ppo_results["returns_array"][:min_len]
     rf_ret_trim = rf_results["returns_array"][:min_len]
 
-    dm_stat, dm_p = _diebold_mariano_test(ppo_ret_trim, rf_ret_trim)
+    dm_stat, dm_p = paired_mean_difference_hac_test(ppo_ret_trim, rf_ret_trim)
 
     report = f"""# RL Evaluation Benchmark: {args.pair} ({start_date} to {end_date})
 

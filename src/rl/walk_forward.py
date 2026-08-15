@@ -2,10 +2,10 @@
 """Walk-forward multi-window OOS harness for the RL execution pipeline.
 
 The single-pair/single-window ``evaluate.py`` answers "does PPO beat the
-baseline on *this* month?" — statistically thin (DM on one ~800-bar window).
+baseline on *this* month?" — statistically thin (one ~800-bar window).
 This module rolls train/test splits across the full available history so the
 OOS evidence spans many windows, then pools per-bar returns into a single
-HAC-robust DM test with real statistical power.
+HAC-robust paired mean-difference test with real statistical power.
 
 Design:
     * **Pure helpers** (``walk_forward_slices``, ``pool_returns``,
@@ -96,18 +96,21 @@ def aggregate_dm(
     ppo_slice_returns: Sequence[np.ndarray],
     rf_slice_returns: Sequence[np.ndarray],
 ) -> tuple[float, float, int]:
-    """Pooled HAC-robust DM test across all walk-forward slices.
+    """Pooled HAC-robust paired mean-difference test across all slices.
 
-    Returns ``(stat, p_value, n)`` where ``n`` is the pooled bar count. A
-    positive stat means PPO outperforms RF on the pooled OOS returns.
+    (Renamed conceptually from "DM": Diebold-Mariano is defined on forecast
+    loss differentials; this is a paired return-difference test — see
+    ``evaluate.paired_mean_difference_hac_test``.) Returns
+    ``(stat, p_value, n)``; positive stat means PPO's mean return exceeds
+    the RF baseline's on the pooled OOS bars.
     """
-    from src.rl.evaluate import _diebold_mariano_test
+    from src.rl.evaluate import paired_mean_difference_hac_test
 
     ppo_all, rf_all = pool_returns(ppo_slice_returns, rf_slice_returns)
     n = len(ppo_all)
     if n == 0:
         return 0.0, 1.0, 0
-    stat, p = _diebold_mariano_test(ppo_all, rf_all)
+    stat, p = paired_mean_difference_hac_test(ppo_all, rf_all)
     return stat, p, n
 
 
@@ -464,6 +467,7 @@ def run_walk_forward(
     fees: float = 0.0,
     slippage: float = 0.0,
     fold_specific_rf: bool = True,
+    returns_dir: str | None = None,
 ) -> dict:
     """Full chronological walk-forward with PPO/RF and TA/ML comparisons.
 
@@ -522,6 +526,24 @@ def run_walk_forward(
             # evaluator enforces this and timestamp-aligns all comparators.
             test_df = df.iloc[max(0, vs - warmup):ve]
             aligned = _evaluate_slice_aligned(test_df, model_path, slice_rf_model, warmup=warmup)
+
+            def _persist_returns():
+                """Write the raw timestamped return series for this slice
+                (audit trail: reports/returns/<PAIR>_<comparator>_<fold>.csv)."""
+                from pathlib import Path
+
+                if not returns_dir:
+                    return
+                out = Path(returns_dir)
+                out.mkdir(parents=True, exist_ok=True)
+                for name in ("ppo", "rf", "ta"):
+                    series = aligned[name]["returns"]
+                    series.rename("return").to_csv(
+                        out / f"{pair}_{name}_fold{i}.csv",
+                        index_label="timestamp",
+                    )
+
+            _persist_returns()
 
             declared_test_start = df.index[vs]
             for name in ("ppo", "rf", "ta"):
@@ -590,6 +612,54 @@ def run_walk_forward(
             print(f"  slice {i}: FAILED ({e}); skipping", flush=True)
 
     stat, p, n = aggregate_dm(ppo_returns, rf_returns)
+
+    # Risk-focused inference (audit Task 7): the primary claim is about
+    # drawdown/downside, not return parity. Stationary bootstrap on the
+    # PPO-minus-foldRF difference of MaxDD and Sortino, plus dual Sharpe
+    # (with and without flat bars — the sqrt(8760) annualisation over a
+    # series that includes flat bars mechanically rewards low-exposure
+    # strategies; both variants are reported).
+    from src.rl.risk_stats import (
+        max_drawdown as _max_dd,
+        sharpe_annualized as _sharpe,
+        sortino as _sortino,
+        stationary_bootstrap_ci as _boot_ci,
+    )
+
+    ppo_pooled = np.concatenate(ppo_returns) if ppo_returns else np.zeros(0)
+    rf_pooled = np.concatenate(rf_returns) if rf_returns else np.zeros(0)
+    risk_inference = {}
+    if len(ppo_pooled) and len(ppo_pooled) == len(rf_pooled) and len(ppo_pooled) > 100:
+        dd_est, dd_lo, dd_hi, dd_block = _boot_ci(
+            ppo_pooled, rf_pooled, lambda a, b: _max_dd(a) - _max_dd(b),
+            n_boot=500, seed=42,
+        )
+        so_est, so_lo, so_hi, _ = _boot_ci(
+            ppo_pooled, rf_pooled, lambda a, b: _sortino(a) - _sortino(b),
+            n_boot=500, seed=42,
+        )
+        risk_inference = {
+            "maxdd_diff_ppo_minus_rf": {
+                "estimate": dd_est, "ci95": [dd_lo, dd_hi],
+                "bootstrap": "politis-romano stationary", "block_length": dd_block,
+            },
+            "sortino_diff_ppo_minus_rf": {
+                "estimate": so_est, "ci95": [so_lo, so_hi],
+                "bootstrap": "politis-romano stationary",
+            },
+            "sharpe_all_bars": {
+                "ppo": _sharpe(ppo_pooled), "rf": _sharpe(rf_pooled),
+            },
+            "sharpe_invested_bars_only": {
+                "ppo": _sharpe(ppo_pooled[ppo_pooled != 0.0]),
+                "rf": _sharpe(rf_pooled[rf_pooled != 0.0]),
+                "note": "excluding flat bars; inflates Sharpe for low-exposure "
+                        "strategies — read next to time_in_market",
+            },
+            "hac_lag": __import__("src.rl.evaluate", fromlist=["x"]).newey_west_lag(
+                len(ppo_pooled)
+            ),
+        }
     ta_all, ml_all = pool_returns(ta_returns, rf_returns)
     ta_stat, ta_p, ta_n = aggregate_dm(ta_returns, rf_returns)
     print(
@@ -698,6 +768,7 @@ def run_walk_forward(
         "gate_metrics": gate_metrics,
         "promotion": promotion,
         "ppo_vs_rf": {"dm_stat": stat, "dm_p": p, "n": n},
+        "risk_inference": risk_inference,
         "ta_vs_ml": {"dm_stat": ta_stat, "dm_p": ta_p, "n": len(ta_all)},
     }
     if report_path:
@@ -776,10 +847,14 @@ def main() -> int:
                 embargo_bars=args.embargo_bars, report_path=report_path,
                 feature_hash=args.feature_hash, fees=args.fees,
                 slippage=args.slippage,
+                returns_dir=f"{args.report_dir}/returns",
             )
         )
 
     import json
+
+    from src.rl.risk_stats import holm_correct
+
     ci_results = [
         {
             "pair": result["pair"],
@@ -799,6 +874,12 @@ def main() -> int:
         }
         for result in results
     ]
+    # Holm correction across pairs for each family of tests (audit Task 7.4).
+    for family in ("ppo_vs_rf", "ta_vs_ml"):
+        raw = [row[family]["dm_p"] for row in ci_results]
+        adjusted = holm_correct(raw)
+        for row, adj in zip(ci_results, adjusted):
+            row[family]["dm_p_holm"] = adj
     print(json.dumps({"results": ci_results}, sort_keys=True))
     print("\n=== Walk-Forward Summary ===")
     for result in ci_results:

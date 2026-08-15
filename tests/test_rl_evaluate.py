@@ -21,29 +21,29 @@ import pytest
 def test_module_importable_without_rl_deps():
     import src.rl.evaluate as ev  # noqa: F401
 
-    assert hasattr(ev, "_diebold_mariano_test")
+    assert hasattr(ev, "paired_mean_difference_hac_test")
     assert hasattr(ev, "_count_round_trips")
     assert hasattr(ev, "_check_oos_boundary")
 
 
 # ---------------------------------------------------------------------------
-# _diebold_mariano_test (HAC-robust paired test on per-bar return diff)
+# paired_mean_difference_hac_test (HAC-robust paired test on per-bar return diff)
 # ---------------------------------------------------------------------------
 def test_dm_clear_difference_is_significant():
-    from src.rl.evaluate import _diebold_mariano_test
+    from src.rl.evaluate import paired_mean_difference_hac_test
 
     a = np.full(200, 0.001)  # consistently +0.1%/bar
     b = np.zeros(200)
-    stat, p = _diebold_mariano_test(a, b)
+    stat, p = paired_mean_difference_hac_test(a, b)
     assert stat > 0            # A outperforms B
     assert p < 0.05
 
 
 def test_dm_identical_returns_not_significant():
-    from src.rl.evaluate import _diebold_mariano_test
+    from src.rl.evaluate import paired_mean_difference_hac_test
 
     a = np.array([0.001, -0.002, 0.0005, 0.003, -0.001] * 40)
-    stat, p = _diebold_mariano_test(a, a)
+    stat, p = paired_mean_difference_hac_test(a, a)
     assert stat == 0.0
     assert p == 1.0
 
@@ -51,13 +51,13 @@ def test_dm_identical_returns_not_significant():
 def test_dm_hac_path_handles_autocorrelated_diff():
     """A return-diff series with strong positive autocorrelation (long runs)
     must not blow up the HAC variance — finite stat, valid p-range."""
-    from src.rl.evaluate import _diebold_mariano_test
+    from src.rl.evaluate import paired_mean_difference_hac_test
 
     # Runs of 15 positive bars then 5 negative — strongly autocorrelated.
     diff = np.where(np.arange(200) % 20 < 15, 0.001, -0.003)
     a = diff
     b = np.zeros_like(a)
-    stat, p = _diebold_mariano_test(a, b)
+    stat, p = paired_mean_difference_hac_test(a, b)
     assert np.isfinite(stat)
     assert 0.0 <= p <= 1.0
 
