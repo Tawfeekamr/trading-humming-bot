@@ -1,4 +1,12 @@
-# Learned Withdrawal and Evaluation Blindness in Reinforcement Learning for Trading: A Corrected-Protocol Case Study
+# Reward-Induced Abstention and Evaluation Blindness in a
+Reinforcement-Learning Trading System: A Corrected-Protocol Case Study
+
+*(Retitled Batch 10: "Learned Withdrawal ... in Reinforcement Learning
+for Trading" read as a general claim about RL trading. The finding is
+system- and reward-specific — the comparative literature shows punitive
+rewards without abstention — so the title now names the mechanism
+(reward-induced) and the object (a system, one instance) rather than
+the field.)*
 
 **A dissertation submitted in partial fulfilment of the requirements for the degree of Master of Science in Artificial Intelligence**
 
@@ -39,7 +47,7 @@ Cryptocurrency markets exhibit extreme non-stationarity, where static quantitati
 
 Operating across a 4-asset basket (`ETH`, `BNB`, `XRP`, `DOGE`), the system routes capital between the two production trading engines (Grid, Trend) with additional strategy prototypes (Swing, Mean-Reversion) explored in research backtests. We cast the regime-switched routing problem into a formal Markov Decision Process (MDP) and conduct a walk-forward evaluation comparing our calibrated supervised routing policy against Proximal Policy Optimization (PPO) agents under simulated market frictions (fees and slippage in the bar-level replay environment).
 
-Empirical results are reported from a corrected walk-forward evaluation protocol (timestamp-aligned comparators, 70-bar train/test embargo, fold-specific supervised baselines, pinned data windows, multiplicative-drawdown definitions). Under this protocol, **neither the supervised gating policy nor the PPO agent outperformed passive buy-and-hold** on either asset over the evaluated window (ETH: B&H +38.0% vs gated −21.2% vs PPO −12.8%; BNB: B&H −4.3% vs gated −20.3% vs PPO −25.9%), and no routing comparison is statistically interpretable: the design's minimum detectable effect (82–179% cumulative return at 80% power, compounded basis) exceeds the observed differences by an order of magnitude, PPO seed variance (up to 27pp return swing within a fold) dominates between-method differences, and the two policies operated at materially different capital deployment (4–5% vs 21–61% capital-weighted exposure). Diagnostic analysis further shows the PPO agent's low exposure is *learned withdrawal under a drawdown-penalising reward* — a permanently-flat policy outscores the trained policy in 19 of 20 seed-fold-pair cells. This withdrawal is documented under one reward specification that both double-counts transaction costs and applies a drawdown penalty at lambda=0.5; no threshold in lambda is established, and generalisation to other reward designs is untested. The evaluation further shows that the regime classifier's DANGER warnings are false 38–47% of the time, forgoing upside that buy-and-hold captures. The dissertation's contribution is the negative result, the protocol that establishes it, and the causal diagnosis of why learned routing degenerates to abstention; it does not claim a validated trading edge.
+Empirical results are reported from a corrected walk-forward evaluation protocol (timestamp-aligned comparators, 70-bar train/test embargo, fold-specific supervised baselines, pinned data windows, multiplicative-drawdown definitions). Under this protocol, **neither the supervised gating policy nor the PPO agent outperformed passive buy-and-hold** on either asset over the evaluated window (ETH: B&H +38.0% vs gated −21.2% vs PPO −12.8%; BNB: B&H −4.3% vs gated −20.3% vs PPO −25.9%), and no routing comparison is statistically interpretable: the design's minimum detectable effect (82–179% cumulative return at 80% power, compounded basis) exceeds the observed differences by an order of magnitude, PPO seed variance (up to 27pp return swing within a fold) dominates between-method differences, and the two policies operated at materially different capital deployment (4–5% vs 21–61% capital-weighted exposure). Diagnostic analysis further shows the PPO agent's low exposure is *learned withdrawal under a drawdown-penalising reward* — a permanently-flat policy outscores the trained policy in 19 of 20 seed-fold-pair cells. This withdrawal is documented under one reward specification that double-counts transaction costs (fees enter both the equity return and, again, an explicit reward penalty) on top of a drawdown penalty at lambda=0.5 — comparative evidence from published punitive rewards that did NOT produce abstention indicates the fee double-count, not the drawdown penalty, is the likely distinguishing mechanism; no ablation separates them, no threshold in lambda is established, and generalisation to other reward designs is untested. The evaluation further shows that the regime classifier's DANGER warnings are false 38–47% of the time, forgoing upside that buy-and-hold captures. The dissertation's contribution is the negative result, the protocol that establishes it, and the causal diagnosis of why learned routing degenerates to abstention; it does not claim a validated trading edge.
 
 ---
 
@@ -651,6 +659,84 @@ returned -0.57%/-0.49% versus +0.39%/+0.23% for non-flagged blocks. At
 portfolio level the gated strategy underperformed buy-and-hold by
 67.1pp (ETH) and 20.8pp (BNB) over the same window - the honest measure
 of the gate's cost.
+
+---
+
+## 4.6 Relation to positive-result literature
+
+A substantial published literature reports reinforcement-learning
+trading policies outperforming passive exposure; this dissertation's
+negative result must be read against it, not instead of it.
+
+- **arXiv:2510.06466** (attention-enhanced RL): PPO terminal wealth
+  2.11 vs buy-and-hold 1.94, Sharpe 0.73 vs 0.66 (S&P 500, 2020-2025)
+  — a positive result with an effect of roughly 1.7pp CAGR, which this
+  dissertation uses as its S&P literature anchor (4.3.1).
+- **Felizardo et al.** (Expert Systems with Applications): reports
+  outperforming buy-and-hold in all tests on crypto assets.
+- **arXiv:2310.09462** (causal RL): CRN-PPO reports positive ROI on
+  ETH where buy-and-hold was negative — a direct inversion of this
+  study's ETH finding, and a useful reminder that the disagreement is
+  between systems, not between datasets alone.
+- **arXiv:2209.05559**: PPO trained with combinatorial purged
+  cross-validation (CPCV) outperforms walk-forward and K-fold agents
+  and the S&P DBM index — notably, from the same evaluation-methodology
+  tradition (citing Agarwal et al. 2021) this dissertation relies on,
+  reaching a positive conclusion.
+- **10.1007/s00521-023-08516-x**: five PPO variants failed to beat
+  buy-and-hold — but with NO transaction costs modelled, a different
+  failure mechanism from this study's (where costs are, if anything,
+  double-counted).
+
+**This dissertation does NOT claim that reinforcement learning
+generally fails at trading.** The claim is a documented failure mode in
+one system under one reward specification, with a causal diagnosis and
+a traceable evidence chain. The papers above differ from this study in
+reward design, asset universe, cost modelling, and validation scheme;
+any of those differences could be decisive, and which ones are is an
+open empirical question this single case cannot settle.
+
+**On CPCV specifically:** arXiv:2209.05559 argues combinatorial purged
+cross-validation yields more test paths and a higher effective n than
+walk-forward. Walk-forward was used here because it preserves temporal
+contiguity within each test window and does not require assuming that
+non-adjacent market segments are exchangeable — an assumption this
+dissertation regards as unsafe in a non-stationary environment (and
+which the fold-gap pooling defect of 3.6.1 shows to be consequential
+even implicitly). CPCV is listed as future work (5.4).
+
+*Publication bias is acknowledged as a field-level observation with
+its own literature, but it is not invoked here as a defence of this
+study's result: it is unfalsifiable in this context and would be
+evasive. The disagreement with the positive literature is engaged on
+the differences above, not explained away.*
+
+## 4.7 The withdrawal claim, narrowed by the same literature
+
+The positive-result literature also constrains the withdrawal
+diagnosis. arXiv:2510.06466 and the Bitcoin-hourly PPO/SAC/TD3/A2C
+studies report reward functions combining transaction costs, drawdown
+penalties, volatility penalties, and delayed rewards — specifications
+at least as punitive as this study's — WITHOUT producing abstention.
+
+**A drawdown penalty alone therefore does not cause learned
+withdrawal.** The distinguishing feature of this system is most likely
+the DOUBLE-COUNTED TRANSACTION COST: `env.py:333-334` subtracts fees
+from equity and `:354-357` subtracts a fee term from the reward again
+(the code comment calls this amplification). The revised claim:
+
+> Under a reward specification in which transaction costs are counted
+> twice — embedded in the equity return and subtracted again as an
+> explicit term — on top of a drawdown penalty at λ=0.5, PPO converged
+> to abstention; a permanently-flat policy outscores the trained
+> policy in 19 of 20 seed-fold-pair cells.
+
+The λ=0.5 penalty is part of the specification under which the
+withdrawal occurred, but the comparative evidence indicates it is not
+the sufficient cause; the fee double-count is the candidate
+distinguishing mechanism. No ablation separating the two was run
+(frozen code), so the attribution is by comparison across published
+specifications, not by experiment — stated as such.
 
 ---
 
