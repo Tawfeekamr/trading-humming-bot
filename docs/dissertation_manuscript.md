@@ -422,8 +422,36 @@ earlier draft mislabelled it as such.
 | ETH | +0.43 | 0.665 | 1.00 | 4,314 |
 | BNB | -0.33 | 0.743 | 1.00 | 4,314 |
 
-Stationary-bootstrap 95% CIs for the MaxDD difference (PPO - RF): ETH
-[-0.342, +0.090]; BNB [-0.381, +0.161] - both straddle zero.
+~~Stationary-bootstrap 95% CIs for the MaxDD difference (PPO - RF): ETH
+[-0.342, +0.090]; BNB [-0.381, +0.161] - both straddle zero.~~
+*(Superseded by fold-clustered bootstrapping, Batch 7 — blocks no
+longer span the 1,440-bar fold gaps.)*
+
+**Fold-clustered bootstrap on the per-fold MaxDD difference (PPO − RF)
+— the project's first statistically significant result:**
+
+| | ETH | BNB |
+| :--- | :---: | :---: |
+| estimate (mean per-fold MaxDD diff) | −0.070 | −0.054 |
+| 95% CI (fold-cluster resampling) | **[−0.121, −0.020]** | [−0.138, +0.022] |
+| excludes zero? | **YES** | no |
+
+PPO's per-fold drawdowns are consistently below the RF baseline's on
+ETH, and not distinguishable on BNB. **This result must be read with
+its mechanism: it is consistent with PPO's far lower capital
+deployment (4.3% vs 21.1% capital-weighted exposure, a 4.9x ratio),
+not with timing skill — if it were skill, PPO would not sit at the
+100th percentile (worst) against random entries matched on the same
+capital exposure (Section 4.2), which it does on both pairs.** The
+finding is "a lower-exposure policy drew down less per fold", not "PPO
+reduces drawdown".
+
+**The ETH/BNB divergence is itself an illustration of this thesis's
+argument about scale.** With two assets and an effective n of six
+folds, a result significant on one pair and not the other does not
+support a general conclusion — it demonstrates sensitivity to asset
+selection, which single-asset studies conceal. Both pairs are
+therefore always reported together here.
 
 ### 4.3.1 Statistical power: the null is uninterpretable, not confirmed
 
