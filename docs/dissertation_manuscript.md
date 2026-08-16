@@ -533,15 +533,67 @@ variance estimator:
 
 | | ETH | BNB |
 | :--- | :---: | :---: |
-| Observed cumulative difference | +9.2pp | -12.0pp |
 | Minimum detectable effect (80% power, alpha=0.05, compounded) | **81.7pp** | **179.3pp** |
-| Achieved power at observed difference | 7.2% | 6.2% |
-| n required to detect the observed difference | 180,943 bars (20.7y) | 314,103 bars (35.9y) |
 
-**"Parity" is therefore not a supported claim.** The correct statement is:
-*at the realised sample size this design cannot distinguish parity from
-differences far larger than the one observed.* CH3's "non-significance is
-a valid finding" holds only in this weaker, power-qualified form.
+~~| Achieved power at observed difference | 7.2% | 6.2% |~~
+~~| n required to detect the observed difference | 180,943 bars (20.7y) | 314,103 bars (35.9y) |~~
+
+*Both retracted rows were RETROSPECTIVE quantities computed at the
+observed effect size. Observed power is a one-to-one function of the
+p-value (Hoenig & Heisey 2001) and adds nothing beyond it; n-required
+anchored on the observed difference inherits the same circularity
+(the observed difference is itself estimated with an SE this wide).
+Retained: the MDE, a prospective design quantity computed from the
+HAC variance and sample size only — verified in code
+(`scripts/mde_power_report.py:35-41` uses no observed-effect term).*
+
+**The defensible underpowering evidence is the width of the reported
+confidence intervals** (Hoenig & Heisey's recommended framing): the
+fold-clustered MaxDD-difference CI spans [−0.121, −0.020] on ETH and
+[−0.138, +0.022] on BNB — widths of ~0.10 and ~0.16 — where the
+effects under discussion are of order 0.05-0.13. A sample whose
+interval is wider than the effect cannot resolve that effect; no
+retrospective power number is needed to say so, and none could
+strengthen it.
+
+**Literature-anchored n-required** (replacing the retracted
+observed-anchored figures; effect sizes from published positive
+results, not from this study):
+
+| anchor (source) | ETH n-required | BNB n-required |
+| :--- | :---: | :---: |
+| 1.7pp/yr (arXiv:2510.06466, S&P RL) | 2,506 years | 7,413 years |
+| 10pp/yr (crypto-RL order-of-magnitude; stated assumption) | 72 years | 214 years |
+
+Even at effect sizes far larger than anything this study observed, the
+design needs decades-to-millennia of hourly data. **"Parity" is
+therefore not a supported claim.** The correct statement is: *at the
+realised sample size this design cannot distinguish parity from
+differences far larger than the one observed.* CH3's
+"non-significance is a valid finding" holds only in this weaker,
+power-qualified form.
+
+### 4.3.1a Design analysis: Type S and Type M error rates
+
+Following Gelman & Carlin (2014), error rates at the literature-anchored
+effect sizes and this study's realised SE
+(`reports/design_analysis.json`):
+
+| anchor | pair | power at n=4,314 | Type S (wrong sign \| sig) | Type M (exaggeration \| sig) |
+| :--- | :--- | :---: | :---: | :---: |
+| 1.7pp/yr | ETH | 0.73 | ~0.000 | 1.17x |
+| 1.7pp/yr | BNB | 0.32 | 0.0008 | 1.74x |
+| 10pp/yr | ETH | ~1.0 | ~0 | ~1.0x |
+| 10pp/yr | BNB | ~1.0 | ~0 | ~1.0x |
+
+Implication stated plainly: at the S&P-anchored effect, a study at
+this sample size that DID reach significance on BNB would exaggerate
+the effect by ~1.7x on average, and sign errors are rare but nonzero.
+**This STRENGTHENS the underpowering argument**: the design is not
+merely insensitive — when it does fire, its significant estimates are
+inflated. At the (generous) crypto anchor the design is adequate,
+which locates the boundary: this methodology can resolve very large
+claimed effects, not the ones typically reported.
 
 ### 4.3.2 Seed variance dominates the method difference
 

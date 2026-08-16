@@ -1,0 +1,42 @@
+{
+  "method": "Gelman & Carlin (2014) design analysis at literature-anchored effect sizes; two-sided test, realised HAC SE from reports/mde_power.json",
+  "retracted": "achieved_power_for_observed_diff (retrospective power \u2014 one-to-one with p-value per Hoenig & Heisey 2001)",
+  "anchors": {
+    "A1_sp500_RL_1.7pp_CAGR": {
+      "source": "arXiv:2510.06466 attention-enhanced RL: PPO vs B&H ~1.7pp CAGR, S&P 500 2020-2025",
+      "per_bar_effect": 1.940639269406393e-06,
+      "ETHUSDT": {
+        "n_required_bars": 21950667,
+        "n_required_years": 2506,
+        "power_at_this_n": 0.7323,
+        "type_S": 0.0,
+        "type_M_factor": 1.17
+      },
+      "BNBUSDT": {
+        "n_required_bars": 64940797,
+        "n_required_years": 7413,
+        "power_at_this_n": 0.323,
+        "type_S": 0.0008,
+        "type_M_factor": 1.74
+      }
+    },
+    "A2_crypto_10pp_CAGR": {
+      "source": "order-of-magnitude anchor for published positive crypto-RL results (e.g. arXiv:2310.09462 CRN-PPO, positive ROI on ETH vs negative B&H); stated assumption",
+      "per_bar_effect": 1.1415525114155251e-05,
+      "ETHUSDT": {
+        "n_required_bars": 634375,
+        "n_required_years": 72,
+        "power_at_this_n": 1.0,
+        "type_S": 0.0,
+        "type_M_factor": 1.0
+      },
+      "BNBUSDT": {
+        "n_required_bars": 1876790,
+        "n_required_years": 214,
+        "power_at_this_n": 1.0,
+        "type_S": 0.0,
+        "type_M_factor": 1.0
+      }
+    }
+  }
+}

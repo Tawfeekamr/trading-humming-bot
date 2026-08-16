@@ -143,7 +143,7 @@ benefit is **pair-dependent and not established overall**.
 > **PARTIALLY SUPERSEDED (B2.3, B2.8, B3.6):** the 'PPO ~= fold-RF on
 > pooled returns: no edge either direction' claim below was withdrawn
 > and replaced by the underpowered-design statement (MDE 60-103%
-> cumulative; achieved power 6-7%); 'parity' phrasing is unsupported.
+> cumulative; ~~achieved power 6-7%~~ retracted B10 as retrospective power); 'parity' phrasing is unsupported.
 
 
 **Now supported by committed evidence:**
@@ -276,7 +276,7 @@ Using the actual per-bar series and the same Newey-West HAC variance
 |---|---|---|
 | observed cumulative diff (PPO−RF) | +9.2% | −12.0% |
 | **MDE at 80% power** | **59.7% cumulative** | **102.7% cumulative** |
-| achieved power at observed diff | 7.2% | 6.2% |
+| ~~achieved power at observed diff~~ ~~7.2%~~ ~~6.2%~~ | RETRACTED (B10 T1): retrospective power, one-to-one with the p-value (Hoenig & Heisey 2001) |
 | n required for observed diff | 180,943 bars = **20.7 years** | 314,103 bars = **35.9 years** |
 | MaxDD CI half-width (MDE-equiv) | 0.216 | 0.271 |
 
@@ -886,8 +886,9 @@ only).
 **MDE (compounded conversion (1+δ)^n−1):**
 - ETH: observed +9.22 → +9.66pp; MDE 59.7 → **81.7pp**
 - BNB: observed −12.04 → −11.34pp; MDE 102.7 → **179.3pp**
-- Power (7.2%/6.2%) and required n (20.7y/35.9y) unchanged — per-bar
-  quantities. Underpowering STRENGTHENED.
+- ~~Power (7.2%/6.2%)~~ RETRACTED (B10 T1: retrospective). ~~Required n
+  (20.7y/35.9y)~~ retracted as observed-anchored; replaced by
+  literature-anchored figures (B10). Underpowering STRENGTHENED.
 
 **MaxDD (pooled-concatenation → per-fold distributions, median headline):**
 - ETH: PPO 0.165 → **0.032** (folds .077/.008/.014/.049/.120/.007); RF 0.247 → 0.107; TA 0.511 → 0.195
