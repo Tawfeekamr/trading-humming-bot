@@ -1,0 +1,182 @@
+[
+  {
+    "pair": "ETHUSDT",
+    "fold": 0,
+    "seed": 42,
+    "trained_reward": 0.0066,
+    "flat_reward": 0.1184,
+    "diff_trained_minus_flat": -0.1118,
+    "flat_outscored": true
+  },
+  {
+    "pair": "ETHUSDT",
+    "fold": 0,
+    "seed": 7,
+    "trained_reward": -0.0397,
+    "flat_reward": 0.1184,
+    "diff_trained_minus_flat": -0.158,
+    "flat_outscored": true
+  },
+  {
+    "pair": "ETHUSDT",
+    "fold": 0,
+    "seed": 123,
+    "trained_reward": 0.0549,
+    "flat_reward": 0.1184,
+    "diff_trained_minus_flat": -0.0635,
+    "flat_outscored": true
+  },
+  {
+    "pair": "ETHUSDT",
+    "fold": 0,
+    "seed": 2024,
+    "trained_reward": -0.0722,
+    "flat_reward": 0.1184,
+    "diff_trained_minus_flat": -0.1905,
+    "flat_outscored": true
+  },
+  {
+    "pair": "ETHUSDT",
+    "fold": 0,
+    "seed": 999,
+    "trained_reward": -0.0889,
+    "flat_reward": 0.1184,
+    "diff_trained_minus_flat": -0.2073,
+    "flat_outscored": true
+  },
+  {
+    "pair": "ETHUSDT",
+    "fold": 3,
+    "seed": 42,
+    "trained_reward": -0.0427,
+    "flat_reward": 0.0529,
+    "diff_trained_minus_flat": -0.0956,
+    "flat_outscored": true
+  },
+  {
+    "pair": "ETHUSDT",
+    "fold": 3,
+    "seed": 7,
+    "trained_reward": 0.0167,
+    "flat_reward": 0.0529,
+    "diff_trained_minus_flat": -0.0362,
+    "flat_outscored": true
+  },
+  {
+    "pair": "ETHUSDT",
+    "fold": 3,
+    "seed": 123,
+    "trained_reward": -0.1944,
+    "flat_reward": 0.0529,
+    "diff_trained_minus_flat": -0.2473,
+    "flat_outscored": true
+  },
+  {
+    "pair": "ETHUSDT",
+    "fold": 3,
+    "seed": 2024,
+    "trained_reward": -0.1451,
+    "flat_reward": 0.0529,
+    "diff_trained_minus_flat": -0.198,
+    "flat_outscored": true
+  },
+  {
+    "pair": "ETHUSDT",
+    "fold": 3,
+    "seed": 999,
+    "trained_reward": -0.0342,
+    "flat_reward": 0.0529,
+    "diff_trained_minus_flat": -0.087,
+    "flat_outscored": true
+  },
+  {
+    "pair": "BNBUSDT",
+    "fold": 0,
+    "seed": 42,
+    "trained_reward": -0.3267,
+    "flat_reward": -0.0364,
+    "diff_trained_minus_flat": -0.2903,
+    "flat_outscored": true
+  },
+  {
+    "pair": "BNBUSDT",
+    "fold": 0,
+    "seed": 7,
+    "trained_reward": -0.0604,
+    "flat_reward": -0.0364,
+    "diff_trained_minus_flat": -0.024,
+    "flat_outscored": true
+  },
+  {
+    "pair": "BNBUSDT",
+    "fold": 0,
+    "seed": 123,
+    "trained_reward": -0.2601,
+    "flat_reward": -0.0364,
+    "diff_trained_minus_flat": -0.2237,
+    "flat_outscored": true
+  },
+  {
+    "pair": "BNBUSDT",
+    "fold": 0,
+    "seed": 2024,
+    "trained_reward": -0.1391,
+    "flat_reward": -0.0364,
+    "diff_trained_minus_flat": -0.1027,
+    "flat_outscored": true
+  },
+  {
+    "pair": "BNBUSDT",
+    "fold": 0,
+    "seed": 999,
+    "trained_reward": -0.1481,
+    "flat_reward": -0.0364,
+    "diff_trained_minus_flat": -0.1118,
+    "flat_outscored": true
+  },
+  {
+    "pair": "BNBUSDT",
+    "fold": 3,
+    "seed": 42,
+    "trained_reward": -0.146,
+    "flat_reward": 0.0801,
+    "diff_trained_minus_flat": -0.2261,
+    "flat_outscored": true
+  },
+  {
+    "pair": "BNBUSDT",
+    "fold": 3,
+    "seed": 7,
+    "trained_reward": -0.507,
+    "flat_reward": 0.0801,
+    "diff_trained_minus_flat": -0.587,
+    "flat_outscored": true
+  },
+  {
+    "pair": "BNBUSDT",
+    "fold": 3,
+    "seed": 123,
+    "trained_reward": 0.0415,
+    "flat_reward": 0.0801,
+    "diff_trained_minus_flat": -0.0385,
+    "flat_outscored": true
+  },
+  {
+    "pair": "BNBUSDT",
+    "fold": 3,
+    "seed": 2024,
+    "trained_reward": -0.066,
+    "flat_reward": 0.0801,
+    "diff_trained_minus_flat": -0.1461,
+    "flat_outscored": true
+  },
+  {
+    "pair": "BNBUSDT",
+    "fold": 3,
+    "seed": 999,
+    "trained_reward": 0.0944,
+    "flat_reward": 0.0801,
+    "diff_trained_minus_flat": 0.0143,
+    "flat_outscored": false
+  }
+]
