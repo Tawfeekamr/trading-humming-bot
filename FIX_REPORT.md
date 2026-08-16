@@ -850,3 +850,119 @@ finding it is.
 
 **The code is frozen. No training, evaluation, or recomputation will be
 performed. All remaining work is documentation.**
+
+---
+
+# Batch 7 — Recomputation under corrected definitions (2026-08-16)
+
+Freeze lifted for RECOMPUTATION ONLY (no retraining, no policy
+re-evaluation; every number from the committed per-bar CSVs), in
+response to an independent review. Task 1 was a verification gate.
+
+## B7.1 Task 1 — verification: DEFECT CONFIRMED
+
+| pair | strat | stored | arithmetic | compounded | stored matches |
+|---|---|---|---|---|---|
+| ETH | ppo | −0.1310 | −0.1310 | −0.1278 | ARITHMETIC |
+| ETH | rf | −0.2232 | −0.2232 | −0.2117 | ARITHMETIC |
+| ETH | ta | +0.4483 | +0.4483 | +0.3797 | ARITHMETIC |
+| BNB | ppo | −0.2902 | −0.2902 | −0.2590 | ARITHMETIC |
+| BNB | rf | −0.1698 | −0.1698 | −0.2025 | ARITHMETIC |
+| BNB | ta | +0.0378 | +0.0378 | **−0.0427** | ARITHMETIC |
+
+All six stored values are arithmetic sums. The review's prediction
+reproduced exactly: BNB buy-and-hold +3.78% stored vs **−4.27%**
+compounded — a sign reversal. Code confirmed at the cited lines:
+`evaluation_report.py:54` (`np.sum(returns)`, the walk-forward source)
+vs `evaluate.py:301` (equity-curve compounded, single-window path
+only).
+
+## B7.2 Every changed number (before → after)
+
+**Total returns (now compounded, canonical):**
+- ETH: PPO −13.10% → **−12.78%** | RF −22.32% → **−21.17%** | B&H +44.83% → **+37.97%**
+- BNB: PPO −29.02% → **−25.90%** | RF −16.98% → **−20.25%** | B&H +3.78% → **−4.27% (SIGN FLIP)**
+
+**MDE (compounded conversion (1+δ)^n−1):**
+- ETH: observed +9.22 → +9.66pp; MDE 59.7 → **81.7pp**
+- BNB: observed −12.04 → −11.34pp; MDE 102.7 → **179.3pp**
+- Power (7.2%/6.2%) and required n (20.7y/35.9y) unchanged — per-bar
+  quantities. Underpowering STRENGTHENED.
+
+**MaxDD (pooled-concatenation → per-fold distributions, median headline):**
+- ETH: PPO 0.165 → **0.032** (folds .077/.008/.014/.049/.120/.007); RF 0.247 → 0.107; TA 0.511 → 0.195
+- BNB: PPO 0.293 → **0.053** (folds .190/.018/.033/.105/.073/.013); RF 0.426 → 0.117; TA 0.503 → 0.198
+
+**MaxDD-diff bootstrap (fold-cluster resampling replaces block-spanning pooled):**
+- ETH: est −0.0816 [−0.342, +0.090] → est −0.0702 **[−0.121, −0.020] — now excludes zero**
+- BNB: est −0.1338 [−0.381, +0.161] → est −0.0539 [−0.138, +0.022] — still straddles
+
+**Retracted (marked in place):** grid ceiling diagnostic (73–83% of
+ceiling; 41–43% ≥90% of max) — denominator was an accounting
+convention, grid inventory is uncapped (`env.py:475-484`).
+
+## B7.3 Directional conclusion, per pair
+
+- **ETH:** unchanged — no policy beats B&H (+37.97% vs −21.17%/−12.78%).
+- **BNB:** unchanged in direction, sharpened in substance — B&H is now
+  NEGATIVE (−4.27%) and both policies still lose to it; additionally
+  the fold-clustered MaxDD CI on ETH now excludes zero (PPO's per-fold
+  drawdown advantage is consistently signed on ETH only), while the
+  B2.2 exposure-matching result (worse than capital-matched random
+  entry on both pairs) still governs whether any of that is skill.
+
+## B7.4 Withdrawal diagnosis — restated on four diagnostics
+
+The position-ceiling diagnostic is RETRACTED (B7 task 5): the
+diagnostic's denominator was an accounting convention; grid inventory
+is effectively unbounded. **Direction: the agent had MORE deployable
+capacity than assumed and used LESS — the correction STRENGTHENS the
+withdrawal conclusion.** The diagnosis now rests on: (1) flat
+outscores trained in 19/20 cells; (2) action distribution 41.9%/45.8%
+flat vs 0.2%/0.0% untrained; (3) reward decomposition; (4) grid
+structural dilution — re-examined and retained with a corrected
+mechanism (inventory stays small via sell-level realization and anchor
+re-deployment, not any cap).
+
+## B7.5 Disclosures added
+
+1. Inferential-unit limitation (5.3 item 7): per-bar unit vs a
+   procedure evaluated 6 times; fold-clustered effective n≈6; true
+   power LOWER than reported; underpowering finding STRONGER.
+2. Block-length claim corrected: `_heuristic_block_length` (length-only
+   rule), Politis-White NOT implemented; intervals conditional on the
+   heuristic choice. Report labels updated, old labels retained
+   superseded.
+3. Reward scoped unusually punitive: fee double-count verified and
+   quoted (`env.py:333-334` equity, `:355-357` reward, code comment
+   calls it amplification). Withdrawal claim qualified in 3.1, 4.1,
+   5.3-6a: licenses "this specification produces abstention", NOT "RL
+   generally learns abstention".
+4. Training-window asymmetry: PPO fold-0 4,344 vs RF 4,320 bars
+   (month rounding); OOS boundary verified to hold.
+5. Provenance commits diverge; diffed (evaluation/reporting code only)
+   — semantically identical for training/evaluation; single-snapshot
+   provenance not demonstrated.
+6. "Untrained policy" renamed from "randomly-initialised"; isolates
+   learned-vs-initial behaviour, not architecture bias.
+7. Two bootstrap CIs labelled (IID per-fold vs fold-cluster risk CIs).
+8. Embargo restated as approximate decay tolerance (ADX/MACD
+   infinite-support; warmup can reach ~30 bars past the boundary).
+
+## B7.6 The B2.1 contiguity claim — corrected
+
+Marked SUPERSEDED at source: the six test windows are separated by
+**1,440-bar (~60-day) gaps** (verified); "contiguous chronological
+segments" was FALSE. The additive-vs-multiplicative diagnosis stands;
+pooled-by-concatenation aggregation does not. Superseded by per-fold
+distributions + fold-cluster bootstrap (B7.2). Pooled HAC statistic
+RETAINED with an explicit descriptive-only caveat (lags 1–9 cross
+60-day gaps); no within-fold replacement computed — that estimand
+decision is deferred per Task 6.
+
+---
+
+## CODE RE-FROZEN
+
+**The code is re-frozen. Batch 7 recomputation is complete; no further
+training, evaluation, or recomputation will be performed.**
