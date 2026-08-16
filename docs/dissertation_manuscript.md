@@ -209,6 +209,33 @@ Four of the eight **flipped a conclusion**; these are marked. The full
 audit trail is FIX_REPORT.md (batches 1-3); every figure below is copied
 from it.
 
+**Summary table** (detail in items 1-8 below; "flipped" = the correction
+reversed a stated conclusion, not merely a number). SELF = found by this
+project's own corrective batches; **IND. REVIEW** = found by the
+independent review that motivated Batch 7 — the distinction is itself
+evidence for this dissertation's argument about the limits of
+self-checking.
+
+| # | Defect | Effect on the number | Flipped? | Caught by | Detail |
+|---|---|---|---|---|---|
+| 1 | Boundary warmup (env default 50 inside 100-bar prefix) | ~49 train-period bars entered "OOS" series; comparators misaligned | no | SELF (B1) | item 1 |
+| 2 | Zero embargo | test features computable from train bars | no | SELF (B1) | item 2 |
+| 3 | Non-fold-pure RF baseline | early folds scored by later-trained model | no | SELF (B1) | item 3 |
+| 4 | Mislabelled "DM" statistic | reported stat untraceable to code | claim withdrawn | SELF (B1) | item 4 |
+| 5 | Additive MaxDD equity | overstated drawdown (TA 0.353→0.511) | **YES** | SELF (B2) | item 5 |
+| 6 | Invested-Sharpe annualisation | overstated ratio by sqrt(1/f) | no (artifact) | SELF (B2) | item 6 |
+| 7 | Conflated exposure definitions | baselines matched on different quantities | **YES** (ETH verdict reversed) | SELF (B2) | item 7 |
+| 8 | Overlapping-window cost sum | 2,243pp impossible vs +38% window | **YES** (magnitude) | SELF (B3) | item 8 |
+| 9 | Single-seed reliance | 27pp within-fold swing hidden | **YES** | SELF (B2) | §4.3.2 |
+| 10 | Arithmetic (uncompounded) total return | BNB B&H sign flip +3.78→−4.27% | **YES** | **IND. REVIEW** (B7) | item 5n / §3.6.1 |
+| 11 | Pooling across 1,440-bar fold gaps | MaxDD inflated up to 5.5x; HAC/bootstrap joins | **YES** | **IND. REVIEW** (B7) | §3.6.1 |
+| 12 | Uncapped grid "ceiling" denominator | capacity diagnostic meaningless | strengthens finding | **IND. REVIEW** (B7) | §4.1 |
+| 13 | Fee double-count in reward | reward more punitive than designed | scopes finding | **IND. REVIEW** (B7) | §3.1 |
+| 14 | Length-only "Politis-White" block choice | interval widths conditional on heuristic | label fixed | **IND. REVIEW** (B7) | §5.3-11 |
+
+Six of fourteen were found only by independent review — including the
+two that invalidated headline numbers after five self-directed passes.
+
 1. **Evaluation-boundary defect.** *Defect:* the environment's default
    warmup (50 bars) was applied inside a 100-bar warmup-prefixed test
    frame, so PPO/RF return series began 49 bars before the declared
