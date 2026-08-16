@@ -69,10 +69,10 @@ Empirical results are reported from a corrected walk-forward evaluation protocol
   - [3.5 Specialized Execution Engines & Geometric Grid Spacing](#35-specialized-execution-engines--geometric-grid-spacing)
   - [3.6 Evaluation Failure Modes and Their Effect on Inference](#36-evaluation-failure-modes-and-their-effect-on-inference)
 - [Chapter 4: Empirical Results & Hypothesis Testing](#chapter-4-empirical-results--hypothesis-testing)
-  - [4.1 Master Performance Benchmark Table (Corrected Protocol)](#41-master-performance-benchmark-table)
-  - [4.2 Statistical Hypothesis Testing and Power](#42-statistical-hypothesis-testing)
-  - [4.3 Protocol Corrections](#43-protocol-corrections)
-  - [4.4 Why the Learned Router Abstains: Reward Decomposition](#44-why-the-learned-router-abstains-reward-decomposition)
+  - [4.1 The Learned Policy Is Abstention](#41-the-learned-policy-is-abstention)
+  - [4.2 Master Performance Benchmark Table (Corrected Protocol)](#42-master-performance-benchmark-table)
+  - [4.3 Statistical Hypothesis Testing and Power](#43-statistical-hypothesis-testing)
+  - [4.4 Protocol Corrections](#44-protocol-corrections)
   - [4.5 Regime-Signal Economics](#45-regime-signal-economics)
 - [Chapter 5: Conclusion & Future Research](#chapter-5-conclusion--future-research)
   - [5.1 Summary of Findings](#51-summary-of-findings)
@@ -139,7 +139,7 @@ $$\text{State Vector: } s_t = \Big( [X_{t,1}, \dots, X_{t,14}], I_t, U_t, \Delta
 
 $$\text{Reward Function (implemented): } r_t = \underbrace{(R^{eq}_t - R^{bh}_t)}_{\text{excess over buy\&hold}} - \underbrace{f \cdot \text{Turnover}_t}_{\text{fee}} - \underbrace{\lambda \cdot \Delta DD_t}_{\text{drawdown step}}, \quad \lambda = 0.5$$
 
-*Note: this reward is central to the findings — Chapter 4.4 shows its
+*Note: this reward is central to the findings — Chapter 4.1 shows its
 drawdown term rivals the entire PnL term and that a permanently-flat
 policy outscores the trained policy, i.e. abstention is optimal under
 this specification. The earlier draft's generic form (with a shaping
@@ -174,7 +174,7 @@ $$\text{ECE} = \sum_{b=1}^B \frac{|B_b|}{N} \left| \text{acc}(B_b) - \text{conf}
 *(No calibration figure is reported: the previously reported ECE = 0.03
 had no retained, traceable artifact and remains withdrawn. Classifier
 quality is instead evidenced by OOS now-cast accuracy — 0.80–0.87 per
-asset — with the caveat of §4.5 that accuracy did not translate into
+asset — with the caveat of Section 4.5 that accuracy did not translate into
 gating value.)*
 
 ## 3.5 Asymmetric & Geometric Grid Spacing
@@ -270,7 +270,7 @@ from it.
    *Effect:* **CONCLUSION FLIP** on the magnitude (the direction of the
    argument survives; the number did not).
 
-A ninth finding — single-seed reliance — is documented in 4.2.2 rather
+A ninth finding — single-seed reliance — is documented in 4.3.2 rather
 than here because it was not present in any pre-audit report; it is a
 new result of the corrected protocol, not a correction of one. It also
 flipped a conclusion: the paired statistic crosses zero across seeds
@@ -290,7 +290,38 @@ drawdowns. The full audit trail - per-bar timestamped return series,
 per-fold model provenance manifests, run manifest, and three corrective
 batches of protocol fixes - is committed alongside this manuscript.
 
-## 4.1 Master Performance Benchmark Table
+## 4.1 The learned policy is abstention
+
+**The decisive comparison: a permanently-flat policy scores -0.448
+(ETH) / -0.038 (BNB) versus the trained agent's -0.994 / -0.854 over
+identical timestamps.** Doing nothing outscores the learned policy on
+both assets: the reward function does not distinguish the trained
+policy from abstention, and the optimal response to it is
+near-abstention. The routing question the experiment intended to ask is
+not the one the reward answers. PPO's 4.3%/5.2% capital-weighted
+exposure (vs 21.1%/60.5% for the supervised baseline) is therefore
+**learned withdrawal, not a configuration ceiling**, established by
+five diagnostics:
+
+1. **Action distribution.** The trained policy selects FLAT on
+   41.9%/45.8% of steps versus **0.2%/0.0% for a randomly-initialised
+   policy** - abstention was learned, not initialised.
+2. **Non-binding size ceilings.** Available maximum is 67-100% of
+   equity (`max_position_pct=0.667`); when active, the agent uses
+   73-83% of that ceiling, with 41-43% of active steps at >=90% of
+   max. The ceiling is not the constraint - the frequency of acting
+   is.
+3. **Reward decomposition** (lambda = 0.5, `EnvConfig.lambda_dd`): the
+   drawdown-penalty term contributes 0.310/0.401 to total reward
+   against a PnL term of -0.579/-0.328 - the penalty rivals the entire
+   PnL term.
+4. **Structural amplifier.** Capital-weighted exposure (4-5%) is far
+   below time-in-market (54-58%) because the grid engine is counted
+   "deployed" on bars where it holds zero inventory - the learned
+   withdrawal is compounded by an accounting asymmetry between the two
+   exposure definitions (Section 3.6, item 7).
+
+## 4.2 Master Performance Benchmark Table
 
 **Corrected protocol** (pooled over 6 folds per asset; n = 4,314 hourly bars each):
 
@@ -320,9 +351,9 @@ exposure-matched random distribution on both assets.
 
 The previously reported table (Sharpe 1.85, MaxDD -0.4%, from the
 single-window June-July 2026 benchmark under the contaminated protocol)
-is withdrawn; see 4.3.
+is withdrawn; see Section 3.6.
 
-## 4.2 Statistical Hypothesis Testing
+## 4.3 Statistical Hypothesis Testing
 
 The implemented statistic is a **paired mean-difference test on realised
 per-bar returns with Newey-West HAC standard errors** (lag by the standard
@@ -338,7 +369,7 @@ earlier draft mislabelled it as such.
 Stationary-bootstrap 95% CIs for the MaxDD difference (PPO - RF): ETH
 [-0.342, +0.090]; BNB [-0.381, +0.161] - both straddle zero.
 
-### 4.2.1 Statistical power: the null is uninterpretable, not confirmed
+### 4.3.1 Statistical power: the null is uninterpretable, not confirmed
 
 The test is **underpowered by an order of magnitude**. Using the same HAC
 variance estimator:
@@ -355,7 +386,7 @@ variance estimator:
 differences far larger than the one observed.* CH3's "non-significance is
 a valid finding" holds only in this weaker, power-qualified form.
 
-### 4.2.2 Seed variance dominates the method difference
+### 4.3.2 Seed variance dominates the method difference
 
 Five PPO seeds (folds 0 and 3, both assets) swing cumulative return by up
 to **27pp within a single fold** (BNB fold 3: -22.99% for seed 7 vs
@@ -366,32 +397,12 @@ method-level claim in either direction. *(Scope: the seed sweep covers
 folds 0 and 3 only; its figures are not comparable to the six-fold pooled
 table in 4.1.)*
 
-## 4.3 Protocol corrections
+## 4.4 Protocol corrections
 
 The eight evaluation failure modes underlying this chapter — their
 mechanisms, before/after figures, and which of them flipped a
 conclusion — are documented in Section 3.6 as part of the
 methodological contribution.
-
-## 4.4 Why the learned router abstains: reward decomposition
-
-PPO's 4.3%/5.2% capital-weighted exposure (vs 21.1%/60.5% for the
-supervised baseline) is **learned withdrawal, not a configuration
-ceiling**:
-
-- Action distribution: the trained policy selects FLAT on 41.9%/45.8% of
-  steps versus **0.2%/0.0% for a randomly-initialised policy** -
-  abstention was learned. When active, the agent uses 73-83% of its
-  available size ceiling (41-43% of active steps at >=90% of max), so the
-  ceiling is not binding.
-- Reward decomposition (lambda = 0.5, `EnvConfig.lambda_dd`): the
-  drawdown-penalty term contributes 0.310/0.401 to total reward against a
-  PnL term of -0.579/-0.328 - the penalty rivals the entire PnL term.
-- **A permanently-flat policy scores -0.448/-0.038 versus the trained
-  policy's -0.994/-0.854**: the reward function does not distinguish the
-  learned policy from doing nothing. The optimal response to this reward
-  is near-abstention; the routing question the experiment intended to
-  ask is not the one the reward answers.
 
 ## 4.5 Regime-signal economics
 
@@ -478,7 +489,7 @@ answer to its research question is a **well-evidenced negative result**:
 4. **Exposure-fair benchmarking.** Method comparisons should hold
    capital-weighted exposure constant across arms, or report
    exposure-normalised returns as a descriptive control, as demonstrated
-   in §4.1.
+   in Section 4.2.
 
 ---
 
