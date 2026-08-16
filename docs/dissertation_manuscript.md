@@ -617,21 +617,57 @@ answer to its research question is a **well-evidenced negative result**:
 
 1. A production multi-engine trading platform deployed on AWS EC2
    (Tokyo), with a live ML regime pipeline (per-pair calibrated
-   classifiers, immutable provenance manifests) feeding a Rust execution
+   classifiers, immutable provenance manifests) feeding a Rust trading
    engine.
-2. A corrected walk-forward evaluation protocol — timestamp-aligned
-   comparators, lookback-sized embargo (70 bars), fold-pure baselines,
-   pinned data windows, canonical drawdown definitions, exposure-matched
-   random baselines, power analysis, seed sensitivity — with the full
-   audit trail (per-bar return series, provenance manifests, run
-   manifests) committed as evidence. This protocol is itself a
-   contribution: it is what turned plausible-but-wrong positive numbers
-   into an honest negative result across three corrective batches.
-3. A causal diagnosis of reward misspecification in RL trading research:
-   a drawdown penalty of the form implemented here makes abstention
-   optimal, and the failure is detectable *before* deployment by
-   comparing the trained policy's reward against a permanently-flat
-   policy — a cheap, transferable diagnostic.
+
+2. A corrected walk-forward evaluation protocol with the full audit
+   trail (per-bar return series, provenance manifests, run manifests,
+   seven-batch correction record) committed as evidence. Its six
+   transferable diagnostics, each with its cost and what it would have
+   caught here:
+
+   a. **The flat-policy floor.** Compare any trained policy against
+      permanent abstention under the same reward before concluding it
+      learned anything. Cost: one line of computation over the
+      evaluation rollouts. Would have caught: the abstention result
+      before any performance claim was made.
+   b. **Reward-component decomposition.** Report the magnitude of each
+      reward term, not just the total, so a dominating penalty is
+      visible. Cost: instrumenting the reward (already summed per
+      step). Would have caught: the drawdown penalty rivaling the
+      entire PnL term, and the fee double-count.
+   c. **Capital-exposure matching.** Match baselines on
+      capital-weighted exposure, not time-in-market, and report both.
+      Cost: one env field (per-bar position notional). Would have
+      caught: the exposure-artifact "drawdown advantage" verdicts.
+   d. **Fold-aware pooling.** Never concatenate non-adjacent test
+      windows into a single equity curve or dependence structure.
+      Cost: tracking fold indices (already present). Would have
+      caught: the five-fold MaxDD inflation and the boundary-crossing
+      HAC/bootstrap dependence.
+   e. **Power reporting.** State the minimum detectable effect
+      alongside any null result, and the effective n after clustering.
+      Cost: closed-form from the existing variance estimate. Would
+      have caught: every "parity" statement this report once made.
+   f. **Seed-distribution reporting.** Never report a single-seed RL
+      result. Cost: the training already amortises; reporting is a
+      table. Would have caught: a headline resting on the seed at the
+      unfavourable end of its own distribution.
+
+3. A causal diagnosis scoped precisely: a reward of this form —
+   drawdown penalty at λ=0.5 on top of double-counted transaction
+   costs — makes abstention optimal for THIS specification, detectable
+   *before* deployment by the flat-policy floor. It is a finding about
+   this reward, not a claim that RL generally learns abstention.
+
+**Scope of contribution 2, stated honestly.** Each diagnostic above is
+individually standard practice in an adjacent literature — power
+analysis in clinical trials, seed reporting in deep-RL reproducibility
+work, purged cross-validation in quantitative finance. The claim is
+not that any was invented here. The claim is a documented case study
+in which each one's absence changed a conclusion, with before/after
+evidence, in a domain where their absence is the norm. That is the
+defensible contribution, and it is strong enough.
 
 ## 5.3 Limitations
 
