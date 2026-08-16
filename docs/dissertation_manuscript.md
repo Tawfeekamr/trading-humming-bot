@@ -587,6 +587,15 @@ answer to its research question is a **well-evidenced negative result**:
    deployment is established; the reward misspecification diagnosis is
    made at a single point of the reward's parameter space.
 
+7. **Inferential unit.** The reported pooled paired test treats the
+   per-bar return difference as the unit of observation (n = 4,314),
+   while the method-level claim concerns a *training procedure
+   evaluated six times*. A fold-clustered analysis would have an
+   effective n near 6, so the true power is LOWER than reported, not
+   higher. No replacement p-value is computed here: the appropriate
+   estimand depends on the intended claim and is not specified. This
+   limitation makes the underpowering finding STRONGER, not weaker.
+
 ## 5.4 Future Work
 
 1. **Reward redesign before scale-up.** The drawdown penalty must be

@@ -74,11 +74,15 @@ def invested_bars_sharpe(returns: np.ndarray, bars_per_year: int = 8760) -> tupl
 
 
 
-def _autoblock_length(x: np.ndarray) -> int:
-    """Politis & White (2004) automatic block-length choice (simplified
-    median-based rule): B = 1.19 * (sqrt(n) * c)^... — practical shortcut:
-    B = ceil(4 * (n/100)^(2/9)) matches the Newey-West lag rule and is the
-    commonly used default for hourly financial returns."""
+def _heuristic_block_length(x: np.ndarray) -> int:
+    """LENGTH-ONLY heuristic block choice: ceil(4*(n/100)^(2/9)).
+
+    Renamed from _autoblock_length (batch 7 task 7): this is NOT the
+    Politis-White automatic rule, which inspects the series'
+    autocorrelation structure. This heuristic uses sample length only.
+    Interval widths produced with it are CONDITIONAL on this arbitrary
+    choice; Politis-White was not implemented (would require new
+    computation; the freeze permits definitional fixes only)."""
     n = len(x)
     if n < 20:
         return 1
@@ -109,7 +113,7 @@ def stationary_bootstrap_ci(
         return 0.0, 0.0, 0.0, 0
 
     point = float(stat_fn(a, b))
-    block = _autoblock_length(a)
+    block = _heuristic_block_length(a)
     rng = np.random.default_rng(seed)
 
     stats = np.empty(n_boot)

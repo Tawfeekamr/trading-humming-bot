@@ -381,7 +381,8 @@
         }
       },
       "sortino_diff_ppo_minus_rf": {
-        "bootstrap": "politis-romano stationary",
+        "bootstrap": "heuristic block bootstrap (block=10 by length-only rule ceil(4(n/100)^(2/9)); NOT Politis-White; intervals conditional on this choice)",
+        "bootstrap_label_superseded": "politis-romano stationary",
         "ci95": [
           -1.6442478413616413,
           2.566535340704063
