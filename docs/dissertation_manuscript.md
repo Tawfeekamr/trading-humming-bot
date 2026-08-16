@@ -780,6 +780,35 @@ answer to its research question is a **well-evidenced negative result**:
 
 ## 5.2 Engineering & Scientific Contributions
 
+**Positioning: a disconfirming case.** The single-system design will be
+challenged on generalisability; the defensible position is stated
+explicitly rather than left implicit. Flyvbjerg (2006, *Qualitative
+Inquiry* 12(2):219-245) documents the misconception that single cases
+cannot contribute to scientific development; Tsang (2014, *IJMR*
+16(4):369-383) identifies case studies' advantages in theoretical
+generalisation and in identifying disconfirming cases. This
+dissertation is the latter: the field's prevailing assumption is that
+RL routing adds value (4.6); this documents an instance where it does
+not, with a causal explanation and a traceable evidence chain.
+
+Against the standard case-study rigour criteria: systematic method
+application (the corrected protocol, 3.6); documented data collection
+and analysis (per-bar CSVs, provenance manifests, run manifest); a
+chain of evidence with traceable inferences (REPRODUCE.md's
+claim-to-evidence map; every headline number re-derivable from
+committed raw data in five minutes); and consideration of alternative
+explanations (the four withdrawal diagnostics of 4.1 — action
+distribution, reward decomposition, untrained-policy comparison,
+structural dilution — each tests an alternative: initialisation bias,
+missing incentive, capacity limits, accounting artifact).
+
+**Limitation stated honestly:** one system, one reward, two assets, no
+multi-case design. A multi-case design would require at least: the
+same corrected protocol applied across systems differing in reward
+specification (the fee double-count ablation), asset class, and cost
+model, with seed distributions at each cell — a programme of work,
+not a dissertation chapter.
+
 1. A production multi-engine trading platform deployed on AWS EC2
    (Tokyo), with a live ML regime pipeline (per-pair calibrated
    classifiers, immutable provenance manifests) feeding a Rust trading
