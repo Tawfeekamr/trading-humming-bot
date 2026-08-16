@@ -751,3 +751,82 @@ economic value.
 **The code is now frozen. Batch 5 Task 1 was the final computation; no
 further training, evaluation, or re-computation will be performed.**
 All subsequent work on this project is documentation-only.
+
+---
+
+# Batch 6 (documentation) — Post-freeze cleanup (2026-08-16)
+
+Documentation only. Nothing computed, nothing deleted.
+
+## B6.1 Stray figure in B5.6 — fixed
+
+The incomplete-edit artifact "+3.34%/−0.88% → +3.34%/+3.88%" cleaned to
+the artifact-correct **+3.34%/+3.88%**
+(reports/false_danger_corrected.json: ETH +3.34, BNB +3.88). Confirmed
+fixed; the stray −0.88 no longer appears anywhere in this report.
+
+## B6.2 Primary framing of the withdrawal claim — resolved
+
+The manuscript's Chapter 4 previously opened with the single-seed
+six-fold figure while its own §4.3.2 voids single-seed claims. Resolved
+in `docs/dissertation_manuscript.md` §4.1:
+
+- **PRIMARY claim:** flat outscores trained in **19 of 20 seed-fold-pair
+  cells** (reports/flat_vs_trained_by_seed.json), with the exception
+  stated in the claim itself, not a footnote: **BNB fold 3, seed 999 —
+  trained +0.0944 vs flat +0.0801, margin +0.0143** — and seed 999 is
+  the best BNB seed in the B2.4 sweep (+3.95%): the training exceeds
+  abstention only at its best draw, and then only marginally.
+- The six-fold pooled figures (−0.994/−0.854 vs −0.448/−0.038) DEMOTED
+  to an explicitly labelled illustrative example (seed 42 only;
+  broader fold scope than the sweep; one draw from the seed
+  distribution).
+- Cross-references aligned: the Abstract and Chapter 5.1 finding 3 now
+  lead with the 19-of-20 framing and carry the exception.
+
+## B6.3 Consistency sweep (task 4) — result
+
+1. **Withdrawn-figure grep (manuscript):** zero unmarked instances of
+   Sharpe 1.85, MaxDD −0.4%, DM p=0.14, legacy-RF p-values, 2,243/1,183
+   pp, the n=6 correlations, or "return parity" as an active claim. Two
+   grep hits (p=0.14; 2,243pp) verified by reading to sit inside the
+   §3.6 failure-mode/retraction documentation — correctly marked.
+2. **Banners:** all six present (targets B2.1, B2.2, B2.3/B2.8/B3.6,
+   B2.6, B2.8/B3.6, B3.2) plus the document-top note; every target
+   section exists.
+3. **Traceability after Batch 5:** the multi-seed withdrawal claim
+   cites `reports/flat_vs_trained_by_seed.json` (manuscript §4.1).
+   **Inconsistency found and reported, not fixed:**
+   MANUSCRIPT_REVISION.md (the Batch-4 report) still cites the six-fold
+   figures for the withdrawal claim in its traceability table. That
+   file is a dated historical record of the Batch-4 state and remains
+   accurate as such; the live manuscript is correct. Left as-is
+   deliberately — rewriting a dated report would falsify it.
+4. **Other tracked docs:** rl_walk_forward_results.md body sits under
+   its document-level SUPERSEDED banner; the study planning docs carry
+   superseded-title notes. Clean.
+
+## B6.4 Seed-42 direction-of-bias note — added
+
+Stated explicitly in the manuscript results chapter (§4.3.2 "Direction
+of bias") and in limitations (§5.3 item 3): the main run uses seed 42
+throughout, fixed as the code default before any result was observed
+(`src/rl/agents/ppo_trainer.py:116-119`; `src/rl/evaluate.py:266`);
+across the seed sweep it sits at or near the unfavourable end of its
+cells and is the worst draw in BNB fold 0; the headline figures are
+therefore pessimistic toward the RL agent rather than flattering to it.
+
+## B6.5 Supervisor report — exists
+
+`docs/progress/2026-09_report.md` created: standalone two-page summary
+(research-question move, title change rationale, four audit findings,
+claimed vs withdrawn, what remains). Written for a supervisor who last
+saw the pre-audit framing; the negative result is presented as the
+finding it is.
+
+---
+
+## CODE FROZEN (restated)
+
+**The code is frozen. No training, evaluation, or recomputation will be
+performed. All remaining work is documentation.**
