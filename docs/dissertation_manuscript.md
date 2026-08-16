@@ -67,11 +67,11 @@ Empirical results are reported from a corrected walk-forward evaluation protocol
   - [3.3 Supervised Random Forest Classifier & Isotonic Calibration](#33-supervised-random-forest-classifier--isotonic-calibration)
   - [3.4 Permissibility Gating Matrix & Cross-Asset BTC Risk Gate](#34-permissibility-gating-matrix--cross-asset-btc-risk-gate)
   - [3.5 Specialized Execution Engines & Geometric Grid Spacing](#35-specialized-execution-engines--geometric-grid-spacing)
-  - [3.6 Microstructure Friction Mitigation & AWS EC2 Infrastructure](#36-microstructure-friction-mitigation--aws-ec2-infrastructure)
+  - [3.6 Evaluation Failure Modes and Their Effect on Inference](#36-evaluation-failure-modes-and-their-effect-on-inference)
 - [Chapter 4: Empirical Results & Hypothesis Testing](#chapter-4-empirical-results--hypothesis-testing)
   - [4.1 Master Performance Benchmark Table (Corrected Protocol)](#41-master-performance-benchmark-table)
   - [4.2 Statistical Hypothesis Testing and Power](#42-statistical-hypothesis-testing)
-  - [4.3 Retractions and Protocol Corrections](#43-retractions-and-protocol-corrections)
+  - [4.3 Protocol Corrections](#43-protocol-corrections)
   - [4.4 Why the Learned Router Abstains: Reward Decomposition](#44-why-the-learned-router-abstains-reward-decomposition)
   - [4.5 Regime-Signal Economics](#45-regime-signal-economics)
 - [Chapter 5: Conclusion & Future Research](#chapter-5-conclusion--future-research)
@@ -181,7 +181,103 @@ gating value.)*
 $$\text{Spacing}_n = \text{Base Spacing} \cdot (1 + \alpha)^n, \quad \alpha = 0.10$$
 $$\text{Size}_n = \text{Base Size} \cdot (1 + \beta)^n, \quad \beta = 0.08$$
 
+## 3.6 Evaluation failure modes and their effect on inference
+
+The evaluation protocol used in this dissertation was itself the object of
+three corrective audit batches. This section documents the eight failure
+modes found, the mechanism by which each biases inference, the before/after
+figures, and whether the correction changed a conclusion or only a number.
+Four of the eight **flipped a conclusion**; these are marked. The full
+audit trail is FIX_REPORT.md (batches 1-3); every figure below is copied
+from it.
+
+1. **Evaluation-boundary defect.** *Defect:* the environment's default
+   warmup (50 bars) was applied inside a 100-bar warmup-prefixed test
+   frame, so PPO/RF return series began 49 bars before the declared
+   test boundary while the passive comparator began 100 bars after the
+   frame start. *Mechanism:* train-period bars entered the pooled "OOS"
+   series, and comparators were aligned by array position, not
+   timestamp — pairing bars that occurred up to ~49 hours apart.
+   *Figures:* 769 rows/slice from boundary-49 bars -> 719 rows/slice
+   from the exact first test bar (all 12 slices, both assets).
+   *Effect:* numbers only (the corrected protocol reinforced the null;
+   BNB's statistic flipped sign but remained non-significant).
+
+2. **Zero train/test embargo.** *Defect:* default embargo was 0 bars.
+   *Mechanism:* test-window features (up to 50-bar rolling windows plus
+   exponentially-weighted RSI tails) could be computed from bars inside
+   the training window. *Figures:* embargo now 70 bars
+   (DEFAULT_EMBARGO_BARS); slice count unchanged (6/asset).
+   *Effect:* numbers only.
+
+3. **Non-fold-pure baseline.** *Defect:* one long-window RF artifact
+   scored every fold. *Mechanism:* early test windows were evaluated
+   against a model trained on data including later periods.
+   *Figures:* replaced by 12 fold-specific models with immutable
+   provenance manifests (e.g. ETH fold 0: 2024-07-15 to 2025-01-10,
+   3,610 rows, classes 1592/877/1141). *Effect:* numbers only.
+
+4. **Mislabelled test statistic.** *Defect:* the manuscript reported a
+   squared-error "Diebold-Mariano" result (DM=1.48, p=0.14) that
+   corresponded to no implemented test. *Mechanism:* the reported
+   statistic was untraceable to code. *Figures:* removed entirely;
+   the implemented statistic (paired mean-difference, Newey-West HAC,
+   lag 9 by the standard rule) is now named correctly.
+   *Effect:* conclusion-form only (the claim it supported was
+   withdrawn).
+
+5. **Additive-drawdown MaxDD.** *Defect:* one MaxDD implementation used
+   an additive equity curve (1+cumsum), another multiplicative
+   (cumprod), producing two different numbers for the same series.
+   *Mechanism:* additive cumsum overstates drawdown for large moves.
+   *Figures:* ETH PPO 0.172 -> 0.165; BNB PPO 0.326 -> 0.293;
+   **ETH TA (buy-and-hold) 0.353 -> 0.511**; BNB RF 0.532 -> 0.426.
+   *Effect:* **CONCLUSION FLIP** on the TA/buy-and-hold drawdown
+   magnitude (0.353 to 0.511 changes the reading of B&H risk in the
+   benchmark table); canonical definition now multiplicative,
+   pooled-by-concatenation.
+
+6. **Invested-bars Sharpe annualisation.** *Defect:* the invested-bars
+   Sharpe applied the full-year factor sqrt(8760) to a subset of bars.
+   *Mechanism:* overstates the ratio by sqrt(1/f) (2.6x at f=0.15).
+   *Figures:* ETH PPO -4.47 -> -1.75; BNB PPO -7.81 -> -3.05;
+   corrected values equal the all-bars Sharpe exactly, as required for
+   zero-flat-bar series. *Effect:* numbers only (the "collapse" was an
+   artifact).
+
+7. **Conflated exposure definitions.** *Defect:* three quantities were
+   used interchangeably — time-in-market (engine != flat), non-zero
+   return bars, and capital-weighted exposure (mean |position|/equity)
+   — and the exposure-matched baselines were matched on different
+   definitions. *Mechanism:* grid bars with zero inventory count as
+   "deployed" in time-in-market but hold no capital, so a "58%
+   exposure" policy can be a 4.3%-exposure policy. *Figures:* ETH PPO
+   time-in-market 58.1% vs capital-weighted 4.3%; baselines re-matched
+   on capital: random-entry median MaxDD 0.029 (ETH) / 0.035 (BNB) vs
+   PPO's 0.165 / 0.293. *Effect:* **CONCLUSION FLIP** — the ETH
+   "drawdown advantage survives exposure matching" verdict reversed to
+   PPO at the 100th percentile (worst) on both assets.
+
+8. **Overlapping-window opportunity cost.** *Defect:* the false-DANGER
+   cost summed 24-bar forward returns across hourly signal bars, so
+   each price move was counted in up to 24 windows. *Mechanism:*
+   multiply-counting inflates a sum without bound; 2,243pp of
+   "foregone return" on a window where B&H returned +44.8% is
+   impossible as a portfolio cost. *Figures:* ~~2,242.9pp (ETH) /
+   1,183.2pp (BNB)~~ retracted; replaced by per-signal means (+3.34% /
+   +3.88%), non-overlapping 24-bar block gaps (0.96pp / 0.72pp), and
+   the portfolio-level gated-minus-B&H gaps (-67.1pp / -20.8pp).
+   *Effect:* **CONCLUSION FLIP** on the magnitude (the direction of the
+   argument survives; the number did not).
+
+A ninth finding — single-seed reliance — is documented in 4.2.2 rather
+than here because it was not present in any pre-audit report; it is a
+new result of the corrected protocol, not a correction of one. It also
+flipped a conclusion: the paired statistic crosses zero across seeds
+(BNB: -0.92 to +0.80), voiding any single-seed method claim.
+
 ---
+
 
 # Chapter 4: Empirical Results & Hypothesis Testing
 
@@ -270,31 +366,12 @@ method-level claim in either direction. *(Scope: the seed sweep covers
 folds 0 and 3 only; its figures are not comparable to the six-fold pooled
 table in 4.1.)*
 
-## 4.3 Retractions and protocol corrections
+## 4.3 Protocol corrections
 
-Three corrective batches established that previously reported favourable
-numbers were artifacts. Withdrawn or corrected:
-
-1. **Boundary defect** - PPO/RF return series previously included ~49
-   pre-boundary bars per fold while the passive comparator started 100
-   bars later; arrays were compared position-by-position across misaligned
-   timestamps. Fixed: explicit warmup, timestamp inner-join alignment.
-2. **Zero embargo** - now 70 bars (max feature lookback incl. EWM tails).
-3. **Non-fold-pure baseline** - one long-window RF scored all folds; now
-   fold-specific with provenance manifests.
-4. **Mislabelled statistic** - "Diebold-Mariano, DM=1.48, p=0.14"
-   (squared-error loss) corresponded to no implemented test; removed.
-5. **Additive-drawdown MaxDD** - superseded by the multiplicative
-   definition throughout.
-6. **"Sharpe collapse on invested bars"** - was an annualisation artifact
-   (applying sqrt(8760) to a subset of bars); corrected values equal the
-   all-bars Sharpe exactly.
-7. **False-DANGER opportunity cost** - the summed figures (2,243pp /
-   1,183pp) multiply-counted overlapping 24-bar windows and were
-   impossible against B&H +44.8%; replaced by per-signal means (+3.3% /
-   +3.9%), non-overlapping 24-bar block gaps (0.96pp / 0.72pp per block),
-   and the portfolio-level gated-minus-B&H gaps (-67.1pp / -20.8pp).
-8. **n=6 correlations involving -B&H** - mechanically inflated; removed.
+The eight evaluation failure modes underlying this chapter — their
+mechanisms, before/after figures, and which of them flipped a
+conclusion — are documented in Section 3.6 as part of the
+methodological contribution.
 
 ## 4.4 Why the learned router abstains: reward decomposition
 
