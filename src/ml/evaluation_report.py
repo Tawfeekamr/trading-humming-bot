@@ -50,7 +50,14 @@ def _point_metrics(
     fees: float,
     trade_count: int,
 ) -> dict[str, float | int | None]:
-    net_pnl = float(np.sum(returns) - fees)
+    # CANONICAL (batch 7): total return is the COMPOUNDED equity return
+    # prod(1+r)-1, not the arithmetic sum. The previous sum(returns)
+    # overstated gains and understated losses (e.g. BNB buy-and-hold
+    # read +3.78% summed vs -4.27% compounded — a sign reversal).
+    # fees are already embedded in the per-bar returns this function
+    # receives (equity deltas are fee-net), so they are NOT subtracted
+    # again; the old `- fees` double-counted.
+    net_pnl = float(np.prod(1.0 + np.asarray(returns)) - 1.0)
     return {
         "trade_count": int(trade_count),
         "net_pnl": net_pnl,

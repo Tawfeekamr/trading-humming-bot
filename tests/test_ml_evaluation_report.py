@@ -13,8 +13,10 @@ def test_summarize_returns_has_deterministic_metrics_and_confidence_intervals():
         fees=0.01,
     )
     assert result["trade_count"] == 4
-    assert result["net_pnl"] == 0.07
-    assert result["total_return"] == 0.07
+    # Canonical (batch 7) compounded total return: 1.10*0.95*1.02*1.01 - 1.
+    # The old arithmetic value 0.07 is superseded.
+    assert result["net_pnl"] == pytest.approx(1.10 * 0.95 * 1.02 * 1.01 - 1)
+    assert result["total_return"] == pytest.approx(1.10 * 0.95 * 1.02 * 1.01 - 1)
     # Canonical multiplicative MaxDD: equity 1.10 -> 1.10*0.95 = 1.045;
     # peak 1.10, trough 1.045 -> dd = 0.055/1.10... NO: cumprod gives
     # 1.045 at the -5% bar; dd = (1.10-1.045)/1.10 = 0.05/1.10.

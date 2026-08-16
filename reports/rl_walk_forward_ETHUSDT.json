@@ -242,9 +242,18 @@
       "fees": 0.10302787510901763,
       "max_drawdown": 0.16540606421939316,
       "net_pnl": -0.13098926355779017,
+      "per_fold_total_return": [
+        -0.018133,
+        -0.003158,
+        0.018959,
+        -0.032308,
+        -0.109517,
+        0.014834
+      ],
       "profit_factor": 0.7945077626977822,
       "time_in_market": 0.5806675938803895,
-      "total_return": -0.13098926355779017,
+      "total_return": -0.12784502220268557,
+      "total_return_definition": "compounded equity prod(1+r)-1, pooled by concatenation",
       "trade_count": 46
     },
     "ppo_vs_rf": {
@@ -290,9 +299,18 @@
       "fees": 0.22892484427542492,
       "max_drawdown": 0.24696626327504378,
       "net_pnl": -0.22319938131989078,
+      "per_fold_total_return": [
+        -0.132073,
+        0.063412,
+        0.005677,
+        -0.072883,
+        -0.016434,
+        -0.068641
+      ],
       "profit_factor": 0.9001533983175212,
       "time_in_market": 0.614047287899861,
-      "total_return": -0.22319938131989078,
+      "total_return": -0.21168782568380695,
+      "total_return_definition": "compounded equity prod(1+r)-1, pooled by concatenation",
       "trade_count": 136
     },
     "risk_inference": {
@@ -362,9 +380,18 @@
       "fees": 0.0,
       "max_drawdown": 0.5106810037381809,
       "net_pnl": 0.44827863154164993,
+      "per_fold_total_return": [
+        -0.143568,
+        0.696426,
+        0.436306,
+        -0.071109,
+        -0.326599,
+        0.056971
+      ],
       "profit_factor": 1.04266607960257,
       "time_in_market": 1.0,
-      "total_return": 0.44827863154164993,
+      "total_return": 0.3796757301532683,
+      "total_return_definition": "compounded equity prod(1+r)-1, pooled by concatenation",
       "trade_count": 6
     },
     "ta_vs_ml": {
