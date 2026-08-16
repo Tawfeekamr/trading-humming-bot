@@ -1120,3 +1120,79 @@ implemented to limit).
 ## CODE PERMANENTLY FROZEN
 
 **Batch 9 made no code changes. The code is now PERMANENTLY FROZEN.**
+
+---
+
+# Batch 10 — Statistical framing + literature positioning (2026-08-16)
+
+One methodological error corrected; three positioning weaknesses
+addressed. Limited recomputation only where Task 1 required (the
+literature-anchored n-required and the design analysis, both from the
+committed HAC SE — no observed-effect anchoring, no policy evaluation).
+
+## B10.1 Achieved power — RETRACTED everywhere
+
+Reason stated at each site: observed power is a one-to-one function of
+the p-value (Hoenig & Heisey 2001) and adds nothing beyond it; the
+observed-anchored n-required inherits the same circularity. Marked
+struck-through in: manuscript 4.3.1, FIX_REPORT (§1 banner note, B2.3
+table, B7.2 summary), September report (parenthetical note), and
+flagged in reports/mde_power.json (in-file retraction note) and
+REPRODUCE.md (claim 6). MDE retained and verified prospective in code
+(mde_power_report.py:35-41 — variance and n only).
+
+Primary underpowering argument is now the CI width: the fold-clustered
+MaxDD CIs span 0.10–0.16 against effects of 0.05–0.13.
+
+## B10.2 Literature-anchored n-required + design analysis
+
+| anchor | ETH | BNB |
+|---|---|---|
+| 1.7pp/yr (arXiv:2510.06466, S&P attention-RL) | 2,506y | 7,413y |
+| 10pp/yr (crypto-RL order-of-magnitude; stated assumption) | 72y | 214y |
+
+Design analysis (Gelman & Carlin 2014; reports/design_analysis.json):
+at the S&P anchor — power 0.73/0.32, Type S ~0/0.0008, **Type M
+1.17x/1.74x**; at the crypto anchor the design is adequate. Implication
+stated: STRENGTHENS underpowering — when this design fires, its
+significant estimates are inflated ~1.7x.
+
+## B10.3 Positive-result literature — engaged (new §4.6)
+
+Five sources addressed directly (attention-RL positive on S&P;
+Felizardo ESWA crypto; CRN-PPO positive on ETH — a direct inversion;
+CPCV-PPO positive from the same Agarwal-methodology tradition;
+five-PPO-variants-fail WITHOUT costs). Explicit non-claim: no claim
+that RL generally fails at trading. CPCV defended on
+non-exchangeability grounds (with the 3.6.1 defect as evidence that
+implicit exchangeability is consequential) and listed as future work.
+Publication bias noted as field-level observation only, never as a
+defence.
+
+## B10.4 Withdrawal claim narrowed (new §4.7)
+
+Punitive published rewards WITHOUT abstention ⇒ a drawdown penalty
+alone does not cause withdrawal. Revised claim names the
+DOUBLE-COUNTED TRANSACTION COST as the candidate mechanism
+(env.py:333-334 + :354-357); attribution by cross-study comparison,
+not ablation — stated as such. Abstract aligned.
+
+**Title changed:** *"Reward-Induced Abstention and Evaluation
+Blindness in a Reinforcement-Learning Trading System: A
+Corrected-Protocol Case Study"* — names the mechanism and the instance,
+not the field; retitle note records the rationale.
+
+## B10.5 Disconfirming-case positioning (5.2)
+
+Flyvbjerg (2006) + Tsang (2014) cited; contribution framed as a
+disconfirming case against the field's prevailing assumption. Rigour
+criteria mapped: method (3.6), data/analysis documentation, chain of
+evidence (REPRODUCE.md), alternative explanations (the four withdrawal
+diagnostics). Single-case limitation + multi-case requirements stated.
+
+## B10.6 Retrospective sweep (Task 6)
+
+Three findings: (1) B2.3 "MDE-equiv half-width" row retracted
+(retrospective framing; widths survive as evidence); (2) mde_power.json
+retracted fields flagged in-file; (3) seed-sweep paired statistics are
+descriptive point estimates — not retrospective, no action.
