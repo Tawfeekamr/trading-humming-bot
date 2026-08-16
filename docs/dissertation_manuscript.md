@@ -327,11 +327,19 @@ configuration ceiling**, established by five diagnostics:
 1. **Action distribution.** The trained policy selects FLAT on
    41.9%/45.8% of steps versus **0.2%/0.0% for a randomly-initialised
    policy** - abstention was learned, not initialised.
-2. **Non-binding size ceilings.** Available maximum is 67-100% of
-   equity (`max_position_pct=0.667`); when active, the agent uses
-   73-83% of that ceiling, with 41-43% of active steps at >=90% of
-   max. The ceiling is not the constraint - the frequency of acting
-   is.
+2. **~~Non-binding size ceilings~~ (RETRACTED, Batch 7 task 5).**
+   ~~Available maximum is 67-100% of equity (`max_position_pct=0.667`);
+   when active, the agent uses 73-83% of that ceiling, with 41-43% of
+   active steps at >=90% of max.~~ The diagnostic's denominator
+   (5 x grid_level_pct x size_mult x equity) is an ACCOUNTING
+   CONVENTION, not an enforceable ceiling: `src/rl/env.py:475-484`
+   adds inventory on every bar whose range crosses a buy level, with
+   no cumulative cap anywhere in the engine, so grid inventory is
+   effectively unbounded (trend/swing remain capped by
+   `max_position_pct=0.667` at `env.py:79`). **Direction of the
+   correction: the agent had MORE deployable capacity than the
+   diagnostic assumed and used LESS of it — this STRENGTHENS the
+   withdrawal conclusion.**
 3. **Reward decomposition** (lambda = 0.5, `EnvConfig.lambda_dd`): the
    drawdown-penalty term contributes 0.310/0.401 to total reward
    against a PnL term of -0.579/-0.328 - the penalty rivals the entire

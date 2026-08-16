@@ -457,8 +457,17 @@ Available maximum ≈ 67–100% of equity (trend 1.5), 75% (grid 1.5).
 | median | 0.606 | 0.605 |
 | active steps ≥ 90% of max | 41.0% | 42.7% |
 
-When the agent acts, it uses most of its ceiling — 41–43% of active steps
-sit at ≥90% of the maximum. **The ceiling is not binding; the frequency of
+> **RETRACTED (B7 task 5).** The "ceiling" above is an accounting
+> convention, not an enforceable limit: `src/rl/env.py:475-484` adds
+> inventory on every bar whose range crosses a buy level with NO
+> cumulative cap (no max_inventory/inventory_cap exists in the engine),
+> so grid inventory is effectively unbounded. The 73–83% and 41–43%
+> figures are retained struck-through as the trail. **Direction: the
+> agent had MORE deployable capacity than assumed and used LESS — the
+> correction STRENGTHENS the withdrawal conclusion.**
+
+~~When the agent acts, it uses most of its ceiling — 41–43% of active steps
+sit at ≥90% of the maximum.~~ **The ceiling is not binding; the frequency of
 acting is the constraint.**
 
 **4. Reward decomposition** (totals over all folds; λ = 0.5, set at
@@ -590,7 +599,9 @@ PPO sits at the 100th percentile (worst) on both pairs.
 **Supported:**
 - PPO's low exposure is **learned withdrawal plus grid-structure dilution,
   not a configuration ceiling** (B3.1: flat 42–46% learned vs ~0%
-  initialised; ceiling used at 73–83% of max when active; flat policy
+  initialised; ~~ceiling used at 73–83% of max when active~~ (RETRACTED
+  B7 task 5 — grid inventory uncapped, denominator was an accounting
+  convention); flat policy
   out-scores trained policy).
 - The reward (λ=0.5 drawdown penalty) is misspecified for deployment: its
   drawdown term rivals the whole PnL term, and abstention outscores the
