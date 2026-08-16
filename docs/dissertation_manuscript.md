@@ -740,6 +740,53 @@ specifications, not by experiment — stated as such.
 
 ---
 
+## 4.8 An artifact-audit survey of open-source RL-for-trading repositories
+
+The field-prevalence question left open in 5.2 ("is the absence of
+these diagnostics the norm?") was answered empirically. A ten-check
+audit tool was built directly from this dissertation's fourteen
+documented failure modes (each check citing its FIX_REPORT origin),
+validated against this project's own pre- and post-correction
+artifacts (6/8 known defects caught, 0 false positives), and applied
+to public repositories accompanying RL-for-trading work.
+
+**Result.** Of 12 repositories identified, 7 were cloned and examined
+(5 uncloneable: renamed, removed, or unreachable). **None of the 7
+committed the artifacts any audit requires** — per-bar return series,
+fold boundaries, or seed-level metrics. Results are computed in code
+and written at runtime; the evidence does not travel with the
+publication. The artifacts-only tool therefore returned NOT_APPLICABLE
+on 8-9 of its 10 checks for every repository. The two runnable checks:
+seed reporting flagged on all 7 (no seed-level results published as
+artifacts; several trainers default `seed=None`), and retrospective
+power passed on all 7 — by omission, since no repository reports power
+of any kind.
+
+**The revised claim, scoped to what was examined:** among 7
+open-source repositories accompanying RL-for-trading work (a sample
+biased toward transparency — these publish code at all), zero
+published artifacts sufficient to verify a single headline number, and
+zero published seed-level results. This does not establish that
+published analyses omit the diagnostics — it establishes that
+*independent verification of published claims is impossible from what
+is published*, which is the stronger and more actionable finding, and
+the one this dissertation's own evidence chain (REPRODUCE.md) answers.
+
+**Survey limitations, stated plainly:** small sample (7 examined);
+open-source repositories only (published papers without code are less
+auditable still — the bias runs toward the field's more transparent
+work, so these results UNDERSTATE the problem); only the ten checks
+this tool implements; and four of the seven codebases could not be
+executed at all (unpinned dependencies, no bundled data, undocumented
+entry points), which is itself a reproducibility finding. No claims
+are made about any specific repository's conclusions; aggregate counts
+only, with repositories acknowledged in the tool repository's appendix.
+
+The tool (checks, validation, survey) is published as a separate
+repository, `evaluation-audit`; DOI to be added on publication.
+
+---
+
 # Chapter 5: Conclusion & Future Research
 
 ## 5.1 Summary of Findings
@@ -864,13 +911,12 @@ not a dissertation chapter.
 was invented here; each is standard practice in an origin discipline
 (noted per diagnostic below). The claim is a documented case study in
 which each one's absence changed a conclusion, with before/after
-evidence. *This dissertation conducted no systematic survey of the
-RL-for-trading literature and therefore makes no claim about how
-common these omissions are in the field; the observation is restricted
-to this project's own pre-correction reports, in which none of the six
-was applied. That restriction is itself consistent with the thesis's
-argument — but a field-wide prevalence claim would require a survey
-that was not performed.*
+evidence. *A survey has since been performed (Section 4.8): among 7
+open-source RL-for-trading repositories, none committed artifacts
+sufficient to check any of the six, and none published seed-level
+results. The claim is scoped to that examination — a transparency
+finding about what is published, not a claim about the analyses
+themselves.*
 
 ## 5.3 Limitations
 
