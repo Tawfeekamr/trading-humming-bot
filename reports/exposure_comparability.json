@@ -1,0 +1,36 @@
+{
+  "BNBUSDT": {
+    "ppo": {
+      "capital_weighted_exposure": 0.0525,
+      "return_per_unit_exposure_pct": -553.12,
+      "total_return_pct": -29.02
+    },
+    "rf": {
+      "capital_weighted_exposure": 0.6054,
+      "return_per_unit_exposure_pct": -28.05,
+      "total_return_pct": -16.98
+    },
+    "ta": {
+      "capital_weighted_exposure": 1.0,
+      "return_per_unit_exposure_pct": 3.78,
+      "total_return_pct": 3.78
+    }
+  },
+  "ETHUSDT": {
+    "ppo": {
+      "capital_weighted_exposure": 0.0427,
+      "return_per_unit_exposure_pct": -306.94,
+      "total_return_pct": -13.1
+    },
+    "rf": {
+      "capital_weighted_exposure": 0.211,
+      "return_per_unit_exposure_pct": -105.79,
+      "total_return_pct": -22.32
+    },
+    "ta": {
+      "capital_weighted_exposure": 1.0,
+      "return_per_unit_exposure_pct": 44.83,
+      "total_return_pct": 44.83
+    }
+  }
+}
