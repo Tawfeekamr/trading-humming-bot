@@ -278,7 +278,7 @@ Using the actual per-bar series and the same Newey-West HAC variance
 | **MDE at 80% power** | **59.7% cumulative** | **102.7% cumulative** |
 | ~~achieved power at observed diff~~ ~~7.2%~~ ~~6.2%~~ | RETRACTED (B10 T1): retrospective power, one-to-one with the p-value (Hoenig & Heisey 2001) |
 | n required for observed diff | 180,943 bars = **20.7 years** | 314,103 bars = **35.9 years** |
-| MaxDD CI half-width (MDE-equiv) | 0.216 | 0.271 |
+| ~~MaxDD CI half-width (MDE-equiv)~~ ~~0.216~~ ~~0.271~~ | RETRACTED (B10 T6): labelled as MDE-equivalent AT THE OBSERVED estimate — retrospective framing. The CI widths themselves survive as the primary evidence (B10 T1) |
 
 Plain language:
 - **ETH:** at n=4,314 this design can only detect cumulative return

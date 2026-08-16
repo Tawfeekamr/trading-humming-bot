@@ -34,5 +34,6 @@
       },
       "years": 20.655593607305935
     }
-  }
+  },
+  "retraction_note_b10": "achieved_power and n_required fields are RETRACTED (B10 T1): retrospective quantities anchored on the observed effect. See reports/design_analysis.json for the literature-anchored replacements and FIX_REPORT Batch 10."
 }
