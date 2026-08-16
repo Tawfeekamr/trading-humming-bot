@@ -451,10 +451,18 @@ gating value. On DANGER-predicted bars the market *rose* 47% (ETH) / 38%
 (BNB) of the time (mean forward 24-bar return on DANGER bars: -0.79% /
 -0.68% - an edge far too small to pay for skipping the false positives),
 and 36.9%/17.9% of non-DANGER bars realised forward drawdowns <= -3%.
-Non-overlapping 24-bar blocks entered on DANGER returned -0.57%/-0.49%
-versus +0.39%/+0.23% for non-flagged blocks. At portfolio level the
-gated strategy underperformed buy-and-hold by 67.1pp (ETH) and 20.8pp
-(BNB) over the same window - the honest measure of the gate's cost.
+These two figures — the negative overall DANGER mean and the strongly
+positive mean on the *false* subset (Section 3.6, item 8: +3.34% /
++3.88% mean forward return per false-DANGER signal) — are consistent,
+not contradictory: the overall mean is negative because the true
+signals pull it down, but it conceals sharp dispersion. That asymmetry
+— a small edge when right, a large foregone gain when wrong — is the
+mechanism by which high classification accuracy fails to convert into
+economic value. Non-overlapping 24-bar blocks entered on DANGER
+returned -0.57%/-0.49% versus +0.39%/+0.23% for non-flagged blocks. At
+portfolio level the gated strategy underperformed buy-and-hold by
+67.1pp (ETH) and 20.8pp (BNB) over the same window - the honest measure
+of the gate's cost.
 
 ---
 
