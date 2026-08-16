@@ -39,7 +39,7 @@ Cryptocurrency markets exhibit extreme non-stationarity, where static quantitati
 
 Operating across a 4-asset basket (`ETH`, `BNB`, `XRP`, `DOGE`), the system routes capital between the two production trading engines (Grid, Trend) with additional strategy prototypes (Swing, Mean-Reversion) explored in research backtests. We cast the regime-switched routing problem into a formal Markov Decision Process (MDP) and conduct a walk-forward evaluation comparing our calibrated supervised routing policy against Proximal Policy Optimization (PPO) agents under simulated market frictions (fees and slippage in the bar-level replay environment).
 
-Empirical results are reported from a corrected walk-forward evaluation protocol (timestamp-aligned comparators, 70-bar train/test embargo, fold-specific supervised baselines, pinned data windows, multiplicative-drawdown definitions). Under this protocol, **neither the supervised gating policy nor the PPO agent outperformed passive buy-and-hold** on either asset over the evaluated window (ETH: B&H +44.8% vs gated −22.3% vs PPO −13.1%; BNB: B&H +3.8% vs gated −17.0% vs PPO −29.0%), and no routing comparison is statistically interpretable: the design's minimum detectable effect (60–103% cumulative return at 80% power) exceeds the observed differences by an order of magnitude, PPO seed variance (up to 27pp return swing within a fold) dominates between-method differences, and the two policies operated at materially different capital deployment (4–5% vs 21–61% capital-weighted exposure). Diagnostic analysis further shows the PPO agent's low exposure is *learned withdrawal under a drawdown-penalising reward* — a permanently-flat policy scores higher than the trained policy — and that the regime classifier's DANGER warnings are false 38–47% of the time, forgoing upside that buy-and-hold captures. The dissertation's contribution is the negative result, the protocol that establishes it, and the causal diagnosis of why learned routing degenerates to abstention; it does not claim a validated trading edge.
+Empirical results are reported from a corrected walk-forward evaluation protocol (timestamp-aligned comparators, 70-bar train/test embargo, fold-specific supervised baselines, pinned data windows, multiplicative-drawdown definitions). Under this protocol, **neither the supervised gating policy nor the PPO agent outperformed passive buy-and-hold** on either asset over the evaluated window (ETH: B&H +44.8% vs gated −22.3% vs PPO −13.1%; BNB: B&H +3.8% vs gated −17.0% vs PPO −29.0%), and no routing comparison is statistically interpretable: the design's minimum detectable effect (60–103% cumulative return at 80% power) exceeds the observed differences by an order of magnitude, PPO seed variance (up to 27pp return swing within a fold) dominates between-method differences, and the two policies operated at materially different capital deployment (4–5% vs 21–61% capital-weighted exposure). Diagnostic analysis further shows the PPO agent's low exposure is *learned withdrawal under a drawdown-penalising reward* — a permanently-flat policy outscores the trained policy in 19 of 20 seed-fold-pair cells — and that the regime classifier's DANGER warnings are false 38–47% of the time, forgoing upside that buy-and-hold captures. The dissertation's contribution is the negative result, the protocol that establishes it, and the causal diagnosis of why learned routing degenerates to abstention; it does not claim a validated trading edge.
 
 ---
 
@@ -303,16 +303,26 @@ batches of protocol fixes - is committed alongside this manuscript.
 
 ## 4.1 The learned policy is abstention
 
-**The decisive comparison: a permanently-flat policy scores -0.448
-(ETH) / -0.038 (BNB) versus the trained agent's -0.994 / -0.854 over
-identical timestamps.** Doing nothing outscores the learned policy on
-both assets: the reward function does not distinguish the trained
-policy from abstention, and the optimal response to it is
-near-abstention. The routing question the experiment intended to ask is
-not the one the reward answers. PPO's 4.3%/5.2% capital-weighted
-exposure (vs 21.1%/60.5% for the supervised baseline) is therefore
-**learned withdrawal, not a configuration ceiling**, established by
-five diagnostics:
+**The decisive result: a permanently-flat policy outscores the trained
+policy in 19 of 20 seed-fold-pair cells** (5 seeds x folds 0 and 3 x
+both assets; reports/flat_vs_trained_by_seed.json). The one exception
+is BNB fold 3, seed 999 — trained +0.0944 vs flat +0.0801, a margin of
++0.0143 — and seed 999 is the seed that produced the best BNB return
+in the sweep (+3.95%, Section 4.3.2). In other words: the training
+exceeds abstention only at its best draw, and then only marginally.
+Across the other 19 cells, doing nothing scores higher than the learned
+policy — the reward function does not distinguish the trained policy
+from abstention, and the optimal response to it is near-abstention. The
+routing question the experiment intended to ask is not the one the
+reward answers.
+
+*Illustrative example (seed 42 only, six folds pooled — a different and
+broader fold scope than the 19-of-20 seed sweep above, and a single
+draw from the seed distribution): flat scores -0.448 (ETH) / -0.038
+(BNB) versus the trained agent's -0.994 / -0.854 over identical
+timestamps.* PPO's 4.3%/5.2% capital-weighted exposure (vs 21.1%/60.5%
+for the supervised baseline) is therefore **learned withdrawal, not a
+configuration ceiling**, established by five diagnostics:
 
 1. **Action distribution.** The trained policy selects FLAT on
    41.9%/45.8% of steps versus **0.2%/0.0% for a randomly-initialised
@@ -490,9 +500,11 @@ answer to its research question is a **well-evidenced negative result**:
 3. **The learned policy is abstention.** The PPO agent's 4–5%
    capital-weighted exposure is learned withdrawal under a
    drawdown-penalising reward (λ=0.5): the penalty term rivals the entire
-   PnL term, and a permanently-flat policy *outscores* the trained
-   policy. The experiment measured a reward specification, not a routing
-   strategy.
+   PnL term, and a permanently-flat policy outscores the trained policy
+   in 19 of 20 seed-fold-pair cells (the exception — BNB fold 3, seed
+   999, by +0.0143 — is the sweep's best-performing seed, and then only
+   marginally). The experiment measured a reward specification, not a
+   routing strategy.
 4. **Regime classification accuracy does not imply gating value.** At
    0.80–0.87 OOS accuracy, DANGER warnings are false 38–47% of the time,
    and the mean forward return on DANGER bars (−0.79% ETH / −0.68% BNB,
