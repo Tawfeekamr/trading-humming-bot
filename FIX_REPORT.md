@@ -1,6 +1,13 @@
 # Evaluation-Protocol Fix Report
 
 **Date:** 2026-08-15
+
+> **CORRECTION TRAIL NOTE (Batch 5).** Batch 1 sections below are
+> SUPERSEDED where marked by banners — Batch 2 and Batch 3 corrected
+> several Batch-1 figures and reversed two of its verdicts. The
+> superseded text is retained deliberately: the correction trail is part
+> of this report's contribution. Read Batch 1 only through the banners.
+
 **Scope:** Audit-fix tasks 1–8 on the RL walk-forward evaluation protocol.
 **Rule followed:** protocol fixes only — no hyperparameters, rewards,
 thresholds, or strategy logic were touched. All results below come from a
@@ -33,6 +40,12 @@ meaningful.
 
 ### Risk inference (corrected protocol, new)
 
+> **SUPERSEDED (B2.1):** the MaxDD row of this table used the additive
+> equity construction. Canonical multiplicative values: ETH PPO/RF/TA
+> 0.172/0.273/0.353 -> **0.165/0.247/0.511**; BNB 0.326/0.532/0.428 ->
+> **0.293/0.426/0.503**.
+
+
 | | ETH | BNB |
 |---|---|---|
 | MaxDD PPO − RF (point) | −0.082 | −0.134 |
@@ -43,6 +56,12 @@ meaningful.
 | PPO time-in-market / RF | 58.1% / 61.4% | 54.1% / 76.0% |
 | Sharpe (all bars) PPO / RF | −1.74 / −1.86 | −3.04 / −0.72 |
 | Sharpe (invested bars only) PPO / RF | −4.47 / −3.01 | −7.81 / −1.09 |
+
+> **SUPERSEDED (B2.6):** the invested-bars Sharpe row below was an
+> annualisation artifact (sqrt(8760) applied to a subset of bars);
+> corrected values equal the all-bars Sharpe exactly (ETH PPO -4.47 ->
+> -1.75; BNB PPO -7.81 -> -3.05).
+
 | Promotion gate | **ineligible** (inconclusive sample; no risk-adjusted improvement) | **ineligible** (same) |
 
 **Stated plainly:** under the corrected protocol PPO shows no return edge
@@ -85,6 +104,14 @@ historical no-embargo windows):
 
 ## 4. Exposure-matched result (Task 6)
 
+> **SUPERSEDED (B2.2):** this section conflated exposure definitions
+> (its '15%' matching basis was neither time-in-market nor
+> capital-weighted). Re-matched on capital-weighted exposure, the ETH
+> verdict REVERSES: PPO sits at the 100th percentile (worst) of the
+> exposure-matched random distribution on BOTH pairs (medians 0.0509/
+> 0.0508 vs PPO 0.165/0.293).
+
+
 **One sentence each:**
 
 - **ETH:** PPO's drawdown advantage over random entry **survives exposure
@@ -112,6 +139,12 @@ benefit is **pair-dependent and not established overall**.
   rows, classes 1592/877/1141 ranging/trending/danger).
 
 ## 6. Claims: supported vs unsupported
+
+> **PARTIALLY SUPERSEDED (B2.3, B2.8, B3.6):** the 'PPO ~= fold-RF on
+> pooled returns: no edge either direction' claim below was withdrawn
+> and replaced by the underpowered-design statement (MDE 60-103%
+> cumulative; achieved power 6-7%); 'parity' phrasing is unsupported.
+
 
 **Now supported by committed evidence:**
 - Timestamp-aligned, embargoed, boundary-strict, fold-pure walk-forward
@@ -154,6 +187,12 @@ benefit is **pair-dependent and not established overall**.
 ---
 
 ## Bottom line
+
+> **SUPERSEDED (B2.8, B3.6):** 'parity is confirmed' below was
+> withdrawn — the design cannot distinguish parity from differences an
+> order of magnitude larger than those observed. The exposure-matched
+> verdict cited here also reversed in B2.2.
+
 
 Under the corrected protocol, the previous headline claim — "PPO achieves
 return parity with the supervised baseline, with lower drawdown" — holds
@@ -263,6 +302,14 @@ a method-level claim in either direction.** This finding outranks the
 PPO-vs-RF comparison.
 
 ## B2.5 False-DANGER opportunity cost (task 5)
+
+> **SUPERSEDED (B3.2):** the summed totals below (2,242.9 pp / 1,183.2
+> pp) were RETRACTED — overlapping 24-bar windows multiply-count each
+> move. Replacements: per-signal means +3.34%/+3.88%, 24-bar block gaps
+> 0.96pp/0.72pp, portfolio-level gaps -67.1pp/-20.8pp. The DANGER-bar
+> mean forward return is superseded by -0.79%/-0.68% (corrected
+> mask; see false_danger_corrected.json). Retained as the trail.
+
 
 Fold-specific RF predictions vs realised forward 24-bar outcomes:
 
