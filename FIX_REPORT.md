@@ -210,6 +210,15 @@ window — consistent with the promotion gate's verdict: ineligible.
 
 ## B2.1 Canonical MaxDD (task 1)
 
+> **SUPERSEDED (B7 task 4) — THE CONTIGUITY ASSERTION BELOW IS FALSE.**
+> The six test windows are separated by **1,440-bar (~60-day) gaps**
+> (step_bars=2160, test_bars=720), verified directly. The folds are NOT
+> contiguous; concatenation creates artificial adjacency at five fold
+> boundaries. What is true: the *additive-vs-multiplicative* diagnosis
+> was correct and stands; the *pooled-by-concatenation* aggregation
+> does not. Replaced by per-fold MaxDD distributions and a
+> fold-cluster bootstrap (see Batch 7 §4).
+
 **Cause of the contradiction:** two different equity-curve constructions on
 identical input series (same 4,314 bars, same span). §1's table came from
 `evaluation_report._drawdown` — **additive** equity `1 + cumsum(r)`; §4's

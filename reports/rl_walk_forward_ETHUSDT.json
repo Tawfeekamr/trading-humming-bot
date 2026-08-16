@@ -240,7 +240,23 @@
         }
       },
       "fees": 0.10302787510901763,
-      "max_drawdown": 0.16540606421939316,
+      "max_drawdown": 0.0317,
+      "max_drawdown_definition": "PER-FOLD median (pooled-by-concatenation superseded: folds separated by 1440-bar gaps)",
+      "max_drawdown_distribution": {
+        "max": 0.12,
+        "mean": 0.046,
+        "median": 0.0317,
+        "min": 0.0071,
+        "per_fold": [
+          0.0769,
+          0.0083,
+          0.0145,
+          0.049,
+          0.12,
+          0.0071
+        ],
+        "superseded_pooled_concatenated": 0.1654
+      },
       "net_pnl": -0.13098926355779017,
       "per_fold_total_return": [
         -0.018133,
@@ -257,6 +273,7 @@
       "trade_count": 46
     },
     "ppo_vs_rf": {
+      "caveat": "pooled HAC treats non-adjacent segments (1440-bar gaps) as contiguous; lags 1-9 cross fold boundaries months apart; DESCRIPTIVE ONLY",
       "dm_p": 0.6653146837204453,
       "dm_stat": 0.432587208787236,
       "n": 4314
@@ -297,7 +314,23 @@
         }
       },
       "fees": 0.22892484427542492,
-      "max_drawdown": 0.24696626327504378,
+      "max_drawdown": 0.1073,
+      "max_drawdown_definition": "PER-FOLD median (pooled-by-concatenation superseded: folds separated by 1440-bar gaps)",
+      "max_drawdown_distribution": {
+        "max": 0.178,
+        "mean": 0.1162,
+        "median": 0.1073,
+        "min": 0.0763,
+        "per_fold": [
+          0.1475,
+          0.178,
+          0.0763,
+          0.1274,
+          0.0872,
+          0.0806
+        ],
+        "superseded_pooled_concatenated": 0.247
+      },
       "net_pnl": -0.22319938131989078,
       "per_fold_total_return": [
         -0.132073,
@@ -316,13 +349,20 @@
     "risk_inference": {
       "hac_lag": 9,
       "maxdd_diff_ppo_minus_rf": {
-        "block_length": 10,
-        "bootstrap": "politis-romano stationary",
         "ci95": [
-          -0.34177196641876373,
-          0.08974718945674533
+          -0.1205849367150369,
+          -0.01996552572688282
         ],
-        "estimate": -0.08156019905565062
+        "estimate": -0.07023022267232164,
+        "method": "fold-cluster bootstrap: resample the 6 folds with replacement; MaxDD computed per fold; reported statistic is the mean per-fold difference",
+        "superseded": {
+          "ci95": [
+            -0.34177196641876373,
+            0.08974718945674533
+          ],
+          "estimate": -0.08156019905565062,
+          "why": "pooled-by-concatenation created artificial adjacency at five 1440-bar gaps; blocks crossed fold joins"
+        }
       },
       "sharpe_all_bars": {
         "annualisation_factor": 93.59487165438073,
@@ -378,7 +418,23 @@
         }
       },
       "fees": 0.0,
-      "max_drawdown": 0.5106810037381809,
+      "max_drawdown": 0.1947,
+      "max_drawdown_definition": "PER-FOLD median (pooled-by-concatenation superseded: folds separated by 1440-bar gaps)",
+      "max_drawdown_distribution": {
+        "max": 0.4601,
+        "mean": 0.22,
+        "median": 0.1947,
+        "min": 0.0793,
+        "per_fold": [
+          0.3022,
+          0.0793,
+          0.1391,
+          0.2503,
+          0.4601,
+          0.0888
+        ],
+        "superseded_pooled_concatenated": 0.5107
+      },
       "net_pnl": 0.44827863154164993,
       "per_fold_total_return": [
         -0.143568,
