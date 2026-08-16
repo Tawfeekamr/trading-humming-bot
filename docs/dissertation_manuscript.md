@@ -654,29 +654,35 @@ answer to its research question is a **well-evidenced negative result**:
    caught here:
 
    a. **The flat-policy floor.** Compare any trained policy against
+      *Origin: naive-baseline flooring (RL evaluation practice);*
       permanent abstention under the same reward before concluding it
       learned anything. Cost: one line of computation over the
       evaluation rollouts. Would have caught: the abstention result
       before any performance claim was made.
    b. **Reward-component decomposition.** Report the magnitude of each
+      *Origin: component reporting (econometric model diagnostics);*
       reward term, not just the total, so a dominating penalty is
       visible. Cost: instrumenting the reward (already summed per
       step). Would have caught: the drawdown penalty rivaling the
       entire PnL term, and the fee double-count.
    c. **Capital-exposure matching.** Match baselines on
+      *Origin: exposure matching (portfolio attribution);*
       capital-weighted exposure, not time-in-market, and report both.
       Cost: one env field (per-bar position notional). Would have
       caught: the exposure-artifact "drawdown advantage" verdicts.
    d. **Fold-aware pooling.** Never concatenate non-adjacent test
+      *Origin: purging and embargo (quantitative-finance cross-validation);*
       windows into a single equity curve or dependence structure.
       Cost: tracking fold indices (already present). Would have
       caught: the five-fold MaxDD inflation and the boundary-crossing
       HAC/bootstrap dependence.
    e. **Power reporting.** State the minimum detectable effect
+      *Origin: power analysis (clinical trials and applied statistics);*
       alongside any null result, and the effective n after clustering.
       Cost: closed-form from the existing variance estimate. Would
       have caught: every "parity" statement this report once made.
    f. **Seed-distribution reporting.** Never report a single-seed RL
+      *Origin: seed-distribution reporting (deep-RL reproducibility literature).*
       result. Cost: the training already amortises; reporting is a
       table. Would have caught: a headline resting on the seed at the
       unfavourable end of its own distribution.
@@ -687,14 +693,17 @@ answer to its research question is a **well-evidenced negative result**:
    *before* deployment by the flat-policy floor. It is a finding about
    this reward, not a claim that RL generally learns abstention.
 
-**Scope of contribution 2, stated honestly.** Each diagnostic above is
-individually standard practice in an adjacent literature — power
-analysis in clinical trials, seed reporting in deep-RL reproducibility
-work, purged cross-validation in quantitative finance. The claim is
-not that any was invented here. The claim is a documented case study
-in which each one's absence changed a conclusion, with before/after
-evidence, in a domain where their absence is the norm. That is the
-defensible contribution, and it is strong enough.
+**Scope of contribution 2, stated honestly.** None of the diagnostics
+was invented here; each is standard practice in an origin discipline
+(noted per diagnostic below). The claim is a documented case study in
+which each one's absence changed a conclusion, with before/after
+evidence. *This dissertation conducted no systematic survey of the
+RL-for-trading literature and therefore makes no claim about how
+common these omissions are in the field; the observation is restricted
+to this project's own pre-correction reports, in which none of the six
+was applied. That restriction is itself consistent with the thesis's
+argument — but a field-wide prevalence claim would require a survey
+that was not performed.*
 
 ## 5.3 Limitations
 
