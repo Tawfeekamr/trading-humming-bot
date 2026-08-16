@@ -1,6 +1,8 @@
 # Research Roadmap: Master's Degree Thesis
 
-**Thesis Title:** Machine Learning Regime Dynamics in Multi-Asset Execution: Benchmarking Supervised and Reinforcement Learning Policies
+**Thesis Title:** Learned Withdrawal and Evaluation Blindness in Reinforcement Learning for Trading: A Corrected-Protocol Case Study
+
+*(Retitled 2026-08-16 after the evaluation audit; see FIX_REPORT.md. The original framing — a supervised-vs-RL benchmark — was withdrawn: the evaluation established the comparison could not be rendered, and the central finding became the RL agent's learned withdrawal under a drawdown-penalising reward.)*
 
 This document outlines the step-by-step process to transition your existing `trading-humming-bot` project into a formal Master's degree research thesis. 
 

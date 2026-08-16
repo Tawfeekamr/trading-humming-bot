@@ -1,5 +1,4 @@
-# Market-Regime-Aware Multi-Asset Trading with Machine-Learning Gating:
-A Corrected-Protocol Evaluation of Supervised Routing versus Reinforcement Learning
+# Learned Withdrawal and Evaluation Blindness in Reinforcement Learning for Trading: A Corrected-Protocol Case Study
 
 **A dissertation submitted in partial fulfilment of the requirements for the degree of Master of Science in Artificial Intelligence**
 

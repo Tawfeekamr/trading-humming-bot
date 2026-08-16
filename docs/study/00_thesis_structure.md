@@ -1,7 +1,9 @@
 # Thesis Structure and Writing Guide
 
 ## Project Title
-**Machine Learning Regime Dynamics in Multi-Asset Execution: Benchmarking Supervised and Reinforcement Learning Policies**
+**Learned Withdrawal and Evaluation Blindness in Reinforcement Learning for Trading: A Corrected-Protocol Case Study**
+
+*(Retitled 2026-08-16; the chapters below predate the corrected-protocol evaluation — see docs/dissertation_manuscript.md for the authoritative version and FIX_REPORT.md for the audit.)*
 
 ## Purpose of this Directory
 This directory contains the foundational structure and outlines for your Master's degree thesis/project report. Each file represents a core chapter or section of a standard academic thesis in Computer Science or Financial Engineering.
