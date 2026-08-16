@@ -357,8 +357,17 @@ participation incentive; the drawdown penalty simply dominated it.
 
 *Capital exposure is the capital-weighted definition (mean
 |position|/equity), not time-in-market; the two policies operated at
-materially different deployment (RF/PPO ratio 4.9x on ETH, 11.5x on BNB),
-so all PPO-vs-RF comparisons in this chapter are descriptive.*
+materially different deployment (RF/PPO ratio 4.9x on ETH, 11.5x on
+BNB), so all PPO-vs-RF comparisons in this chapter are descriptive.*
+
+*Seed note: both PPO rows are the pre-registered default seed 42 (set
+in code before any result was observed — trainer CLI default
+`--seed=42`, `src/rl/agents/ppo_trainer.py:116-119`; evaluation reset
+`env.reset(seed=42)`, `src/rl/evaluate.py:266`). On BNB, seed 42 sits
+at the unfavourable end of the seed distribution (folds-0+3 pooled
+MaxDD 0.2625 vs 5-seed mean 0.102, Section 4.3.2): the BNB PPO row is
+therefore **conditional on seed 42's position in the distribution** and,
+if anything, pessimistic — though not enough to change any conclusion.*
 
 **Reading of the table:** no routing policy beat passive exposure on
 either asset. The lower drawdowns of the routed policies are an exposure
@@ -414,7 +423,19 @@ statistic crosses zero across seeds on BNB. The single-seed PPO-vs-RF
 comparison above is one draw from this distribution and supports no
 method-level claim in either direction. *(Scope: the seed sweep covers
 folds 0 and 3 only; its figures are not comparable to the six-fold pooled
-table in 4.1.)*
+table in 4.2.)*
+
+**The main run's seed sits at the unfavourable end.** Seed 42 — the
+pre-registered default, fixed in code before any result was observed
+(trainer CLI default `--seed=42`, `src/rl/agents/ppo_trainer.py:116-119`;
+`env.reset(seed=42)`, `src/rl/evaluate.py:266`) — has a BNB folds-0+3
+pooled MaxDD of 0.2625 against the 5-seed mean of 0.102 (2.6x worse).
+Every headline BNB PPO figure in this dissertation is therefore
+conditional on seed 42's unfavourable position in the distribution: the
+BNB numbers are, if anything, pessimistic about PPO. No conclusion
+changes — the negative result holds across all seeds but one cell (the
+BNB fold-3 seed-999 exception in the flat-policy comparison, B5.1) —
+but no BNB-specific magnitude should be read as seed-typical.
 
 ## 4.4 Protocol corrections
 

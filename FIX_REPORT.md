@@ -519,6 +519,22 @@ points:
 | ETH MaxDD | 0.075 | 0.0776 | 0.165 |
 | BNB MaxDD | 0.102 | 0.2625 | 0.293 |
 
+**Seed-42 positioning note (Batch 5 task 4).** The main run — the
+source of every headline figure in this report — uses seed 42
+throughout, and on BNB that seed sits at the **unfavourable end of the
+seed distribution**: its folds-0+3 pooled MaxDD is 0.2625 against a
+5-seed mean of 0.102 (2.6x worse). The B5.1 flat-vs-trained sweep
+corroborates this: all four seed-42 cells are negative-diff and at or
+near the bad end of their cells. **Seed 42 is the pre-registered
+default, fixed in code before any result was observed**: the trainer
+CLI default (`--seed`, default=42, src/rl/agents/ppo_trainer.py:116-119)
+and the evaluation reset (`env.reset(seed=42)`, src/rl/evaluate.py:266).
+No seed was selected post hoc. The implication runs against the
+flattering direction: the main run's BNB numbers are, if anything,
+*pessimistic* about PPO — though not enough to change any conclusion
+(no cell reverses the negative result except the already-reported BNB
+fold-3 seed-999 exception).
+
 The seed-variance-dominates verdict is unaffected.
 
 ## B3.4 Correlation retraction (task 4)
