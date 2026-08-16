@@ -294,6 +294,52 @@ new result of the corrected protocol, not a correction of one. It also
 flipped a conclusion: the paired statistic crosses zero across seeds
 (BNB: -0.92 to +0.80), voiding any single-seed method claim.
 
+### 3.6.1 The pooling artifact: a five-fold headline inflation
+
+The single most consequential definitional error in this project, and
+the clearest demonstration that one definition can move a headline
+figure by a factor of five.
+
+**Defect.** The six walk-forward test windows are separated by
+1,440-bar (~60-day) gaps (step_bars 2,160, test_bars 720). Reporting
+"pooled" statistics treated the six windows as one continuous series:
+drawdowns were measured across joins that do not exist in time, HAC
+lags 1-9 coupled bars months apart, and bootstrap blocks spanned the
+gaps.
+
+**Mechanism.** Concatenating equity paths creates artificial adjacency
+at five fold boundaries. Any partial drawdown at the end of one fold
+and any partial drawdown at the start of the next combine into a
+single "drawdown" that no investor would have experienced, inflating
+MaxDD; the same artificial joins corrupt serial-dependence estimates.
+
+**Before/after (per-fold median replaces pooled-by-concatenation):**
+
+| | pooled (old) | per-fold median (new) | inflation factor |
+| :--- | :---: | :---: | :---: |
+| ETH PPO | 0.165 | 0.032 | 5.2x |
+| ETH RF | 0.247 | 0.107 | 2.3x |
+| ETH B&H | 0.511 | 0.195 | 2.6x |
+| BNB PPO | 0.293 | 0.053 | 5.5x |
+| BNB RF | 0.426 | 0.117 | 3.6x |
+| BNB B&H | 0.503 | 0.198 | 2.5x |
+
+**The claim that survived four corrective passes.** The Batch-2
+correction record itself asserted the folds were "contiguous
+chronological segments" and that concatenation "reconstructs one
+continuous equity path" — an incorrect claim that survived four
+self-directed corrective batches and was caught only by independent
+review (Batch 7). Self-audit corrected the additive-vs-multiplicative
+MaxDD construction directly adjacent to this error without noticing
+the pooling assumption underneath it.
+
+**This is evidence for the dissertation's own argument about the
+limits of self-audit.** Each corrective pass was performed by the same
+process that produced the error; the shared false premise (contiguity)
+was invisible to every pass because it was a premise, not a
+computation. Independent review — a reader without stake in the
+correction narrative — caught it in one pass.
+
 ---
 
 
