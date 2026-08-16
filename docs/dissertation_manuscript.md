@@ -39,7 +39,7 @@ Cryptocurrency markets exhibit extreme non-stationarity, where static quantitati
 
 Operating across a 4-asset basket (`ETH`, `BNB`, `XRP`, `DOGE`), the system routes capital between the two production trading engines (Grid, Trend) with additional strategy prototypes (Swing, Mean-Reversion) explored in research backtests. We cast the regime-switched routing problem into a formal Markov Decision Process (MDP) and conduct a walk-forward evaluation comparing our calibrated supervised routing policy against Proximal Policy Optimization (PPO) agents under simulated market frictions (fees and slippage in the bar-level replay environment).
 
-Empirical results are reported from a corrected walk-forward evaluation protocol (timestamp-aligned comparators, 70-bar train/test embargo, fold-specific supervised baselines, pinned data windows, multiplicative-drawdown definitions). Under this protocol, **neither the supervised gating policy nor the PPO agent outperformed passive buy-and-hold** on either asset over the evaluated window (ETH: B&H +44.8% vs gated −22.3% vs PPO −13.1%; BNB: B&H +3.8% vs gated −17.0% vs PPO −29.0%), and no routing comparison is statistically interpretable: the design's minimum detectable effect (60–103% cumulative return at 80% power) exceeds the observed differences by an order of magnitude, PPO seed variance (up to 27pp return swing within a fold) dominates between-method differences, and the two policies operated at materially different capital deployment (4–5% vs 21–61% capital-weighted exposure). Diagnostic analysis further shows the PPO agent's low exposure is *learned withdrawal under a drawdown-penalising reward* — a permanently-flat policy outscores the trained policy in 19 of 20 seed-fold-pair cells — and that the regime classifier's DANGER warnings are false 38–47% of the time, forgoing upside that buy-and-hold captures. The dissertation's contribution is the negative result, the protocol that establishes it, and the causal diagnosis of why learned routing degenerates to abstention; it does not claim a validated trading edge.
+Empirical results are reported from a corrected walk-forward evaluation protocol (timestamp-aligned comparators, 70-bar train/test embargo, fold-specific supervised baselines, pinned data windows, multiplicative-drawdown definitions). Under this protocol, **neither the supervised gating policy nor the PPO agent outperformed passive buy-and-hold** on either asset over the evaluated window (ETH: B&H +38.0% vs gated −21.2% vs PPO −12.8%; BNB: B&H −4.3% vs gated −20.3% vs PPO −25.9%), and no routing comparison is statistically interpretable: the design's minimum detectable effect (82–179% cumulative return at 80% power, compounded basis) exceeds the observed differences by an order of magnitude, PPO seed variance (up to 27pp return swing within a fold) dominates between-method differences, and the two policies operated at materially different capital deployment (4–5% vs 21–61% capital-weighted exposure). Diagnostic analysis further shows the PPO agent's low exposure is *learned withdrawal under a drawdown-penalising reward* — a permanently-flat policy outscores the trained policy in 19 of 20 seed-fold-pair cells — and that the regime classifier's DANGER warnings are false 38–47% of the time, forgoing upside that buy-and-hold captures. The dissertation's contribution is the negative result, the protocol that establishes it, and the causal diagnosis of why learned routing degenerates to abstention; it does not claim a validated trading edge.
 
 ---
 
@@ -373,15 +373,15 @@ participation incentive; the drawdown penalty simply dominated it.
 
 | ETH-USDT | Total Return | Sharpe (ann.) | Max Drawdown | Profit Factor | Trades | Capital Exposure |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| Buy & Hold | **+44.8%** | - | -51.1% | 1.04 | - | 100% |
-| Supervised RF-gated | -22.3% | -1.86 | -24.7% | 0.90 | 136 | 21.1% |
-| PPO (seed 42) | -13.1% | -1.74 | -16.5% | 0.79 | 46 | 4.3% |
+| Buy & Hold | **+38.0%** | - | 0.195 (median) | 1.04 | - | 100% |
+| Supervised RF-gated | -21.2% | -1.86 | 0.107 (median) | 0.90 | 136 | 21.1% |
+| PPO (seed 42) | -12.8% | -1.74 | 0.032 (median) | 0.79 | 46 | 4.3% |
 
 | BNB-USDT | Total Return | Sharpe (ann.) | Max Drawdown | Profit Factor | Trades | Capital Exposure |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| Buy & Hold | **+3.8%** | - | -50.3% | 1.00 | - | 100% |
-| Supervised RF-gated | -17.0% | -0.72 | -42.6% | 0.95 | 129 | 60.5% |
-| PPO (seed 42) | -29.0% | -3.04 | -29.3% | 0.65 | 45 | 5.2% |
+| Buy & Hold | **-4.3%** | - | 0.198 (median) | 1.00 | - | 100% |
+| Supervised RF-gated | -20.3% | -0.72 | 0.117 (median) | 0.95 | 129 | 60.5% |
+| PPO (seed 42) | -25.9% | -3.04 | 0.053 (median) | 0.65 | 45 | 5.2% |
 
 *Capital exposure is the capital-weighted definition (mean
 |position|/equity), not time-in-market; the two policies operated at
@@ -433,7 +433,7 @@ variance estimator:
 | | ETH | BNB |
 | :--- | :---: | :---: |
 | Observed cumulative difference | +9.2pp | -12.0pp |
-| Minimum detectable effect (80% power, alpha=0.05) | **59.7pp** | **102.7pp** |
+| Minimum detectable effect (80% power, alpha=0.05, compounded) | **81.7pp** | **179.3pp** |
 | Achieved power at observed difference | 7.2% | 6.2% |
 | n required to detect the observed difference | 180,943 bars (20.7y) | 314,103 bars (35.9y) |
 
@@ -509,9 +509,11 @@ Under the corrected evaluation protocol, this dissertation's empirical
 answer to its research question is a **well-evidenced negative result**:
 
 1. **No routing edge.** Neither the supervised regime-gated policy nor the
-   PPO agent outperformed passive buy-and-hold on either asset
-   (ETH: B&H +44.8% vs gated −22.3% vs PPO −13.1%; BNB: B&H +3.8% vs
-   gated −17.0% vs PPO −29.0%). **CH1 and CH2 are rejected**; the
+   PPO agent outperformed passive buy-and-hold on either asset (on BNB,
+   passive exposure itself was negative)
+   (ETH: B&H +38.0% vs gated −21.2% vs PPO −12.8%; BNB: B&H −4.3% vs
+   gated −20.3% vs PPO −25.9% — on BNB passive exposure also lost, but
+   lost far less). **CH1 and CH2 are rejected**; the
    apparent lower drawdowns of routed policies are an exposure effect —
    capital-matched random entries at the same deployment drew down less
    than PPO on both assets.
