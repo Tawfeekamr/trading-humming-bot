@@ -1,0 +1,58 @@
+{
+  "BNBUSDT": {
+    "de_overlapped_blocks_24bar": {
+      "danger_flagged": {
+        "mean_return_pct": -0.49036598878636195,
+        "n": 45,
+        "total_compounded_return_pct": -22.938801112430518
+      },
+      "mean_return_gap_pp_per_block": 0.7168222232528653,
+      "n_blocks": 167,
+      "not_flagged": {
+        "mean_return_pct": 0.22645623446650334,
+        "n": 122,
+        "total_compounded_return_pct": 20.067737555598498
+      }
+    },
+    "n_bars": 4026,
+    "per_signal": {
+      "false_danger_bars": 400,
+      "mean_fwd_return_on_danger_bars_pct": -0.6791424607066914,
+      "mean_fwd_return_per_false_danger_signal_pct": 3.882692353980973
+    },
+    "portfolio_level_cost": {
+      "buy_hold_return_pct": 3.7763061633618475,
+      "gap_pp": -20.760251231264526,
+      "gated_strategy_return_pct": -16.983945067902678,
+      "note": "RF-gated strategy minus buy-and-hold over identical span"
+    }
+  },
+  "ETHUSDT": {
+    "de_overlapped_blocks_24bar": {
+      "danger_flagged": {
+        "mean_return_pct": -0.5727210644995603,
+        "n": 72,
+        "total_compounded_return_pct": -43.61315609067019
+      },
+      "mean_return_gap_pp_per_block": 0.9648381094741778,
+      "n_blocks": 167,
+      "not_flagged": {
+        "mean_return_pct": 0.3921170449746176,
+        "n": 95,
+        "total_compounded_return_pct": 34.58561552856485
+      }
+    },
+    "n_bars": 4026,
+    "per_signal": {
+      "false_danger_bars": 742,
+      "mean_fwd_return_on_danger_bars_pct": -0.7879122199832276,
+      "mean_fwd_return_per_false_danger_signal_pct": 3.3385549474996443
+    },
+    "portfolio_level_cost": {
+      "buy_hold_return_pct": 44.827863154164994,
+      "gap_pp": -67.14780128615408,
+      "gated_strategy_return_pct": -22.31993813198908,
+      "note": "RF-gated strategy minus buy-and-hold over identical span"
+    }
+  }
+}
