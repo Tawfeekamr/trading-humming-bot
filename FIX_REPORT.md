@@ -1196,3 +1196,61 @@ Three findings: (1) B2.3 "MDE-equiv half-width" row retracted
 (retrospective framing; widths survive as evidence); (2) mde_power.json
 retracted fields flagged in-file; (3) seed-sweep paired statistics are
 descriptive point estimates — not retrospective, no action.
+
+---
+
+# Batch 12 — evaluation-audit tool + artifact-audit survey (2026-08-17)
+
+Additive: a standalone tool built from the 14 documented failure
+modes, validated, then applied to public work. Thesis results
+untouched.
+
+## B12.1 The tool
+
+Separate repository `evaluation-audit`: 10 checks, each citing its
+FIX_REPORT origin in code; artifacts-only input (CSV return series +
+folds.json + optional config); verdicts PASS/FLAG/NOT_APPLICABLE —
+never guesses. MDE check is structurally prospective
+(property-tested: identical noise with shifted mean → identical MDE).
+14 tests green.
+
+## B12.2 Validation (Task 2)
+
+Pre-correction (batch-1 artifacts from git history): **6 of 8
+detectable defects caught** — arithmetic returns, fold gaps,
+sqrt(8760)-on-subset, effective-n, single-seed, flat-floor. Two misses
+recorded as tool limitations: check 4 reports both MaxDD constructions
+but does not compare a REPORTED figure against them; exposure
+conflation needs per-bar position data. Post-correction: **zero false
+positives** — every FLAG is a property the project itself documents
+(fold contiguity, effective-n, exposure ratio, seed spread, flat
+floor). Two tool bugs found and fixed during validation (pooled-vs-
+fold span mismatch; check-9 tuple bug) — validation working as
+intended.
+
+## B12.3 Survey (Tasks 3-4)
+
+12 repositories identified, 7 cloned, **0 committed auditable
+artifacts** — all compute results in code and write them at runtime.
+The tool returned NOT_APPLICABLE on 8-9 of 10 checks everywhere.
+Runnable checks: seed reporting FLAG 7/7 (no seed-level artifacts;
+several trainers default seed=None); retrospective power PASS 7/7 by
+omission. 4/7 codebases unrunnable (unpinned deps, no data,
+undocumented entry points). Ethical constraints applied: aggregate
+counts in main text, repositories acknowledged in the tool's appendix,
+flags scoped to "cannot tell from what is published".
+
+## B12.4 Revised field-prevalence claim (as now in 5.2 / 4.8)
+
+"Among 7 open-source repositories accompanying RL-for-trading work, a
+sample biased toward transparency, none committed artifacts sufficient
+to verify a single headline number, and none published seed-level
+results. This establishes that independent verification of published
+claims is impossible from what is published — not that the analyses
+omit the diagnostics."
+
+## B12.5 False positives
+
+None. Post-correction flags correspond one-to-one to documented
+findings/limitations; the two validation misses are recorded tool
+limitations, not false positives.
