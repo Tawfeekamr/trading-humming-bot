@@ -1,6 +1,16 @@
 {
   "BNBUSDT": {
-    "corr_bh_vs_excess": -0.9283481470565925,
+    "correlation_correction": {
+      "descriptive_direct_correlation": {
+        "corr_bh_vs_ppo": 0.475,
+        "label": "DESCRIPTIVE ONLY at n=6 \u2014 not a test result",
+        "n": 6
+      },
+      "removed": {
+        "corr_bh_vs_excess": -0.9283481470565925,
+        "reason": "dependent variable contained -B&H (mechanical correlation) and n=6 cannot support an estimate"
+      }
+    },
     "folds": [
       {
         "bh_pct": 1.59,
@@ -48,7 +58,17 @@
     "n": 6
   },
   "ETHUSDT": {
-    "corr_bh_vs_excess": -0.9951728894871177,
+    "correlation_correction": {
+      "descriptive_direct_correlation": {
+        "corr_bh_vs_ppo": 0.677,
+        "label": "DESCRIPTIVE ONLY at n=6 \u2014 not a test result",
+        "n": 6
+      },
+      "removed": {
+        "corr_bh_vs_excess": -0.9951728894871177,
+        "reason": "dependent variable contained -B&H (mechanical correlation) and n=6 cannot support an estimate"
+      }
+    },
     "folds": [
       {
         "bh_pct": -14.36,
