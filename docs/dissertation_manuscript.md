@@ -447,6 +447,13 @@ changes — the negative result holds across all seeds but one cell (the
 BNB fold-3 seed-999 exception in the flat-policy comparison, B5.1) —
 but no BNB-specific magnitude should be read as seed-typical.
 
+**Direction of bias.** Across the seed sweep, seed 42 sits at or near
+the unfavourable end in three of its four cells and is the
+worst-performing draw in BNB fold 0. The headline figures are therefore
+pessimistic toward the reinforcement-learning agent rather than
+flattering to it — the bias, where it exists, runs against the method
+this dissertation might have been tempted to favour.
+
 ## 4.4 Protocol corrections
 
 The eight evaluation failure modes underlying this chapter — their
@@ -545,7 +552,14 @@ answer to its research question is a **well-evidenced negative result**:
 3. **Seed scope.** The seed sweep covers 5 seeds on folds 0 and 3 only
    (20 of 60 possible trainings), not the full six folds; its figures
    are not comparable to the six-fold pooled tables (scope note in
-   reports/seed_sensitivity.json).
+   reports/seed_sensitivity.json). *Direction-of-bias note: the main
+   run uses seed 42 throughout, fixed as the code default before any
+   result was observed (`src/rl/agents/ppo_trainer.py:116-119`,
+   `src/rl/evaluate.py:266`). Across the seed sweep, seed 42 sits at or
+   near the unfavourable end of its cells and is the worst-performing
+   draw in BNB fold 0. The headline figures are therefore pessimistic
+   toward the reinforcement-learning agent rather than flattering to
+   it.*
 4. **Underpowered by construction.** Detecting the observed differences
    at 80% power would require 21-36 years of hourly data
    (Section 4.3.1). The evaluation design cannot support method-level
