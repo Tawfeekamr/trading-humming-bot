@@ -2,6 +2,8 @@
 
 **Thesis title:** *Machine Learning Regime Dynamics in Multi-Asset Execution: Benchmarking Supervised and Reinforcement Learning Policies*
 
+*(Superseded title — the thesis was retitled 2026-08-16 to 'Learned Withdrawal and Evaluation Blindness in Reinforcement Learning for Trading: A Corrected-Protocol Case Study' after the evaluation audit; see FIX_REPORT.md. This planning document predates the audit and its outcome assumptions did not hold.)*
+
 **Purpose.** Before any RL, establish that the supervised regime-switching router's results are *real* — not an overfit backtest artifact. This is both the scientifically correct ordering and the spec's Phase-0 gate. This document is the proof pipeline **as a checklist**, and it doubles as the **Results-chapter outline**.
 
 **Status legend:** ✅ done · 🟡 partial · ⬜ new work

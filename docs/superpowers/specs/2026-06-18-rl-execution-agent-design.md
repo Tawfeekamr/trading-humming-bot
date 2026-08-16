@@ -2,6 +2,8 @@
 
 **Thesis title:** *Machine Learning Regime Dynamics in Multi-Asset Execution: Benchmarking Supervised and Reinforcement Learning Policies*
 
+*(Superseded title — the thesis was retitled 2026-08-16 to 'Learned Withdrawal and Evaluation Blindness in Reinforcement Learning for Trading: A Corrected-Protocol Case Study' after the evaluation audit; see FIX_REPORT.md. This planning document predates the audit and its outcome assumptions did not hold.)*
+
 **Date:** 2026-06-18
 **Status:** Design — pending user review
 **Author:** tawfeekamr

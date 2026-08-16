@@ -1,5 +1,21 @@
 # RL Walk-Forward Results — PPO vs Supervised RF (ETH + BNB)
 
+> **SUPERSEDED (2026-08-16).** This document reports the PRE-AUDIT
+> protocol and its conclusions are withdrawn:
+> - The "Diebold-Mariano" test was mislabelled (a paired mean-difference
+>   test was implemented); legacy-RF p-values (0.0019 / <0.0001) compare
+>   against an unrecoverable baseline and are uninterpretable.
+> - "Return parity" is withdrawn — the corrected protocol shows the
+>   design is underpowered (MDE 60-103% cumulative), so parity was not
+>   detectable, let alone established.
+> - "PPO does risk control better" is withdrawn — MaxDD was computed
+>   additively here, and capital-exposure-matched random entries drew
+>   down LESS than PPO on both pairs.
+> - The boundary defect, zero embargo, and non-fold-pure baseline below
+>   were all fixed in the corrected protocol.
+> Authoritative results: docs/dissertation_manuscript.md Chapter 4 and
+> FIX_REPORT.md (batches 1-3). Retained below as the historical record.
+
 **Date:** 2026-07-05. Sweep: 6 walk-forward OOS windows per pair, ~4620 pooled
 bars each, PPO trained 1M steps/window (MPS). Train strictly precedes test.
 
