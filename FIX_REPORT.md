@@ -611,3 +611,143 @@ retracted, scope-annotated, or downgraded to descriptive. What remains
 true and evidenced: the negative result (no routing edge), the exposure
 explanation (learned withdrawal under a punishing reward), and the gate's
 false-alarm economics at portfolio level.
+
+---
+
+# Batch 5 — Final corrective pass (2026-08-16)
+
+Task 1 was the last permitted computation; Tasks 2–6 are documentation
+only. Nothing was deleted — superseded text is banner-marked, never
+erased.
+
+## B5.1 Flat-policy baseline across seeds (task 1 — final computation)
+
+The decisive flat-outscores-trained figure previously rested on seed 42
+alone, while Batch 2 voids single-seed claims and B3.3 flags seed 42 as
+atypical on BNB. Using ONLY the already-trained B2.4 seed models (folds
+0+3, both pairs — all 20 verified present; nothing retrained):
+
+| pair | fold | seed | trained | flat | diff | flat wins |
+|---|---|---|---|---|---|---|
+| ETH | 0 | 42 | +0.0066 | +0.1184 | −0.1118 | ✓ |
+| ETH | 0 | 7 | −0.0397 | +0.1184 | −0.1580 | ✓ |
+| ETH | 0 | 123 | +0.0549 | +0.1184 | −0.0635 | ✓ |
+| ETH | 0 | 2024 | −0.0722 | +0.1184 | −0.1905 | ✓ |
+| ETH | 0 | 999 | −0.0889 | +0.1184 | −0.2073 | ✓ |
+| ETH | 3 | 42 | −0.0427 | +0.0529 | −0.0956 | ✓ |
+| ETH | 3 | 7 | +0.0167 | +0.0529 | −0.0362 | ✓ |
+| ETH | 3 | 123 | −0.1944 | +0.0529 | −0.2473 | ✓ |
+| ETH | 3 | 2024 | −0.1451 | +0.0529 | −0.1980 | ✓ |
+| ETH | 3 | 999 | −0.0342 | +0.0529 | −0.0870 | ✓ |
+| BNB | 0 | 42 | −0.3267 | −0.0364 | −0.2903 | ✓ |
+| BNB | 0 | 7 | −0.0604 | −0.0364 | −0.0240 | ✓ |
+| BNB | 0 | 123 | −0.2601 | −0.0364 | −0.2237 | ✓ |
+| BNB | 0 | 2024 | −0.1391 | −0.0364 | −0.1027 | ✓ |
+| BNB | 0 | 999 | −0.1481 | −0.0364 | −0.1118 | ✓ |
+| BNB | 3 | 42 | −0.1460 | +0.0801 | −0.2261 | ✓ |
+| BNB | 3 | 7 | −0.5070 | +0.0801 | −0.5870 | ✓ |
+| BNB | 3 | 123 | +0.0415 | +0.0801 | −0.0385 | ✓ |
+| BNB | 3 | 2024 | −0.0660 | +0.0801 | −0.1461 | ✓ |
+| BNB | 3 | 999 | **+0.0944** | +0.0801 | **+0.0143** | **✗** |
+
+**Statement in the exact form the evidence supports: flat outscored the
+trained policy in 19 of 20 seed-fold-pair cells.**
+
+**Exception (not softened, not dropped): BNB fold 3, seed 999** — the
+trained policy scored +0.0944 vs flat's +0.0801, winning by +0.0143.
+Seed 999 is the same seed that produced BNB's best return in the B2.4
+sweep (+3.95%). The flat-policy reward was verified identical across
+seeds within each cell (deterministic; asserted in-script).
+
+**Seed-42 cells located within the distribution:** all four are
+negative-diff and at or near the bad end of their cells — ETH f0 diff
+−0.1118 (cell range −0.0635..−0.2073); ETH f3 −0.0956 (−0.0362..−0.2473);
+BNB f0 −0.2903 (−0.0240..−0.2903, worst in cell); BNB f3 −0.2261
+(−0.0385..−0.5870). The batch-1/B3.1 headline (−0.994/−0.854 vs
+−0.448/−0.038) is a six-fold pooled aggregation and is not directly one
+of these cells, but the per-cell evidence strengthens rather than
+weakens the claim: 19/20 with the exception named.
+
+Evidence: `reports/flat_vs_trained_by_seed.json` + script.
+
+## B5.2 Supersession banners (task 2)
+
+All six banners added, original text fully retained beneath each:
+
+1. §1 risk table MaxDD row → SUPERSEDED by B2.1 (additive →
+   multiplicative; ETH 0.172/0.273/0.353 → 0.165/0.247/0.511, BNB
+   0.326/0.532/0.428 → 0.293/0.426/0.503)
+2. §1 invested-Sharpe row → SUPERSEDED by B2.6 (annualisation artifact;
+   corrected = all-bars Sharpe)
+3. §4 exposure-matched (entire) → SUPERSEDED by B2.2 (definitions
+   conflated; ETH verdict REVERSED to 100th percentile, both pairs)
+4. §6 supported-claims list → PARTIALLY SUPERSEDED by B2.3/B2.8/B3.6
+   (parity withdrawn → underpowered-design statement)
+5. Batch-1 Bottom line → SUPERSEDED by B2.8/B3.6 ("parity is confirmed"
+   withdrawn)
+6. B2.5 (entire) → SUPERSEDED by B3.2 (2,242.9/1,183.2 pp retracted;
+   DANGER-bar mean superseded by −0.79%/−0.68%)
+
+Plus the document-top note: Batch 1 superseded where marked; the
+correction trail is retained deliberately.
+
+## B5.3 Fee-term sign convention (task 3)
+
+Verified against code: the fee enters the reward **negatively** —
+`- cfg.fee_rate * turnover_norm`, `src/rl/env.py:356`. The B3.1 table's
++0.105/+0.125 are magnitudes (accumulated positive, subtracted
+downstream); the agent is penalised for trading, not rewarded.
+
+Decomposition-sum check (no adjustment): pnl − fee − dd reproduces the
+reported trained totals exactly — ETH −0.9938, BNB −0.8538 (match to 4
+decimals, both pairs). One-line convention note added under the B3.1
+table.
+
+## B5.4 Seed-42 positioning (task 4)
+
+Documented in B3.3 and in the manuscript (§4.2 seed note + §4.3.2
+paragraph): the main run uses seed 42 throughout; on BNB it sits at the
+unfavourable end of the seed distribution (folds-0+3 pooled MaxDD 0.2625
+vs 5-seed mean 0.102 — 2.6× worse). **Seed 42 is the pre-registered
+default, fixed in code before any result was observed**: trainer CLI
+default (`--seed`, default=42, `src/rl/agents/ppo_trainer.py:116-119`)
+and evaluation reset (`env.reset(seed=42)`, `src/rl/evaluate.py:266`).
+This forecloses any seed-selection suggestion. The implication runs
+against the flattering direction (the main run's BNB numbers are
+pessimistic about PPO), and every BNB-specific PPO magnitude in the
+manuscript is now qualified as conditional on seed 42's position.
+
+## B5.5 Abstract wording (task 5)
+
+| Before | After |
+|---|---|
+| "proposing a **regime-aware multi-asset execution framework**" | "building a **regime-aware multi-asset trading system**" |
+| "conduct a **controlled empirical benchmark**" | "conduct a **walk-forward evaluation**" |
+| "two production execution engines" | "two production trading engines" |
+| (RQ) "within a shared execution environment" | "within a shared trading environment" |
+| (1.3) "to benchmark supervised regime routing" | "to evaluate supervised regime routing" |
+
+Re-read findings beyond the two required changes: "execution engines"
+(RQ-adjacent), "shared execution environment" (RQ), and "to benchmark"
+(1.3) — all fixed. Remaining "execution" uses are the literature-review
+section title (Optimal Execution — a domain name) and the methodology
+MDP phrasing, retained as formal-problem description per the batch-4
+report's flag.
+
+## B5.6 DANGER figures linked (task 6)
+
+Manuscript §4.5 now carries the linking sentence: the overall DANGER
+mean (−0.79%/−0.68%) and the false-signal mean (+3.34%/−0.88% →
++3.34%/+3.88%, §3.6 item 8) are consistent — the overall mean is
+negative because true signals pull it down while concealing sharp
+dispersion; the asymmetry (small edge when right, large foregone gain
+when wrong) is the mechanism by which accuracy fails to convert into
+economic value.
+
+---
+
+## CODE FROZEN
+
+**The code is now frozen. Batch 5 Task 1 was the final computation; no
+further training, evaluation, or re-computation will be performed.**
+All subsequent work on this project is documentation-only.
