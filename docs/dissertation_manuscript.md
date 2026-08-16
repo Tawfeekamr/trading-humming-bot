@@ -607,6 +607,38 @@ answer to its research question is a **well-evidenced negative result**:
    drawdown penalties per se cause withdrawal — a bounded, singly-
    counted cost structure was never tested.
 
+8. **Training-window asymmetry (PPO month rounding).** PPO training
+   windows round to calendar months (`walk_forward.py:312-320`), so
+   PPO's fold-0 window is 4,344 bars against the RF's 4,320 — a 24-bar
+   (0.6%) asymmetry. Disclosed; the OOS boundary still holds (PPO
+   trains through 2025-01-10, test starts 2025-01-13).
+
+9. **Provenance is not single-snapshot.** The run manifest
+   (7e5feaf8), PPO sidecars (df1c3bed), and RF manifests (353cb252)
+   cite different commits. The diff between them touches
+   evaluation/reporting code only (`risk_stats.py`, `walk_forward.py`,
+   docs) — no training- or environment-logic changes — so they are
+   semantically identical for training and evaluation; single-snapshot
+   provenance is nonetheless NOT demonstrated.
+
+10. **The "untrained policy" control.** Renamed from
+    "randomly-initialised policy": it is an untrained PPO network
+    evaluated deterministically, not a random-action control. It
+    isolates learned-vs-initial behaviour of the SAME architecture; it
+    does not isolate architecture bias or exploration noise.
+
+11. **Two bootstrap CIs exist in the artifacts.**
+    `evaluation_report.py:64-108` computes a generic IID/additive
+    bootstrap CI (supports the per-fold summary tables); the
+    fold-cluster heuristic-block bootstrap in `risk_stats.py` supports
+    the MaxDD/Sortino difference claims. Readers should match each
+    claim to its CI; the IID CI supports no method-level claim.
+
+12. **The 70-bar embargo is approximate.** It bounds RSI's EWM tail
+    but ADX and MACD are also infinite-support recurrences, and the
+    100-bar warmup can reach ~30 bars past the embargo boundary. The
+    embargo is a decay tolerance, not a strict no-dependence guarantee.
+
 7. **Inferential unit.** The reported pooled paired test treats the
    per-bar return difference as the unit of observation (n = 4,314),
    while the method-level claim concerns a *training procedure
