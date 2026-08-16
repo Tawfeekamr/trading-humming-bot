@@ -139,11 +139,21 @@ $$\text{State Vector: } s_t = \Big( [X_{t,1}, \dots, X_{t,14}], I_t, U_t, \Delta
 
 $$\text{Reward Function (implemented): } r_t = \underbrace{(R^{eq}_t - R^{bh}_t)}_{\text{excess over buy\&hold}} - \underbrace{f \cdot \text{Turnover}_t}_{\text{fee}} - \underbrace{\lambda \cdot \Delta DD_t}_{\text{drawdown step}}, \quad \lambda = 0.5$$
 
-*Note: this reward is central to the findings — Chapter 4.1 shows its
-drawdown term rivals the entire PnL term and that a permanently-flat
-policy outscores the trained policy, i.e. abstention is optimal under
-this specification. The earlier draft's generic form (with a shaping
+*Verified against the implementation (`src/rl/env.py:349-356`;
+`bench_return` computed at `env.py:352`) — the manuscript's formulation
+matches the code. The earlier draft's generic form (with a shaping
 bonus) was not implemented.*
+
+**The first term is relative to buy-and-hold, and this matters to the
+diagnosis.** When the agent is flat, its equity return is zero and the
+reward for that bar is exactly $-R^{bh}_t$: in a rising bar, abstaining
+is *punished* by precisely the passive gain foregone. The reward
+therefore contains an explicit anti-withdrawal incentive. Chapter 4.1
+shows the agent withdrew anyway — the drawdown penalty and the
+doubly-counted fee drag outweighed an incentive specifically designed
+to prevent withdrawal. This is why the withdrawal cannot be attributed
+to a missing incentive to participate: the incentive was present, and
+the agent learned to accept its loss.
 
 ## 3.2 14-Feature Technical Indicator Engineering Space
 Each asset features 14 engineered technical indicators computed in Rust/Python:
@@ -320,6 +330,13 @@ five diagnostics:
    "deployed" on bars where it holds zero inventory - the learned
    withdrawal is compounded by an accounting asymmetry between the two
    exposure definitions (Section 3.6, item 7).
+
+Note the role of the reward's first term here (Section 3.1): it is
+*relative to buy-and-hold*, so a flat bar in a rising market is
+penalised by exactly the foregone passive gain — the withdrawal
+happened **despite** an incentive specifically designed to prevent it.
+The diagnosis is therefore difficult to attribute to a missing
+participation incentive; the drawdown penalty simply dominated it.
 
 ## 4.2 Master Performance Benchmark Table
 
