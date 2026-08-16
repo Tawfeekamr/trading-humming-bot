@@ -966,3 +966,71 @@ decision is deferred per Task 6.
 
 **The code is re-frozen. Batch 7 recomputation is complete; no further
 training, evaluation, or recomputation will be performed.**
+
+---
+
+# Batch 8 (documentation) — Post-recomputation integration (2026-08-16)
+
+Documentation only; frozen code untouched.
+
+## B8.1 Compounded-basis updates — every location
+
+`docs/dissertation_manuscript.md` (11 locations):
+- 4.2 ETH table: B&H +44.8→**+38.0** | RF −22.3→**−21.2** | PPO −13.1→**−12.8** (MaxDD column → per-fold medians 0.195/0.107/0.032)
+- 4.2 BNB table: B&H +3.8→**−4.3** | RF −17.0→**−20.3** | PPO −29.0→**−25.9** (medians 0.198/0.117/0.053)
+- 4.3.1 MDE: 59.7/102.7pp → **81.7/179.3pp** (compounded)
+- Abstract: returns and MDE updated
+- 5.1 findings + finding-1 narrative (BNB passive-loss qualification)
+`docs/progress/2026-09_report.md`: fully rewritten (B8.4).
+MANUSCRIPT_REVISION.md retains Batch-4 arithmetic figures by policy
+(dated record, not rewritten).
+
+## B8.2 The ETH significant result — as it now appears (4.3)
+
+"Fold-clustered bootstrap on the per-fold MaxDD difference (PPO − RF)
+— the project's first statistically significant result: ETH −0.070
+[−0.121, −0.020] (excludes zero); BNB −0.054 [−0.138, +0.022] (does
+not)." Both pairs always shown together. Mechanism sentence carried in
+every statement: *"consistent with PPO's far lower capital deployment
+(4.3% vs 21.1%, a 4.9x ratio), not with timing skill — if it were
+skill, PPO would not sit at the 100th percentile against random
+entries matched on the same capital exposure, which it does on both
+pairs."* No bare "PPO reduces drawdown" anywhere. The ETH/BNB
+divergence is presented as asset-selection sensitivity at effective
+n=6 — the thesis's own scale argument.
+
+## B8.3 September report — updated, three costs separated
+
+Section 4 now states distinctly: (1) the retracted ~~2,243pp~~
+(overlap-counting artifact, impossible against the +38% window);
+(2) the per-block de-overlapped gap 0.96pp/0.72pp — the actual
+replacement; (3) the portfolio-level gated-vs-B&H gap −67.1pp/−20.8pp.
+Related quantities, not versions of one another. Seed-42
+direction-of-bias and the independent-review item added; section 1
+reframed from defensive to "the new question emerged from inside the
+original one."
+
+## B8.4 Contributions — as restated (5.2)
+
+Six named diagnostics (flat-policy floor; reward-component
+decomposition; capital-exposure matching; fold-aware pooling; power
+reporting; seed-distribution reporting), each with cost and
+what-it-would-have-caught. Scoping paragraph: each is standard in an
+adjacent literature; the claim is a documented case study where each
+one's absence changed a conclusion — not invention.
+
+## B8.5 Novelty-claim sweep — none found
+
+Only occurrences of novel/invented language are the disclaimers
+themselves; the abstract claims the protocol "establishes" the result
+(no invention claim); §1.5 Novelty & Contributions exists only as a
+ToC entry with no body. Nothing rewritten because nothing overclaimed.
+
+## B8.6 Pooling artifact foregrounded (3.6.1)
+
+Dedicated subsection with the full before/after table (inflation
+factors 2.3x–5.5x across all strategies/pairs) and the self-audit
+argument: the false contiguity claim survived four corrective passes —
+including the batch that fixed the adjacent MaxDD construction — and
+was caught only by independent review, because it was a premise, not a
+computation.
