@@ -459,6 +459,12 @@ acting is the constraint.**
 |---|---|---|
 | PnL-vs-benchmark term | −0.579 | −0.328 |
 | fee term | +0.105 | +0.125 |
+
+*Sign convention: the fee term is reported as a magnitude — the reward
+subtracts it (`- cfg.fee_rate * turnover_norm`, src/rl/env.py:356); the
+agent is penalised, not rewarded, for trading. Verified: pnl − fee − dd
+reproduces the reported trained total exactly (ETH −0.9938, BNB
+−0.8538).*
 | λ·drawdown-step term | **0.310** | **0.401** |
 
 The drawdown penalty (λ=0.5) is **comparable to or larger than the entire
