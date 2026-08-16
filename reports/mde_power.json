@@ -1,42 +1,38 @@
 {
-  "BNBUSDT": {
-    "achieved_power_for_observed_diff": 0.0624383555563629,
-    "hac_lag": 9,
-    "maxdd": {
-      "block_length": 10,
-      "bootstrap_ci95": [
-        -0.38141460294091556,
-        0.1606286439735486
-      ],
-      "ci_half_width_mde_equivalent": 0.2710216234572321,
-      "observed_diff": -0.13380246638271875
+  "per_bar_basis": {
+    "BNBUSDT": {
+      "achieved_power": 0.06243835555636339,
+      "lag": 9,
+      "mde_per_bar": 0.00023810227713693687,
+      "n": 4314,
+      "n_required": 314103,
+      "new": {
+        "conversion": "(1+delta)^n - 1; exact for constant per-bar effect, Jensen-bound applies otherwise",
+        "cumulative_diff_pp_compounded": -11.341639434854978,
+        "mde_cumulative_pp_compounded": 179.28175389114446
+      },
+      "old": {
+        "cumulative_diff_pp": -12.037816854767081,
+        "mde_cumulative_pp": 102.71732235687456
+      },
+      "years": 35.85650684931507
     },
-    "mde_cumulative_pct_80pct_power": 102.71732235687475,
-    "mde_per_bar_80pct_power": 0.00023810227713693725,
-    "n_bars": 4314,
-    "n_required_for_observed_diff_80pct": 314103,
-    "n_required_years_hourly": 35.85650684931507,
-    "observed_cumulative_diff_pct": -12.037816854766877,
-    "observed_per_bar_mean_diff": -2.7904072449621873e-05
-  },
-  "ETHUSDT": {
-    "achieved_power_for_observed_diff": 0.07169952090346705,
-    "hac_lag": 9,
-    "maxdd": {
-      "block_length": 10,
-      "bootstrap_ci95": [
-        -0.34177196641876767,
-        0.0897471894567427
-      ],
-      "ci_half_width_mde_equivalent": 0.2157595779377552,
-      "observed_diff": -0.08156019905565157
-    },
-    "mde_cumulative_pct_80pct_power": 59.71847933437579,
-    "mde_per_bar_80pct_power": 0.00013842948385344413,
-    "n_bars": 4314,
-    "n_required_for_observed_diff_80pct": 180943,
-    "n_required_years_hourly": 20.655593607305935,
-    "observed_cumulative_diff_pct": 9.22101177621086,
-    "observed_per_bar_mean_diff": 2.1374621641657068e-05
+    "ETHUSDT": {
+      "achieved_power": 0.07169952090346352,
+      "lag": 9,
+      "mde_per_bar": 0.00013842948385344334,
+      "n": 4314,
+      "n_required": 180943,
+      "new": {
+        "conversion": "(1+delta)^n - 1; exact for constant per-bar effect, Jensen-bound applies otherwise",
+        "cumulative_diff_pp_compounded": 9.659413135308537,
+        "mde_cumulative_pp_compounded": 81.69212779129342
+      },
+      "old": {
+        "cumulative_diff_pp": 9.22101177621006,
+        "mde_cumulative_pp": 59.71847933437545
+      },
+      "years": 20.655593607305935
+    }
   }
 }
