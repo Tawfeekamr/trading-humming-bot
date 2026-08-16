@@ -77,7 +77,8 @@ Empirical results are reported from a corrected walk-forward evaluation protocol
 - [Chapter 5: Conclusion & Future Research](#chapter-5-conclusion--future-research)
   - [5.1 Summary of Findings](#51-summary-of-findings)
   - [5.2 Engineering & Scientific Contributions](#52-engineering--scientific-contributions)
-  - [5.3 Future Work](#53-future-work)
+  - [5.3 Limitations](#53-limitations)
+  - [5.4 Future Work](#54-future-work)
 - [References](#references)
 - [Appendix 1: System Architecture Code Manifest](#appendix-1-system-architecture-code-manifest)
 
@@ -490,7 +491,40 @@ answer to its research question is a **well-evidenced negative result**:
    comparing the trained policy's reward against a permanently-flat
    policy — a cheap, transferable diagnostic.
 
-## 5.3 Future Work
+## 5.3 Limitations
+
+1. **Asset coverage.** The corrected-protocol evaluation covers ETHUSDT
+   and BNBUSDT only. The live regime pipeline also serves XRP-USDT and
+   DOGE-USDT, which were never evaluated under the corrected protocol;
+   nothing here transfers to them.
+2. **Backtest only.** All results are historical-replay backtests. No
+   live or paper-trading performance is claimed anywhere in this
+   dissertation. Shadow routing produced no result within the thesis
+   horizon.
+3. **Seed scope.** The seed sweep covers 5 seeds on folds 0 and 3 only
+   (20 of 60 possible trainings), not the full six folds; its figures
+   are not comparable to the six-fold pooled tables (scope note in
+   reports/seed_sensitivity.json).
+4. **Underpowered by construction.** Detecting the observed differences
+   at 80% power would require 21-36 years of hourly data
+   (Section 4.3.1). The evaluation design cannot support method-level
+   claims at any effect size it plausibly encounters.
+5. **Baseline ordering.** The supervised baseline was chosen because it
+   represents the prevailing approach and because existing
+   infrastructure allowed the decision layer to be isolated as the only
+   variable. That choice implicitly assumed both approaches outperform
+   simpler alternatives — an assumption the corrected evaluation
+   falsified (both were beaten by buy-and-hold and, at matched
+   exposure, by random entry). Baselines should be ordered from
+   abstention upward — flat policy, capital-matched random entry,
+   buy-and-hold, then learned policies — and were not.
+6. **Lambda sensitivity untested.** The withdrawal is documented at
+   lambda = 0.5 only. No sensitivity sweep over the drawdown-penalty
+   weight was run, so no threshold separating withdrawal from
+   deployment is established; the reward misspecification diagnosis is
+   made at a single point of the reward's parameter space.
+
+## 5.4 Future Work
 
 1. **Reward redesign before scale-up.** The drawdown penalty must be
    bounded relative to achievable PnL (or replaced with a
