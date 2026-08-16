@@ -1034,3 +1034,88 @@ argument: the false contiguity claim survived four corrective passes —
 including the batch that fixed the adjacent MaxDD construction — and
 was caught only by independent review, because it was a premise, not a
 computation.
+
+---
+
+# Batch 9 — Reproducibility documentation (2026-08-16)
+
+Tasks 1-4 documentation only. Task 5 (optional, last permitted code
+change) was assessed and STOPPED per its own constraint.
+
+## B9.1 REPRODUCE.md — exists at repository root
+
+Section B commands (all executed; outputs verified to match the stated
+expected values exactly):
+
+- **B1 compounded returns** from `reports/returns/*.csv`:
+  `ETHUSDT ppo: -0.1278 / rf: -0.2117 / ta: +0.3797`;
+  `BNBUSDT ppo: -0.2590 / rf: -0.2025 / ta: -0.0427`
+- **B2 per-fold MaxDD** from the same files (ETH ppo median 0.0317,
+  BNB ppo 0.0529, ...)
+- **B3 the arithmetic-vs-compounded defect**: prints stored vs sum vs
+  compounded — stored equals the sum; BNB B&H flips +0.0378 → −0.0427
+- **B4 flat-vs-trained**: prints `19 of 20` and the exception
+  `[("BNBUSDT", 3, 999, 0.0143)]`
+
+Section A maps 15 headline claims to exact artifact fields; Section C
+specifies the re-run (pinned data-end 2026-07-05, versions,
+bit-reproducibility split); Section D lists five irreproducibilities.
+
+## B9.2 Failure-mode summary table
+
+Now at the head of manuscript §3.6: 14 rows (defect / effect /
+flipped? / caught-by / section). SELF found 8; **independent review
+found 6 — including both headline-invalidating defects** (uncompounded
+returns; fold-gap pooling) that survived five self-directed passes.
+The distinction is presented as data supporting the thesis's
+self-audit argument.
+
+## B9.3 Abstract scoping — before/after
+
+Before: "...outscores the trained policy in 19 of 20 seed-fold-pair
+cells — and that the regime classifier's DANGER warnings..."
+(nothing between the finding and the next finding)
+
+After: "...outscores the trained policy in 19 of 20 seed-fold-pair
+cells. **This withdrawal is documented under one reward specification
+that both double-counts transaction costs and applies a drawdown
+penalty at lambda=0.5; no threshold in lambda is established, and
+generalisation to other reward designs is untested.** The evaluation
+further shows..."
+
+Body qualifications verified present: §4.1 scope sentence, §3.1 fee
+double-count disclosure, §5.3 item 6a. Also fixed: "five diagnostics"
+→ four (post-ceiling-retraction count).
+
+## B9.4 Field-prevalence claim + origins
+
+"absence is the norm" had no survey behind it. Rewritten: *"This
+dissertation conducted no systematic survey of the RL-for-trading
+literature and therefore makes no claim about how common these
+omissions are in the field; the observation is restricted to this
+project's own pre-correction reports, in which none of the six was
+applied."*
+
+Origin discipline added per diagnostic: flat-policy floor ←
+naive-baseline flooring (RL evaluation); reward decomposition ←
+econometric model diagnostics; capital-exposure matching ← portfolio
+attribution; fold-aware pooling ← purging/embargo (quant-finance CV);
+power reporting ← power analysis (clinical trials, applied stats);
+seed-distribution reporting ← deep-RL reproducibility literature.
+
+## B9.5 Task 5 — divergence log: STOPPED, not implemented
+
+Per its own constraint. The PPO shadow half already exists write-only
+(`src/rl/shadow_journal.py`); the required LIVE half cannot be
+recorded without (a) modifying production trading-engine-core (per-bar
+engine selection is not exported), or (b) deploying the non-running
+shadow sidecar — a production change to frozen code. A PPO-only
+partial log cannot compute agreement/divergence, failing the task's
+purpose. No code changed; no limitation text added (nothing
+implemented to limit).
+
+---
+
+## CODE PERMANENTLY FROZEN
+
+**Batch 9 made no code changes. The code is now PERMANENTLY FROZEN.**
