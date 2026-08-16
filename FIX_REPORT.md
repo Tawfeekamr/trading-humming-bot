@@ -737,8 +737,8 @@ report's flag.
 ## B5.6 DANGER figures linked (task 6)
 
 Manuscript §4.5 now carries the linking sentence: the overall DANGER
-mean (−0.79%/−0.68%) and the false-signal mean (+3.34%/−0.88% →
-+3.34%/+3.88%, §3.6 item 8) are consistent — the overall mean is
+mean (−0.79%/−0.68%) and the false-signal mean (+3.34%/+3.88%,
+§3.6 item 8) are consistent — the overall mean is
 negative because true signals pull it down while concealing sharp
 dispersion; the asymmetry (small edge when right, large foregone gain
 when wrong) is the mechanism by which accuracy fails to convert into
