@@ -290,5 +290,49 @@
         "total_return_pct": 0.55
       }
     ]
+  },
+  "scope_annotation": {
+    "folds_covered": [
+      0,
+      3
+    ],
+    "note": "Figures below are NOT comparable to the pooled six-fold numbers in FIX_REPORT section 1 (PPO MaxDD 0.165 ETH / 0.293 BNB). This sweep covers folds 0 and 3 ONLY. VERIFIED: fold coverage is the whole explanation \u2014 seed-42 per-fold MaxDD here (ETH 0.0769/0.0490) matches the main run to 4 decimals.",
+    "per_fold_maxdd_main_run_all_folds": {
+      "BNBUSDT": [
+        0.1904,
+        0.0181,
+        0.0329,
+        0.1054,
+        0.0729,
+        0.0132
+      ],
+      "ETHUSDT": [
+        0.0769,
+        0.0083,
+        0.0145,
+        0.049,
+        0.12,
+        0.0071
+      ]
+    },
+    "reading": "Read the across-seed distributions against the folds-0+3 reference (ETH pooled 0.0776, mean-across-seeds 0.075; BNB pooled 0.2625, mean-across-seeds 0.102 \u2014 the BNB seed mean is BELOW its fold-0+3 seed-42 pooled reference because per-seed pooling differs; both statements are about folds 0+3 only). The seed-variance-dominates verdict is unaffected.",
+    "reference_main_run_seed42_folds_0_3": {
+      "BNBUSDT": {
+        "per_fold_maxdd": [
+          0.1904,
+          0.1054
+        ],
+        "pooled_concatenated_maxdd": 0.2625,
+        "six_fold_pooled_maxdd": 0.293
+      },
+      "ETHUSDT": {
+        "per_fold_maxdd": [
+          0.0769,
+          0.049
+        ],
+        "pooled_concatenated_maxdd": 0.0776,
+        "six_fold_pooled_maxdd": 0.165
+      }
+    }
   }
 }
