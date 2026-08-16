@@ -211,11 +211,13 @@ fields renamed (`time_in_market` vs `capital_weighted_exposure`); the env
 now exposes per-bar `position_value`.
 
 **Verdict change (ETH flips):** matched on true capital exposure,
-random-entry MaxDD medians are 0.029 (ETH) / 0.035 (BNB) vs PPO's
-0.165 / 0.293 — **PPO sits at the 100th percentile (worst) on both pairs.**
-The batch-1 ETH verdict "survives exposure matching" was an artifact of the
-mismatched definitions. PPO's drawdown is worse than random entries at the
-same capital exposure, on both pairs.
+random-entry MaxDD medians are 0.0509 (ETH) / 0.0508 (BNB) per the final
+committed artifacts (reports/exposure_match_*.json; the 0.029/0.035 quoted
+in an earlier draft of this section was from a pre-final regeneration) vs
+PPO's 0.165 / 0.293 — **PPO sits at the 100th percentile (worst) on both
+pairs.** The batch-1 ETH verdict "survives exposure matching" was an
+artifact of the mismatched definitions. PPO's drawdown is worse than random
+entries at the same capital exposure, on both pairs.
 
 ## B2.3 MDE and power (task 3)
 

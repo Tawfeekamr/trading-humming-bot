@@ -263,7 +263,7 @@ from it.
    "deployed" in time-in-market but hold no capital, so a "58%
    exposure" policy can be a 4.3%-exposure policy. *Figures:* ETH PPO
    time-in-market 58.1% vs capital-weighted 4.3%; baselines re-matched
-   on capital: random-entry median MaxDD 0.029 (ETH) / 0.035 (BNB) vs
+   on capital: random-entry median MaxDD 0.0509 (ETH) / 0.0508 (BNB) vs
    PPO's 0.165 / 0.293. *Effect:* **CONCLUSION FLIP** — the ETH
    "drawdown advantage survives exposure matching" verdict reversed to
    PPO at the 100th percentile (worst) on both assets.
@@ -362,7 +362,8 @@ so all PPO-vs-RF comparisons in this chapter are descriptive.*
 **Reading of the table:** no routing policy beat passive exposure on
 either asset. The lower drawdowns of the routed policies are an exposure
 effect, not a timing effect: capital-matched random-entry baselines at
-PPO's own 4-5% deployment produced median MaxDD of 2.9-3.5%, versus PPO's
+PPO's own 4-5% deployment produced median MaxDD of 5.1% on both assets
+(ETH 0.0509 / BNB 0.0508, reports/exposure_match_*.json), versus PPO's
 16.5-29.3% - PPO sits at the 100th percentile (worst) of the
 exposure-matched random distribution on both assets.
 
@@ -464,9 +465,10 @@ answer to its research question is a **well-evidenced negative result**:
    strategy.
 4. **Regime classification accuracy does not imply gating value.** At
    0.80–0.87 OOS accuracy, DANGER warnings are false 38–47% of the time,
-   and the mean forward return when DANGER is correct (−0.7% to −1.0%)
-   is too small to pay for the foregone upside — the gate cost 67.1pp
-   (ETH) and 20.8pp (BNB) against buy-and-hold over the same window.
+   and the mean forward return on DANGER bars (−0.79% ETH / −0.68% BNB,
+   per Section 4.5's source) is too small to pay for the foregone
+   upside — the gate cost 67.1pp (ETH) and 20.8pp (BNB) against
+   buy-and-hold over the same window.
 
 ## 5.2 Engineering & Scientific Contributions
 
