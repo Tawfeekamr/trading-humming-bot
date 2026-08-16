@@ -145,6 +145,13 @@ $$\text{Reward Function (implemented): } r_t = \underbrace{(R^{eq}_t - R^{bh}_t)
 matches the code. The earlier draft's generic form (with a shaping
 bonus) was not implemented.*
 
+**Fee double-count (disclosed).** `src/rl/env.py:333-334` subtracts
+fees from equity; `:355-357` subtracts a fee term from the reward
+again. The code's own comment (`:346-347`) calls this amplification
+("a deliberate anti-churn knob"). The reward under study therefore
+penalises trading costs twice AND penalises drawdown at λ=0.5 — it is
+unusually punitive, and the withdrawal finding is scoped to it.
+
 **The first term is relative to buy-and-hold, and this matters to the
 diagnosis.** When the agent is flat, its equity return is zero and the
 reward for that bar is exactly $-R^{bh}_t$: in a rising bar, abstaining
@@ -314,7 +321,10 @@ Across the other 19 cells, doing nothing scores higher than the learned
 policy — the reward function does not distinguish the trained policy
 from abstention, and the optimal response to it is near-abstention. The
 routing question the experiment intended to ask is not the one the
-reward answers.
+reward answers. **Scope: this is a finding about a policy trained
+under THIS reward — which double-counts transaction costs (Section 3.1)
+and penalises drawdown at λ=0.5 — not a claim that reinforcement
+learning generally learns abstention in trading.**
 
 *Illustrative example (seed 42 only, six folds pooled — a different and
 broader fold scope than the 19-of-20 seed sweep above, and a single
@@ -586,6 +596,16 @@ answer to its research question is a **well-evidenced negative result**:
    weight was run, so no threshold separating withdrawal from
    deployment is established; the reward misspecification diagnosis is
    made at a single point of the reward's parameter space.
+
+6a. **Unusually punitive reward.** The reward double-counts
+   transaction costs (`env.py:333-334` in equity; `:355-357` in the
+   reward; the code comment calls it amplification) in addition to the
+   λ=0.5 drawdown penalty. The withdrawal finding licenses the claim
+   that THIS reward specification produces abstention, and that the
+   flat-policy comparison detects it; it does NOT license the claim
+   that RL generally converges to abstention in trading, nor that
+   drawdown penalties per se cause withdrawal — a bounded, singly-
+   counted cost structure was never tested.
 
 7. **Inferential unit.** The reported pooled paired test treats the
    per-bar return difference as the unit of observation (n = 4,314),
