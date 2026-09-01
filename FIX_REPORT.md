@@ -1107,7 +1107,13 @@ seed-distribution reporting ← deep-RL reproducibility literature.
 ## B9.5 Task 5 — divergence log: STOPPED, not implemented
 
 Per its own constraint. The PPO shadow half already exists write-only
-(`src/rl/shadow_journal.py`); the required LIVE half cannot be
+(`src/rl/shadow_journal.py`) *[Correction, Batch 14 (2026-08-23):
+"write-only" is inaccurate as a description of the module —
+`scripts/ml_report.py` and `scripts/verify_ml_rl_rollout.py` both read
+the journal, and no reader/writer asymmetry motivated the stop. The
+operative reason stands unchanged: the required LIVE half cannot be
+recorded without modifying frozen code, and a PPO-only partial log
+cannot compute agreement]*; the required LIVE half cannot be
 recorded without (a) modifying production trading-engine-core (per-bar
 engine selection is not exported), or (b) deploying the non-running
 shadow sidecar — a production change to frozen code. A PPO-only
@@ -1254,3 +1260,637 @@ omit the diagnostics."
 None. Post-correction flags correspond one-to-one to documented
 findings/limitations; the two validation misses are recorded tool
 limitations, not false positives.
+
+---
+
+# Batch 13 — persisted exposure traces and withdrawal attribution (2026-08-15)
+
+**Correction scope.** The freeze was lifted for instrumentation only.
+No environment, reward, routing, training, or return-evaluation logic was
+changed. The existing trained PPO artifacts were reused; a deterministic
+untrained PPO network with the same architecture was evaluated only to
+produce the requested control traces.
+
+## B13.1 Instrumentation and verification
+
+`scripts/diagnose_exposure.py` now persists one CSV per pair, policy, and
+fold under `reports/exposure_traces/`. Each row records timestamp, action
+index/label, position value, equity, position-value/equity, inventory units,
+turnover, grid activation, and buy-level crossings for the completed bar.
+The new targeted test (`tests/test_diagnose_exposure.py`) passed; the script
+compiled cleanly.
+
+The diagnostic was rerun twice after the recording change, with the second
+run normalising trace action labels to the existing report convention. It
+produced 24 trace files. Trained anchor counts reproduce the committed
+summary exactly:
+
+| pair | rows | FLAT | action distribution |
+|---|---:|---:|---|
+| ETHUSDT | 4,320 | 1,812 | grid 717/1,147/520; trend 37/1/11; swing 39/0/36 |
+| BNBUSDT | 4,320 | 1,980 | grid 914/625/674; trend 8/43/57; swing 10/8/1 |
+
+The untrained ETH fold 4 control terminated at the environment's
+50%-initial-equity threshold, so it contains 4,220 rows; this is preserved,
+not padded.
+
+## B13.2 A/B/C exposure decomposition
+
+For each trained trace row: A = explicit FLAT; B = active action with zero
+position; C = active action with non-zero position.
+
+| pair | A | B | C |
+|---|---:|---:|---:|
+| ETHUSDT | 1,812 (41.94%) | 1,979 (45.81%) | 529 (12.25%) |
+| BNBUSDT | 1,980 (45.83%) | 1,806 (41.81%) | 534 (12.36%) |
+
+The untrained controls have A/B/C counts of ETH 10/1,760/2,450
+(0.24%/41.71%/58.06%) over 4,220 rows and BNB 1/1,844/2,475
+(0.02%/42.69%/57.29%) over 4,320 rows.
+
+## B13.3 Primitive fill statistics and action shift
+
+Among trained grid-selected bars, at least one buy level was crossed on
+244/2,384 ETH bars (10.23%) and 216/2,213 BNB bars (9.76%). Their mean
+position-value/equity was 4.88%/5.86%, with medians 0%; filled-grid means
+were 30.72%/27.56%, while unfilled-grid means were 1.93%/3.51%.
+Trend and swing selected bars entered immediately: non-zero position rates
+were ETH 93.88%/93.33% and BNB 97.22%/94.74% (trend/swing).
+
+The trained policy's grid share was 55.19% (ETH) / 51.23% (BNB), versus
+51.45% / 53.33% for the untrained control. The material preference shift
+was away from immediate trend/swing actions (trained 2.87% / 2.94% versus
+untrained 48.73% / 46.64%) and toward FLAT (41.94% / 45.83% versus
+0.24% / 0.02%), not a general shift toward grid.
+
+## B13.4 Decisive control and observed ceiling
+
+Capital-weighted exposure from the trace rows is trained 4.2676%/5.2470%
+and untrained 49.1529%/49.3500% (ETH/BNB). The untrained-minus-trained
+gaps are 44.8853/44.1031 percentage points. Using the untrained active
+conditional mean as the counterfactual, the gap decomposes into explicit
+FLAT selection 20.5491/22.6126 points and within-active exposure 24.3362/
+21.4905 points (ETH/BNB), summing exactly.
+
+Against the RF observed-exposure references (21.0986% ETH, 60.5434% BNB),
+the trained policy reaches 20.23%/8.67% and the untrained control reaches
+232.97%/81.51% of the reference. The higher untrained exposure under the
+same primitives makes the verdict **LEARNED**: low trained deployment is
+primarily a learned selection outcome, with unfilled active actions as a
+secondary contributor. The ETH control's early termination limits this
+comparison to its observed pre-termination rows.
+
+## B13.5 Record changes
+
+`REPRODUCE.md` now maps the 24 trace files and provides a pandas-only anchor
+check. The manuscript's §4.1 adds the A/B/C, fill, control, and termination
+evidence; §5.3 records the untrained-horizon limitation. No return series,
+trained model, or headline return metric was recomputed or modified.
+
+---
+
+# Batch 14 — deployment security + manuscript reconciliation (2026-08-23)
+
+Operational-audit follow-up. Part A touched infrastructure configuration
+only (AWS security group); Part B is documentation only. No file under
+`src/rl/`, `src/ml/`, `src/data/`, `reports/`, `models/`, or any
+evaluation artifact was modified. No trading logic was touched;
+`server.rs` was not modified. The code freeze stands.
+
+## B14.1 Part A — security group (Task A1)
+
+**Audit correction first:** the audit's headline ("close port 3030")
+described an exposure that did not exist — `sg-084d00ae2d885e280`
+(trading-bot-sg) had **no 3030 rule at any time**; the engine port is
+published only inside the Docker network and was already unreachable
+from the internet. The audit missed the real exposures: two
+**vestigial public ingress rules on ports 80 and 443** (nginx served a
+static status page on 80; 443 was dead).
+
+Actions taken (security-group level only):
+
+- Revoked `sgr-04747273b71a48615` (0.0.0.0/0 tcp/80).
+- Revoked `sgr-079b464c68666cee8` (0.0.0.0/0 tcp/443).
+- The security group's inbound list is now empty.
+
+Verification from an external IPv4 address (92.97.137.168): ports 80,
+443, and 3030 all fail to connect. Post-change health: all three
+containers up, regime pusher flowing on its 180 s cadence, circuit
+breaker not tripped. Docker inter-container traffic
+(`http://rust-bot:3030` via Docker DNS) does not traverse the EC2
+security group and is unaffected; AWS SSM needs no inbound rules and
+is unaffected. No application code was modified (see B14.6).
+
+## B14.2 Part A — routing.mode (Task A2)
+
+The deployed `config/strategy.yaml` on the EC2 host is byte-identical
+to the committed default (last config commit `a6abe90`):
+`routing.mode: shadow` (line 80). The mode is read once at boot by
+`AppConfig::load` (`trading-engine-core/src/config.rs:479`);
+`is_live()` is a string comparison against "live". No API endpoint,
+environment variable, or runtime path can change it. The only flip
+paths are (a) a commit to `main` that changes the YAML — auto-deployed
+by the deploy workflow — or (b) a manual host edit plus container
+restart. Automation therefore COULD flip it, via a push to main; this
+is documented rather than fixed, per instruction.
+
+The latent live-mode duplicate-sell defect (duplicate-order guard
+`grid.rs:947` defeated by the same-cycle drain at `grid.rs:550-552`
+plus the paper-fill cooldown) was NOT fixed, per instruction. It is
+documented in manuscript §5.3.1, together with the routing-mode
+finding, as a known deployment risk the freeze leaves unaddressed.
+
+## B14.3 Part B — manuscript corrections (Tasks B1-B5)
+
+All edits in `docs/dissertation_manuscript.md` unless noted.
+
+**B1 — backtest-only wording (§5.3 item 2).**
+
+- Before: "Shadow routing produced no result within the thesis
+  horizon."
+- After: "The Phase-1 paper gate (shadow routing) was merged into the
+  codebase but never operationally run: no routing sidecar was ever
+  deployed, no shipped container can execute the router (the RL stack
+  is installed in no image, and the legacy compose entry points at the
+  wrong host and port), and no shadow routing log
+  (`data/shadow_routing.jsonl`) was ever produced. Every reported
+  number comes from the frozen walk-forward backtests."
+- Companion banners: `docs/rl_walk_forward_results.md`'s SUPERSEDED
+  banner gains a bullet stating the *Paper-only verification runbook*
+  was never executed and no shadow log exists;
+  `docs/ml-retraining-guide.md` gains a STATUS banner (retrain
+  automation inoperative — its own commands invoke the removed
+  `src.ml.train_pipeline`, current trainer is `src.ml/train_regime.py`;
+  the `--shadow` procedures reference a journal that has never
+  existed). No other statement in the searched corpus (manuscript,
+  FIX_REPORT, REPRODUCE.md, progress docs) claims PPO runs live or
+  that a shadow log exists — the manuscript was already conservative;
+  these edits make the operational fact explicit.
+
+**B2 — the 0.78-0.87 accuracy claim.** Verdict: **commit-history
+claims, not reproducible from committed evidence.** An exhaustive
+search of `reports/` found no artifact containing the accuracy figures
+(the model manifests store only `training_samples`;
+`scripts/eval_regime_oos.py` prints accuracies to console and persists
+nothing). Not removed — labelled instead, and noted as the **second
+instance** of the Batch-13 missing-traces defect class (first
+instance: the withdrawn ECE = 0.03):
+
+- §3.3 (first use): provenance caveat appended — figures are
+  commit-history claims, same defect class; labelled rather than
+  withdrawn because no conclusion rests on their precise values (the
+  §4.5 argument is that accuracy did not convert into gating value).
+- §4.5: "(0.80-0.87; commit-history figures, see the provenance
+  caveat in Section 3.3)" inserted.
+- §5.1 finding 4: "(commit-history figures; Section 3.3 caveat)"
+  inserted.
+- Traceability table (§3.6, 14 rows) checked: no row cites a source
+  lacking its value — the accuracy figures appear nowhere in it, so no
+  table change was needed.
+
+**B3 — swing primitive.** Confirmed: swing exists in the frozen
+evaluation environment (`src/rl/env.py:559-583`); the Rust production
+deletion (`eb91a15`, 2026-07-25) touched the production path only;
+frozen results are internally consistent with swing present (ETH
+39/0/36, BNB 10/8/1 swing selections of 4,320 steps — exact counts
+derived from `reports/exposure_diagnosis.json` action proportions).
+Added manuscript §5.3 item 14: "The simulation action space includes a
+primitive absent from the production execution path" — a concrete
+instance of the simulation-to-deployment gap (full text in
+manuscript).
+
+**B4 — shadow-journal "write-only" note.** FIX_REPORT B9.5 corrected
+with a bracketed Batch-14 note: readers exist (`scripts/ml_report.py`,
+`scripts/verify_ml_rl_rollout.py` both read the journal); the
+operative stop reason (no LIVE half recordable without modifying
+frozen code; a PPO-only partial log cannot compute agreement) stands
+unchanged.
+
+**B5 — operational limitations subsection.** Added manuscript
+**§5.3.1 "Deployment-layer limitations (documented, not fixed)"** with
+the five audit items — (1) models frozen at the 2026-08-15 retrain +
+inoperative retrain workflow (`.github/workflows/retrain.yml:32` →
+nonexistent `src.ml.train_pipeline`); (2) drift monitor observes but
+never reports (`src/ml/regime_pusher.py:338` vs `:377-383`); (3)
+regime cache TTL equals push interval → systematic None windows
+(`trading-engine-core/src/main.rs:96`); (4) YAML risk parameters with
+no code reader (`trend.max_positions`, `max_drawdown_pct`,
+`daily_loss_limit_pct`); (5) routing global vs regime per-pair — plus
+the two A2 facts (shadow lock with the push-to-main flip path; the
+duplicate-sell defect). Framed as documented deployment-layer
+limitations, not defects being fixed; the freeze stands.
+
+**Housekeeping (ordering only):** §5.3 items were out of numerical
+order (…6, 6a, 8, 9, 13, 10, 11, 12, 7). Blocks were repositioned
+into order (1…6, 6a, 7…14). No item was renumbered — the §3.6 table's
+"§5.3-11" cross-reference still resolves to item 11 (verified
+post-edit).
+
+## B14.4 REPRODUCE.md B3 erratum (found during B6)
+
+REPRODUCE.md §B3 claimed "the stored value equals the SUM (the
+superseded arithmetic definition)". That is false for the committed
+artifacts: Batch 7 (commit `231f0af`) rewrote the stored
+`total_return` values to the compounded basis, so stored ==
+compounded (+0.3797 ETH / −0.0427 BNB) while the naive sum is
++0.4483 / +0.0378. The check still demonstrates what it was designed
+to demonstrate (the two definitions differ materially; BNB flips
+sign), but a reader following the guide verbatim would conclude the
+check FAILED. Corrected in place with a bracketed Batch-14 erratum
+note. This is the **third instance** of the mis-/un-stated-trace
+defect class (after the withdrawn ECE figure and the accuracy
+figures).
+
+## B14.5 Section B verification re-run (Task B6)
+
+All five checks re-run 2026-08-23 from the repository root; every
+expected value matched exactly:
+
+- **B1** compounded total returns: ETH ppo −0.1278 / rf −0.2117 / ta
+  +0.3797; BNB ppo −0.2590 / rf −0.2025 / ta −0.0427. ✓
+- **B2** per-fold MaxDD: ETH ppo folds .0769/.0083/.0145/.0490/.1200/
+  .0071 (median 0.0317); BNB ppo median 0.0529; ETH ta median 0.1947;
+  BNB ta 0.1975. ✓
+- **B3** stored vs sum vs compounded: numeric behaviour exactly as
+  designed (see B14.4 for the expectation-text erratum). ✓
+- **B4** flat-vs-trained: 19 of 20 cells; single exception
+  ("BNBUSDT", fold 3, seed 999, +0.0143). ✓
+- **B5** exposure traces: ETH trained 4320 rows / 1812 FLAT / mean
+  exposure 0.042676; ETH untrained 4220 / 10 / 0.491529; BNB trained
+  4320 / 1980 / 0.052470; BNB untrained 4320 / 1 / 0.493500. ✓
+
+## B14.6 Freeze confirmation (Task B6)
+
+`git status --porcelain -- src/rl/ src/ml/ src/data/ reports/ models/
+trading-engine-core/` returns zero modifications to tracked files.
+The only entries in frozen paths are (a) the 24 Batch-13
+`reports/exposure_traces/*.csv` files (staged `A` by Batch 13, before
+this batch) and (b) untracked local `models/rl/_seed_*` binaries and
+`models/_pre_manifest_backup_20260815/` (pre-existing, never
+committed, untouched). Everything this batch wrote lives in `docs/`,
+`FIX_REPORT.md`, and `REPRODUCE.md`:
+
+```
+ M FIX_REPORT.md
+ M REPRODUCE.md
+ M docs/dissertation_manuscript.md
+ M docs/ml-retraining-guide.md
+ M docs/rl_walk_forward_results.md
+ M scripts/diagnose_exposure.py      (pre-existing Batch-13 change; not this batch)
+```
+
+`src/` — including `server.rs` and all of `src/rl/`, `src/ml/`,
+`src/data/` — is clean. No evaluation artifact, model, or return
+series was recomputed or modified. The freeze stands.
+
+---
+
+# Batch 15 — prior-art attribution and scope (2026-08-23)
+
+Documentation only: `docs/dissertation_manuscript.md`, `PRIOR_ART.md`,
+and this file. No code, no computation, no artifact changes. The
+freeze stands. Implements the PRIOR_ART.md (2026-08-17) revision
+program: attribution corrected, origins cited, residuals stated,
+closest neighbours engaged.
+
+## B15.1 Task 1 — contribution 2b origin corrected (§5.2)
+
+The origin named the wrong discipline.
+
+- Before: "*Origin: component reporting (econometric model
+  diagnostics);*"
+- After: "*Origin: reward decomposition — the explainable-RL
+  literature (Distributional Reward Decomposition, NeurIPS 2019; RD2,
+  NeurIPS 2020; Explainable RL via Reward Decomposition, IJCAI) and
+  RL debugging practice (torchrl debugging guidance explicitly
+  instructs checking whether the agent favours a single reward
+  component). An earlier draft attributed this origin to
+  'econometric model diagnostics' — the wrong discipline; that
+  attribution is superseded.*"
+
+The entry now also states plainly, as required: "**Nothing survives
+on this diagnostic except the case documentation:** the technique is
+established where it originates, and this dissertation's addition is
+only the documented instance in which its absence concealed a
+drawdown penalty rivalling the entire PnL term, plus a fee
+double-count, across four self-audit passes."
+
+## B15.2 Task 2 — origins cited (§5.2 contributions 2a and 2c)
+
+**2a, before:** "*Origin: naive-baseline flooring (RL evaluation
+practice);*"
+**2a, after:** "*Origin: naive-baseline flooring (RL evaluation
+practice) — institutionalised outside trading: the do-nothing agent
+is the score-0 reference against which every competitor is normalised
+in the L2RPN power-grid RL competitions (Marot et al., 2021,
+arXiv:2103.03104); a trivial all-zero quoting policy At=[0,0] is 'a
+relatively strong benchmark' in market-making RL (Gašperov &
+Kostanjčar, 2021, IEEE Access 9); a passive policy inactive 60% of
+the time is a standard baseline in execution RL (Hafsi & Vittori,
+2024, arXiv:2411.06389);*"
+
+**2c, before:** "*Origin: exposure matching (portfolio attribution);*"
+**2c, after:** "*Origin: exposure matching (portfolio attribution) —
+Cremers & Petajisto's Active Share (2009); Brinson-model performance
+attribution (Brinson, Hood & Beebower, 1986); Frazzini & Pedersen's
+Betting Against Beta (JFE 2014); and, for the closest structural
+analogy, selective prediction (Chow, 1970; Geifman & El-Yaniv, NeurIPS
+2017; SelectiveNet, ICML 2019), where abstention improving metrics is
+the founding observation and coverage reporting the established
+cure;*"
+
+## B15.3 Task 3 — the D1 residual, stated explicitly (§5.2, after 2a)
+
+As now written:
+
+"*Residual after an adversarial prior-art search (PRIOR_ART.md,
+2026-08-17): do-nothing baselines are established outside trading —
+L2RPN scoring, trivial-policy benchmarks in market making — but every
+trading use found scores abstention on performance metrics
+(implementation shortfall, P&L, Sharpe) rather than under the
+training reward. The use as a reward-misspecification test appears
+unclaimed. This is a scoped observation from one search, not a
+priority claim.*"
+
+## B15.4 Task 4 — To-Quote engaged (§4.6 and §4.7)
+
+**§4.6** gains a bullet: Wang, Ventre & Polukarov (arXiv:2508.16588,
+2025) report that occasionally refusing to quote IMPROVES returns and
+Sharpe — with the distinction stated: there, abstention is designed,
+beneficial, and bounded (quoting ratios above 95%); here it is
+undesigned, arises from a misspecified reward, and abandons roughly
+95% of deployable capital. "Abstention is not intrinsically a
+failure; undesigned abstention under a misspecified reward is the
+case documented here."
+
+**§4.7** gains an acknowledgment paragraph placed directly after the
+comparative-rewards argument, before the drawdown-penalty conclusion:
+the comparative claim ("specifications at least as punitive … WITHOUT
+producing abstention") cannot be read as "punitive rewards never
+produce abstention", and now says so explicitly — plus the closest
+published relative, JaxMARL-HFT (see B15.6).
+
+## B15.5 Task 5 — positioning against selective prediction (§4.6)
+
+New paragraph after the positive-literature bullets, as prescribed:
+
+"**Selective prediction is the known analogue, and the distinction is
+stated.** In selective classification, abstention is declared and
+measured: coverage is reported as a matter of course (Chow, 1970;
+Geifman & El-Yaniv, NeurIPS 2017; SelectiveNet, ICML 2019). In
+reinforcement-learning trading evaluation it is neither declared nor
+measured — neither abstention rate nor capital-weighted exposure is a
+standard reported quantity. The contribution here is not the
+observation that abstention flatters metrics, which is decades old,
+but a documented case in a domain where the corresponding coverage
+measure is absent from standard practice."
+
+## B15.6 Task 6 — lazy agents (§4.6)
+
+New bullet: Liu et al., "Lazy Agents: A New Perspective on Solving
+Sparse Reward Problem in Multi-agent Reinforcement Learning" (ICML
+2023, PMLR v202) names the phenomenon of agents learning to do
+nothing while reward accrues — as a multi-agent free-riding problem
+requiring teammates to carry the task. The stated distinction: this
+dissertation's case is single-agent, no teammates, the reward itself
+makes abstention optimal. "The name for the phenomenon predates this
+writing; the mechanism documented here is distinct from it."
+
+## B15.7 Task 7 — remaining citations placed
+
+- **JaxMARL-HFT** (Mohl et al., arXiv:2511.02136, 2025), the closest
+  published relative — market makers that "learn to trade very
+  infrequently", with the paper remarking that under that reward
+  family "an optimal policy seems to be to never trade" — placed in
+  §4.7's neighbour paragraph. (§5.2a's residual paragraph summarises
+  the trading-uses scan it belongs to but does not name it.)
+- **Zhang** (arXiv:2511.17304, 2025) — identically-zero zero-hedge
+  structural baseline — §4.6 bullet.
+- **Ma** (arXiv:2509.12764, 2025) — recent negative result, myopic
+  optimization beats RL in portfolio management — §4.6 bullet.
+
+## B15.8 Task 8 — offline-RL pessimism gap closed (PRIOR_ART.md §6)
+
+Three searches run 2026-08-23 ("conservative Q-learning pessimism
+induced inaction"; "offline RL over-conservatism degenerate policy";
+"constrained MDP intervention cost inaction"). Found: CQL (Kumar et
+al. 2020) and a follow-up literature documenting OVER-conservatism as
+a failure mode (Mildly Conservative Q-Learning; Relaxed Conservatism;
+Decoupling Policy Improvement and Conservatism; Plan Better Amid
+Conservatism; BAIR; ICML 2022 "trained to be adaptive"; COMBO; COCOA),
+plus CMDP/safe-RL treating intervention cost as a first-class
+constraint. **No verdict moved**, for four stated reasons: different
+mechanism (algorithmic value pessimism vs reward-shaped abstention),
+different detection (performance benchmarks vs the
+training-reward-scored flat-policy test and exposure matching),
+different framing (accuracy trade-off vs evaluation blindness),
+different domain (control benchmarks vs trading evaluation). D1's
+"established outside trading" column gains one domain, which
+reinforces the central finding that the mechanic is common property
+while the reward-misspecification-test use remains unclaimed. D2/D3/
+P1 untouched. Recorded as PRIOR_ART.md Section 6; the §5 gap entry
+is marked closed.
+
+## B15.9 References (manuscript)
+
+Sixteen entries added, alphabetical, Harvard style matching the
+existing list: Brinson, Hood & Beebower (1986); Chow (1970); Cremers
+& Petajisto (2009); Frazzini & Pedersen (2014); Gašperov & Kostanjčar
+(2021); Geifman & El-Yaniv (2017); Geifman, Undersander & El-Yaniv
+(2019); Hafsi & Vittori (2024); Lin et al. (2019, DRD); Lin et al.
+(2020, RD2); Liu et al. (2023); Ma (2025); Marot et al. (2021); Mohl
+et al. (2025); Wang, Ventre & Polukarov (2025); Zhang (2025).
+
+## B15.10 Priority-claim sweep
+
+Grep over the manuscript for "first to", "novel", "no prior", "we
+introduce", "unprecedented", "invented here", "priority claim":
+the only hits are (a) the table-of-contents entry "1.5 Novelty &
+Contributions" — a section title whose body does not exist (a known
+Chapter-2-region gap on the writing backlog, not a claim), and (b)
+the sentence "None of the diagnostics was invented here", which is
+the required negation. The explicit scoping sentences ("not a
+priority claim", "None of the diagnostics", "Nothing survives …
+except the case documentation") are present at 3 locations. **No
+sentence in the manuscript claims priority for any diagnostic.**
+
+## B15.11 Freeze confirmation
+
+Files touched this batch: `docs/dissertation_manuscript.md`,
+`PRIOR_ART.md`, `FIX_REPORT.md`. Nothing else. No code, no
+computation, no artifact under `src/`, `reports/`, or `models/`. The
+freeze stands.
+
+---
+
+# Batch 16 — measured mechanism, discovery modes, final documentation batch (2026-08-23)
+
+Documentation only: `docs/dissertation_manuscript.md`,
+`REPRODUCE.md`, and this file. No code, no computation; every figure
+below is copied from `reports/exposure_traces/` or the Batch 13
+record. The freeze stands. This is the last documentation batch
+before writing.
+
+## B16.1 Task 1 — the structural-amplifier explanation, superseded
+
+§4.1 diagnostic 4, before (Batch 3 wording, partially updated by
+Batch 13's fill rates):
+
+> **Structural amplifier.** The traces now separate engine activation
+> from actual fills. On grid-selected bars, a buy level was crossed
+> on only 10.2%/9.8% of ETH/BNB bars; trend/swing selections entered
+> immediately and held non-zero inventory on 93.9%/97.2% and
+> 93.3%/94.7% of selected bars, respectively. The earlier 4.3%/5.2%
+> capital exposure therefore reflects both learned action selection
+> and unfilled grid activation, not a nominal size ceiling.
+
+After (retained with a supersede marker; the full replacement text
+lives at §4.1 diagnostic 4):
+
+> **~~Structural amplifier~~ (SUPERSEDED, Batch 16) — the gap has two
+> measured components.** Batch 3 explained the gap between
+> time-in-market (54-58%) and capital exposure (4-5%) as a
+> "structural amplifier" — grid counted as deployed on zero-inventory
+> bars. That explanation was asserted without measurement, because
+> the traces had not been persisted. The Batch 13 measurement shows a
+> different mechanism. The untrained-minus-trained exposure gap
+> (44.89/44.10 pp, ETH/BNB) decomposes into two components of
+> comparable size: explicit abstention via the FLAT action, 20.55 pp
+> (ETH) / 22.61 pp (BNB); and reduced deployment within nominally
+> active actions, 24.34 pp / 21.49 pp. The second component operates
+> through a shift in action preference: immediate-entry primitives
+> (trend, swing) fall from 48.73% of the untrained control's
+> selections to 2.87% for the trained policy — a factor of seventeen
+> — while the grid share is essentially unchanged (55.19% versus
+> 51.45%). Trend and swing acquire a position on 93.9-97.2% of
+> selected bars; grid acquires one on 10.23% (ETH) / 9.76% (BNB),
+> because it requires a price level to be crossed. The consequence:
+> the agent selects actions recorded as activity that deploy no
+> capital nine times out of ten.
+
+## B16.2 Task 2 — concealed abstention, defined
+
+As written at §4.1 diagnostic 4 (first description of the phenomenon):
+
+> We term this pattern CONCEALED ABSTENTION: selecting nominally
+> active actions that deploy no resource in practice. It is
+> distinguished from explicit abstention, where the agent selects a
+> no-op action and the behaviour is visible in the action
+> distribution. The naming is descriptive and not a priority claim;
+> learned abstention has been observed previously in market making.
+> What the prior-art search did not find is the decomposition into
+> explicit and concealed components with the ratio between them
+> measured.
+
+And the thesis-level consequence, stated after the six diagnostics:
+concealed abstention is what makes the failure invisible —
+time-in-market remains at 58% while capital exposure sits at 4.3%;
+neither the action distribution alone nor time-in-market reveals it;
+only capital-weighted exposure does, and that is not a standard
+reported quantity.
+
+## B16.3 Tasks 3-4 — decisive control foregrounded; spectrum framed
+
+§4.1 now opens (after the 19-of-20 result) with the measurement that
+excludes the structural explanation: trained capital-weighted
+exposure 4.2676% (ETH) / 5.2470% (BNB) against the untrained control
+at 49.1529% / 49.3500% — identical environment, identical
+primitives, identical fill mechanics. The ETH control's fold-4
+termination at the 50%-equity threshold (4,220 rows, not 4,320) is
+reported in that lead block, not footnoted, with both of its
+meanings: it bounds the comparison, and indiscriminate ~49%
+deployment led to liquidation — the control is a counterfactual for
+deployable capacity, not a performance target. The exposure spectrum
+is then stated plainly: indiscriminate deployment terminates at the
+equity threshold; near-zero deployment underperforms passive
+exposure; the supervised baseline between them (21.1%/60.5%) also
+underperforms passive exposure; every observed point fails, for a
+different reason. Diagnostic 6 now points back to the lead instead
+of carrying the termination as a trailing clause.
+
+## B16.4 Task 5 — failure-mode table, rows 15-18
+
+Added to §3.6 (legend gains AUTHOR OBS. / OP. AUDIT / SELF-VERIFY):
+
+| # | Defect | Effect | Flipped? | Caught by | Detail |
+|---|---|---|---|---|---|
+| 15 | Diagnostic data collected in memory but never persisted | central withdrawal claim unverifiable from committed artifacts | traces persisted; claims re-anchored (B13) | **AUTHOR OBS.** (B13) | §4.1 |
+| 16 | "Structural amplifier" explanation asserted without measurement | mechanism misattributed; concealed component invisible | explanation superseded (B16) | **AUTHOR OBS.** (B13) | §4.1 |
+| 17 | Classifier OOS accuracies exist only in console output and commit messages | accuracy claims unverifiable from committed evidence | provenance caveat added (B14) | **OP. AUDIT** (B14) | §3.3 |
+| 18 | REPRODUCE.md B3 expectation contradicted by the Batch-7 compounding correction | a reader following it verbatim would conclude the check failed | expectation corrected (B14) | **SELF-VERIFY** (B14) | REPRODUCE §B3 |
+
+Rows 15 and 17 are the produced-never-persisted class; row 18 is a
+distinct class — documentation that became wrong when a definition
+was corrected downstream — and the table note keeps the classes
+separate (persistence versus regression-checking the guide). §3.6's
+intro was corrected in passing: it still said "eight failure modes …
+four flipped" while carrying a 14-row table; it now says eighteen,
+six flipped.
+
+## B16.5 Task 6 — four discovery modes, with counts
+
+§3.6 now states the distribution: arithmetic/definitional errors
+caught by self-audit (rows 1-9); inherited premises caught only by
+independent review (rows 10-14 plus row 17; the contiguous-folds
+assumption survived five self-directed passes because it was a
+premise, not a computation); unrecorded data caught by observing
+system behaviour (rows 15-16; self-audit checks what is recorded and
+cannot check what was never written down); documentation drift caught
+by re-running one's own verification procedure (row 18). Count, as
+stated: of eighteen defects, six were caught only by independent
+review (five by the Batch-7 review, one by the operational audit),
+two by the author's observation of system behaviour, one by
+self-verification of the reproduction guide, nine by self-audit. The
+Batch 14 port-3030 aside is noted in passing: the operational audit
+reported an exposure at the wrong location while two genuine public
+rules went unnamed — executing the recommendation rather than
+trusting it found the real exposure.
+
+## B16.6 Task 7 — consistency sweep
+
+- Every capital-exposure / time-in-market / action-distribution /
+  mechanism statement greps clean against the Batch 13 record; the
+  superseded 10.2%/9.8% grid-fill figures were the only stale
+  duplicates and are replaced by 10.23%/9.76% inside the marked
+  supersession.
+- No surviving text frames the gap as primarily structural (the only
+  "structural amplifier" occurrences are the supersede marker, the
+  table row, and the quoted original) or as primarily explicit FLAT
+  selection — §4.1 states "two components of comparable size" in all
+  three places the decomposition appears.
+- REPRODUCE.md claim 16 maps the 24 trace files; the A/B/C
+  decomposition had NO verification command — added as check **B5a**
+  (A = FLAT, B = active-with-zero-inventory, C =
+  active-with-inventory), expected values copied from diagnostic 5:
+  ETH trained 1812/1979/529, BNB trained 1980/1806/534 (sums 4,320);
+  untrained 10/1760/2450 (ETH, sum 4,220) and 1/1844/2475 (BNB,
+  sum 4,320). Verified once against the committed CSVs.
+- §5.2's case-study paragraph listed "the four withdrawal
+  diagnostics … structural dilution" — stale twice over; now the six
+  diagnostics with the measured framing. §4.8's "fourteen documented
+  failure modes" now notes fourteen at survey time, eighteen after
+  Batches 13-16.
+
+## B16.7 Section B verification (re-run 2026-08-23)
+
+All five checks pass exactly, including the corrected B3 and the new
+B5a:
+
+```
+B1: ETH ppo -0.1278 | rf -0.2117 | ta +0.3797 ; BNB ppo -0.2590 | rf -0.2025 | ta -0.0427
+B2: ETH ppo folds .0769/.0083/.0145/.0490/.1200/.0071 median 0.0317; BNB ppo 0.0529; ETH ta 0.1947; BNB ta 0.1975
+B3: ETH stored +0.3797 = compounded (sum +0.4483); BNB stored -0.0427 = compounded (sum +0.0378)
+B4: 19 of 20; exception ('BNBUSDT', 3, 999, 0.0143)
+B5: ETH trained 4320/1812/0.042676; ETH untrained 4220/10/0.491529; BNB trained 4320/1980/0.052470; BNB untrained 4320/1/0.493500
+B5a: ETH trained A/B/C 1812/1979/529; ETH untrained 10/1760/2450; BNB trained 1980/1806/534; BNB untrained 1/1844/2475
+```
+
+## B16.8 Status
+
+Files touched this batch: `docs/dissertation_manuscript.md`,
+`REPRODUCE.md`, `FIX_REPORT.md`. No code, no computation, no
+evaluation artifact modified. **Documentation is complete; the
+manuscript is ready for writing.** The remaining work — the Chapter 2
+body and §1.5 — is writing, not reconciliation: every claim now
+traces to committed evidence, every superseded explanation is marked
+rather than deleted, and the reproduction guide verifies end to end.

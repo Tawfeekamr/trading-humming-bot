@@ -1,5 +1,18 @@
 # ML Regime Model Retraining Guide
 
+> **STATUS (2026-08-23 operational audit).** Two caveats before anything
+> below:
+> 1. The automation this guide assumes is inoperative:
+>    `.github/workflows/retrain.yml:32` invokes `src.ml.train_pipeline`,
+>    which was removed in commit 81ae57f (only a stale `.pyc` remains) —
+>    every scheduled run fails. The current trainer is
+>    `src/ml/train_regime.py`. The live regime models are frozen at the
+>    2026-08-15 retrain.
+> 2. The `--shadow data/shadow_routing.jsonl` procedures below reference
+>    a journal that has never existed: the routing sidecar was never
+>    deployed and the paper gate was never operationally run. All
+>    reported RL results are backtests.
+
 ## When to Retrain
 
 | Trigger | Action |

@@ -201,7 +201,16 @@ $$\text{ECE} = \sum_{b=1}^B \frac{|B_b|}{N} \left| \text{acc}(B_b) - \text{conf}
 had no retained, traceable artifact and remains withdrawn. Classifier
 quality is instead evidenced by OOS now-cast accuracy — 0.80–0.87 per
 asset — with the caveat of Section 4.5 that accuracy did not translate into
-gating value.)*
+gating value. Provenance caveat (Batch 14): these accuracy figures are
+commit-history claims — printed to console by `scripts/eval_regime_oos.py`
+at retraining and recorded in commit messages; no committed artifact
+contains them (the model manifests store only `training_samples`). This
+is the same defect class as the withdrawn ECE figure above — data
+produced but never persisted; this is the second instance of that
+class in the manuscript's own record. The figures are labelled rather than
+withdrawn because no conclusion rests on their precise values: the
+argument of Section 4.5 is that accuracy, at whatever value, did not
+convert into gating value.)*
 
 ## 3.5 Asymmetric & Geometric Grid Spacing
 $$\text{Spacing}_n = \text{Base Spacing} \cdot (1 + \alpha)^n, \quad \alpha = 0.10$$
@@ -210,19 +219,22 @@ $$\text{Size}_n = \text{Base Size} \cdot (1 + \beta)^n, \quad \beta = 0.08$$
 ## 3.6 Evaluation failure modes and their effect on inference
 
 The evaluation protocol used in this dissertation was itself the object of
-three corrective audit batches. This section documents the eight failure
-modes found, the mechanism by which each biases inference, the before/after
-figures, and whether the correction changed a conclusion or only a number.
-Four of the eight **flipped a conclusion**; these are marked. The full
-audit trail is FIX_REPORT.md (batches 1-3); every figure below is copied
-from it.
+corrective audit batches across the project's lifetime. This section
+documents the eighteen failure modes found, the mechanism by which each
+biases inference, the before/after figures, and whether the correction
+changed a conclusion or only a number. Six of the eighteen **flipped a
+conclusion**; these are marked. The full audit trail is FIX_REPORT.md;
+every figure below is copied from it.
 
 **Summary table** (detail in items 1-8 below; "flipped" = the correction
 reversed a stated conclusion, not merely a number). SELF = found by this
 project's own corrective batches; **IND. REVIEW** = found by the
 independent review that motivated Batch 7 — the distinction is itself
 evidence for this dissertation's argument about the limits of
-self-checking.
+self-checking; **AUTHOR OBS.** = found by observing system behaviour
+rather than artifacts (Batch 13); **OP. AUDIT** = found by the
+2026-08-23 operational audit (Batch 14); **SELF-VERIFY** = found by
+re-running this project's own reproduction guide (Batch 14).
 
 | # | Defect | Effect on the number | Flipped? | Caught by | Detail |
 |---|---|---|---|---|---|
@@ -240,9 +252,46 @@ self-checking.
 | 12 | Uncapped grid "ceiling" denominator | capacity diagnostic meaningless | strengthens finding | **IND. REVIEW** (B7) | §4.1 |
 | 13 | Fee double-count in reward | reward more punitive than designed | scopes finding | **IND. REVIEW** (B7) | §3.1 |
 | 14 | Length-only "Politis-White" block choice | interval widths conditional on heuristic | label fixed | **IND. REVIEW** (B7) | §5.3-11 |
+| 15 | Diagnostic data collected in memory but never persisted | central withdrawal claim unverifiable from committed artifacts | traces persisted; claims re-anchored (B13) | **AUTHOR OBS.** (B13) | §4.1 |
+| 16 | "Structural amplifier" explanation asserted without measurement | mechanism misattributed; concealed component invisible | explanation superseded (B16) | **AUTHOR OBS.** (B13) | §4.1 |
+| 17 | Classifier OOS accuracies exist only in console output and commit messages | accuracy claims unverifiable from committed evidence | provenance caveat added (B14) | **OP. AUDIT** (B14) | §3.3 |
+| 18 | REPRODUCE.md B3 expectation contradicted by the Batch-7 compounding correction | a reader following it verbatim would conclude the check failed | expectation corrected (B14) | **SELF-VERIFY** (B14) | REPRODUCE §B3 |
 
-Six of fourteen were found only by independent review — including the
-two that invalidated headline numbers after five self-directed passes.
+Rows 15 and 17 are the produced-never-persisted class — data computed
+but never written down. Row 18 is a distinct class: not data that was
+never recorded, but documentation that became wrong when a definition
+was corrected downstream. The two classes are kept separate because
+they demand different cures — persistence versus regression-checking
+the guide against the artifacts.
+
+The eighteen defects distribute across four discovery modes, and the
+distribution is the methodological finding:
+
+- **Arithmetic and definitional errors — caught by self-audit**
+  (rows 1-9). A check on the recorded numbers finds errors in the
+  recorded numbers.
+- **Inherited premises — caught only by independent review** (rows
+  10-14, plus row 17 from the operational audit; six defects). The
+  contiguous-folds assumption survived five self-directed passes
+  because it was a premise, not a computation: nothing to recompute,
+  so nothing to check.
+- **Unrecorded data — caught by observing system behaviour** (rows
+  15-16; two defects). Self-audit checks what is recorded and cannot
+  check what was never written down.
+- **Documentation drift — caught by re-running one's own
+  verification procedure** (row 18; one defect). A correct
+  instruction became wrong when a definition changed downstream.
+
+Of eighteen defects: six were caught only by independent review (five
+by the Batch-7 review, one by the operational audit), two by the
+author's observation of system behaviour, and one by
+self-verification of the reproduction guide; the remaining nine by
+self-audit of recorded numbers. Verification also runs backwards, in
+passing: the Batch 14 operational audit reported a security exposure
+at the wrong location (port 3030, which had never been open) while
+two genuine public rules went unnamed — executing the audit's
+recommendation rather than trusting it found the real exposure the
+headline missed.
 
 1. **Evaluation-boundary defect.** *Defect:* the environment's default
    warmup (50 bars) was applied inside a 100-bar warmup-prefixed test
@@ -411,13 +460,41 @@ learning generally learns abstention in trading.**
 broader fold scope than the 19-of-20 seed sweep above, and a single
 draw from the seed distribution): flat scores -0.448 (ETH) / -0.038
 (BNB) versus the trained agent's -0.994 / -0.854 over identical
-timestamps.* PPO's 4.3%/5.2% capital-weighted exposure (vs 21.1%/60.5%
-for the supervised baseline) is therefore **learned withdrawal, not a
-configuration ceiling**, established by four diagnostics:
+timestamps.*
+
+**The measurement that excludes the structural explanation leads this
+section.** Capital-weighted exposure is 4.2676% trained (ETH) /
+5.2470% (BNB) against an untrained control at 49.1529% / 49.3500% —
+identical environment, identical primitives, identical fill
+mechanics (`reports/exposure_traces/`, 24 files). Whatever suppresses
+deployment is learned, not configured and not an artifact of the
+fill rules.
+
+The ETH untrained control's early termination is reported
+prominently, not in a footnote: it stops in fold 4 when equity falls
+below the environment's 50%-of-initial threshold, so its trace holds
+4,220 rows rather than 4,320 and its 49.15% is an observed
+pre-termination mean. The termination bounds the comparison, and it
+also carries information of its own: indiscriminate deployment at
+~49% of capital led to liquidation. The untrained control is a
+counterfactual for deployable capacity, not a performance target.
+
+**The observed exposure spectrum has no good point on it.** At one
+end, the untrained control's ~49% indiscriminate deployment
+terminates at the equity threshold (liquidation). At the other, the
+trained policy's 4.3%/5.2% near-zero deployment underperforms passive
+exposure on both assets. Between them, the supervised baseline's
+21.1%/60.5% also underperforms passive exposure. Every observed point
+on the spectrum fails, for a different reason; the evaluation
+question is whether any learned policy earns its deployment against
+passive exposure at matched risk — and on this evidence none does.
+
+PPO's 4.3%/5.2% capital-weighted exposure is **learned withdrawal,
+not a configuration ceiling**, established by six diagnostics:
 
 1. **Action distribution.** The trained policy selects FLAT on
-   41.9%/45.8% of steps versus **0.2%/0.0% for a randomly-initialised
-   policy** - abstention was learned, not initialised.
+   41.9%/45.8% of steps versus **0.2%/0.0% for the untrained PPO
+   control** - abstention was learned, not initialised.
 2. **~~Non-binding size ceilings~~ (RETRACTED, Batch 7 task 5).**
    ~~Available maximum is 67-100% of equity (`max_position_pct=0.667`);
    when active, the agent uses 73-83% of that ceiling, with 41-43% of
@@ -435,11 +512,65 @@ configuration ceiling**, established by four diagnostics:
    drawdown-penalty term contributes 0.310/0.401 to total reward
    against a PnL term of -0.579/-0.328 - the penalty rivals the entire
    PnL term.
-4. **Structural amplifier.** Capital-weighted exposure (4-5%) is far
-   below time-in-market (54-58%) because the grid engine is counted
-   "deployed" on bars where it holds zero inventory - the learned
-   withdrawal is compounded by an accounting asymmetry between the two
-   exposure definitions (Section 3.6, item 7).
+4. **~~Structural amplifier~~ (SUPERSEDED, Batch 16) — the gap has two
+   measured components.** Batch 3 explained the gap between
+   time-in-market (54-58%) and capital exposure (4-5%) as a
+   "structural amplifier" — grid counted as deployed on zero-inventory
+   bars. That explanation was asserted without measurement, because
+   the traces had not been persisted. The Batch 13 measurement shows
+   a different mechanism. The untrained-minus-trained exposure gap
+   (44.89/44.10 pp, ETH/BNB) decomposes into two components of
+   comparable size:
+   - **explicit abstention** via the FLAT action: 20.55 pp (ETH) /
+     22.61 pp (BNB);
+   - **reduced deployment within nominally active actions:**
+     24.34 pp / 21.49 pp.
+   The second component operates through a shift in action
+   preference: immediate-entry primitives (trend, swing) fall from
+   48.73% of the untrained control's selections to 2.87% for the
+   trained policy — a factor of seventeen — while the grid share is
+   essentially unchanged (55.19% versus 51.45%). Trend and swing
+   acquire a position on 93.9-97.2% of selected bars; grid acquires
+   one on 10.23% (ETH) / 9.76% (BNB), because it requires a price
+   level to be crossed. The consequence: **the agent selects actions
+   recorded as activity that deploy no capital nine times out of
+   ten.** We term this pattern CONCEALED ABSTENTION: selecting
+   nominally active actions that deploy no resource in practice. It
+   is distinguished from explicit abstention, where the agent selects
+   a no-op action and the behaviour is visible in the action
+   distribution. The naming is descriptive and not a priority claim;
+   learned abstention has been observed previously in market making.
+   What the prior-art search did not find is the decomposition into
+   explicit and concealed components with the ratio between them
+   measured.
+5. **Per-bar A/B/C decomposition.** Among trained steps, explicit FLAT
+   selection accounts for 1,812/4,320 (41.9%) ETH and 1,980/4,320 (45.8%)
+   BNB bars; active actions with zero position account for 1,979 (45.8%) and
+   1,806 (41.8%); active actions with non-zero position account for 529
+   (12.2%) and 534 (12.4%). The untrained control has only 10/4,220 and
+   1/4,320 FLAT bars, but 1,760 (41.7%) and 1,844 (42.7%) active zero-position
+   bars. This is the bar-level evidence for the two components of
+   diagnostic 4.
+6. **Untrained exposure control (the decisive control, foregrounded at
+   the head of this section).** The deterministic untrained PPO control
+   reaches 49.15%/49.35% capital-weighted exposure versus the trained
+   4.27%/5.25% on the available trace rows. The untrained-minus-trained gap
+   is 44.89/44.10 percentage points, decomposed in diagnostic 4 into
+   explicit FLAT selection (20.55/22.61 points) and lower exposure
+   conditional on active actions (24.34/21.49 points). The result is
+   **LEARNED**, not structural-only: identical primitives can produce much
+   higher exposure before learning. The ETH control's early termination
+   is reported with the control above, not footnoted here.
+
+**Why concealed abstention matters for this thesis.** It is what
+makes the failure invisible. Time-in-market remains at 58% while
+capital exposure sits at 4.3%; neither the action distribution alone
+nor time-in-market reveals the gap — only capital-weighted exposure
+does, and that is not a standard reported quantity in RL trading
+evaluation. A reader shown the action distribution sees a policy
+acting on 54-58% of bars; a reader shown capital-weighted exposure
+sees one deploying 4-5% of capital. Both readings are true; only the
+second predicts the risk profile.
 
 Note the role of the reward's first term here (Section 3.1): it is
 *relative to buy-and-hold*, so a flat bar in a rising market is
@@ -642,7 +773,8 @@ methodological contribution.
 
 ## 4.5 Regime-signal economics
 
-The classifier's out-of-sample accuracy (0.80-0.87) does not convert into
+The classifier's out-of-sample accuracy (0.80-0.87; commit-history
+figures, see the provenance caveat in Section 3.3) does not convert into
 gating value. On DANGER-predicted bars the market *rose* 47% (ETH) / 38%
 (BNB) of the time (mean forward 24-bar return on DANGER bars: -0.79% /
 -0.68% - an edge far too small to pay for skipping the false positives),
@@ -687,6 +819,47 @@ negative result must be read against it, not instead of it.
   buy-and-hold — but with NO transaction costs modelled, a different
   failure mechanism from this study's (where costs are, if anything,
   double-counted).
+- **Wang, Ventre & Polukarov, "Robust Market Making: To Quote, or not
+  To Quote" (arXiv:2508.16588, 2025)**: reports that occasionally
+  refusing to quote IMPROVES returns and Sharpe ratios — a published
+  instance of abstention improving a risk-adjusted metric. The
+  difference from this dissertation is design: there, abstention is
+  designed, beneficial, and bounded (quoting ratios remain above
+  95%); here it is undesigned, emerges from a misspecified reward,
+  and abandons roughly 95% of deployable capital. Abstention is not
+  intrinsically a failure; undesigned abstention under a
+  misspecified reward is the case documented here.
+- **Liu et al., "Lazy Agents: A New Perspective on Solving Sparse
+  Reward Problem in Multi-agent Reinforcement Learning" (ICML 2023,
+  PMLR v202)**: names the phenomenon of agents learning to do nothing
+  while reward accrues. There it is a multi-agent free-riding problem
+  — lazy agents exist because teammates carry the task. This
+  dissertation's case is single-agent: there are no teammates to
+  free-ride on, and it is the reward itself that makes abstention
+  optimal. The name for the phenomenon predates this writing; the
+  mechanism documented here is distinct from it.
+- **Zhang, "Law-Strength Frontiers and a No-Free-Lunch Result for
+  Law-Seeking RL on Volatility Law Manifolds" (arXiv:2511.17304,
+  2025)**: employs an identically-zero "zero-hedge" structural
+  baseline — a do-nothing precedent in trading evaluation, compared
+  on P&L and penalty metrics.
+- **Ma, "Myopic Optimality: why reinforcement learning portfolio
+  management strategies lose money" (arXiv:2509.12764, 2025)**: a
+  recent negative result — myopic optimization outperforms RL in
+  portfolio management (lower or negative returns, higher variance,
+  larger costs under RL) — adding to the negative-result side of the
+  ledger from a portfolio-management setting.
+
+**Selective prediction is the known analogue, and the distinction is
+stated.** In selective classification, abstention is declared and
+measured: coverage is reported as a matter of course (Chow, 1970;
+Geifman & El-Yaniv, NeurIPS 2017; SelectiveNet, ICML 2019). In
+reinforcement-learning trading evaluation it is neither declared nor
+measured — neither abstention rate nor capital-weighted exposure is a
+standard reported quantity. The contribution here is not the
+observation that abstention flatters metrics, which is decades old,
+but a documented case in a domain where the corresponding coverage
+measure is absent from standard practice.
 
 **This dissertation does NOT claim that reinforcement learning
 generally fails at trading.** The claim is a documented failure mode in
@@ -719,6 +892,27 @@ studies report reward functions combining transaction costs, drawdown
 penalties, volatility penalties, and delayed rewards — specifications
 at least as punitive as this study's — WITHOUT producing abstention.
 
+One published neighbour must be acknowledged here before a reviewer
+raises it. Wang, Ventre & Polukarov ("Robust Market Making: To Quote,
+or not To Quote", arXiv:2508.16588, 2025) show that refusing to quote
+can IMPROVE returns and Sharpe: abstention there is designed,
+beneficial, and bounded (quoting ratios remain above 95%). The
+comparative argument above therefore cannot be read as "punitive
+rewards never produce abstention" — abstention is not intrinsically a
+failure. The claim is narrower: in THIS system abstention was
+UNDESIGNED, an emergent response to a misspecified reward
+(double-counted fees plus the λ=0.5 drawdown penalty) that leaves
+roughly 95% of deployable capital idle, and a permanently-flat policy
+outscores the trained policy in 19 of 20 seed-fold-pair cells. The
+closest published relative is JaxMARL-HFT (Mohl et al.,
+arXiv:2511.02136, 2025): market makers that "learn to trade very
+infrequently", with the paper itself remarking that under that reward
+family "an optimal policy seems to be to never trade" — an
+author-observed abstention-optimal reward, stated analytically,
+without running a flat-policy baseline or framing it as a
+misspecification test. The flat-policy floor of Section 5.2 is
+precisely the test that remark implies and never runs.
+
 **A drawdown penalty alone therefore does not cause learned
 withdrawal.** The distinguishing feature of this system is most likely
 the DOUBLE-COUNTED TRANSACTION COST: `env.py:333-334` subtracts fees
@@ -744,8 +938,9 @@ specifications, not by experiment — stated as such.
 
 The field-prevalence question left open in 5.2 ("is the absence of
 these diagnostics the norm?") was answered empirically. A ten-check
-audit tool was built directly from this dissertation's fourteen
-documented failure modes (each check citing its FIX_REPORT origin),
+audit tool was built directly from this dissertation's documented
+failure modes (each check citing its FIX_REPORT origin; fourteen at
+the time of the survey, eighteen after Batches 13-16),
 validated against this project's own pre- and post-correction
 artifacts (6/8 known defects caught, 0 false positives), and applied
 to public repositories accompanying RL-for-trading work.
@@ -819,7 +1014,8 @@ answer to its research question is a **well-evidenced negative result**:
    marginally). The experiment measured a reward specification, not a
    routing strategy.
 4. **Regime classification accuracy does not imply gating value.** At
-   0.80–0.87 OOS accuracy, DANGER warnings are false 38–47% of the time,
+   0.80–0.87 OOS accuracy (commit-history figures; Section 3.3 caveat),
+   DANGER warnings are false 38–47% of the time,
    and the mean forward return on DANGER bars (−0.79% ETH / −0.68% BNB,
    per Section 4.5's source) is too small to pay for the foregone
    upside — the gate cost 67.1pp (ETH) and 20.8pp (BNB) against
@@ -844,10 +1040,12 @@ and analysis (per-bar CSVs, provenance manifests, run manifest); a
 chain of evidence with traceable inferences (REPRODUCE.md's
 claim-to-evidence map; every headline number re-derivable from
 committed raw data in five minutes); and consideration of alternative
-explanations (the four withdrawal diagnostics of 4.1 — action
-distribution, reward decomposition, untrained-policy comparison,
-structural dilution — each tests an alternative: initialisation bias,
-missing incentive, capacity limits, accounting artifact).
+explanations (the six withdrawal diagnostics of 4.1 — action
+distribution, reward decomposition, untrained-policy comparison, the
+measured two-component gap decomposition, the per-bar A/B/C split,
+and the untrained exposure control — each tests an alternative:
+initialisation bias, missing incentive, capacity limits, accounting
+artifact, structural-only non-filling, and bar-level composition).
 
 **Limitation stated honestly:** one system, one reward, two assets, no
 multi-case design. A multi-case design would require at least: the
@@ -868,19 +1066,55 @@ not a dissertation chapter.
    caught here:
 
    a. **The flat-policy floor.** Compare any trained policy against
-      *Origin: naive-baseline flooring (RL evaluation practice);*
+      *Origin: naive-baseline flooring (RL evaluation practice) —
+      institutionalised outside trading: the do-nothing agent is the
+      score-0 reference against which every competitor is normalised
+      in the L2RPN power-grid RL competitions (Marot et al., 2021,
+      arXiv:2103.03104); a trivial all-zero quoting policy At=[0,0] is
+      "a relatively strong benchmark" in market-making RL (Gašperov &
+      Kostanjčar, 2021, IEEE Access 9); a passive policy inactive 60%
+      of the time is a standard baseline in execution RL (Hafsi &
+      Vittori, 2024, arXiv:2411.06389);*
       permanent abstention under the same reward before concluding it
       learned anything. Cost: one line of computation over the
       evaluation rollouts. Would have caught: the abstention result
       before any performance claim was made.
+      *Residual after an adversarial prior-art search (PRIOR_ART.md,
+      2026-08-17): do-nothing baselines are established outside
+      trading — L2RPN scoring, trivial-policy benchmarks in market
+      making — but every trading use found scores abstention on
+      performance metrics (implementation shortfall, P&L, Sharpe)
+      rather than under the training reward. The use as a
+      reward-misspecification test appears unclaimed. This is a scoped
+      observation from one search, not a priority claim.*
    b. **Reward-component decomposition.** Report the magnitude of each
-      *Origin: component reporting (econometric model diagnostics);*
+      *Origin: reward decomposition — the explainable-RL literature
+      (Distributional Reward Decomposition, NeurIPS 2019; RD2,
+      NeurIPS 2020; Explainable RL via Reward Decomposition, IJCAI)
+      and RL debugging practice (torchrl debugging guidance
+      explicitly instructs checking whether the agent favours a single
+      reward component). An earlier draft attributed this origin to
+      "econometric model diagnostics" — the wrong discipline; that
+      attribution is superseded.*
       reward term, not just the total, so a dominating penalty is
       visible. Cost: instrumenting the reward (already summed per
       step). Would have caught: the drawdown penalty rivaling the
-      entire PnL term, and the fee double-count.
+      entire PnL term, and the fee double-count. **Nothing survives
+      on this diagnostic except the case documentation:** the
+      technique is established where it originates, and this
+      dissertation's addition is only the documented instance in
+      which its absence concealed a drawdown penalty rivalling the
+      entire PnL term, plus a fee double-count, across four
+      self-audit passes.
    c. **Capital-exposure matching.** Match baselines on
-      *Origin: exposure matching (portfolio attribution);*
+      *Origin: exposure matching (portfolio attribution) — Cremers &
+      Petajisto's Active Share (2009); Brinson-model performance
+      attribution (Brinson, Hood & Beebower, 1986); Frazzini &
+      Pedersen's Betting Against Beta (JFE 2014); and, for the
+      closest structural analogy, selective prediction (Chow, 1970;
+      Geifman & El-Yaniv, NeurIPS 2017; SelectiveNet, ICML 2019),
+      where abstention improving metrics is the founding observation
+      and coverage reporting the established cure;*
       capital-weighted exposure, not time-in-market, and report both.
       Cost: one env field (per-bar position notional). Would have
       caught: the exposure-artifact "drawdown advantage" verdicts.
@@ -926,8 +1160,13 @@ themselves.*
    nothing here transfers to them.
 2. **Backtest only.** All results are historical-replay backtests. No
    live or paper-trading performance is claimed anywhere in this
-   dissertation. Shadow routing produced no result within the thesis
-   horizon.
+   dissertation. The Phase-1 paper gate (shadow routing) was merged
+   into the codebase but never operationally run: no routing sidecar
+   was ever deployed, no shipped container can execute the router
+   (the RL stack is installed in no image, and the legacy compose
+   entry points at the wrong host and port), and no shadow routing
+   log (`data/shadow_routing.jsonl`) was ever produced. Every
+   reported number comes from the frozen walk-forward backtests.
 3. **Seed scope.** The seed sweep covers 5 seeds on folds 0 and 3 only
    (20 of 60 possible trainings), not the full six folds; its figures
    are not comparable to the six-fold pooled tables (scope note in
@@ -968,6 +1207,15 @@ themselves.*
    drawdown penalties per se cause withdrawal — a bounded, singly-
    counted cost structure was never tested.
 
+7. **Inferential unit.** The reported pooled paired test treats the
+   per-bar return difference as the unit of observation (n = 4,314),
+   while the method-level claim concerns a *training procedure
+   evaluated six times*. A fold-clustered analysis would have an
+   effective n near 6, so the true power is LOWER than reported, not
+   higher. No replacement p-value is computed here: the appropriate
+   estimand depends on the intended claim and is not specified. This
+   limitation makes the underpowering finding STRONGER, not weaker.
+
 8. **Training-window asymmetry (PPO month rounding).** PPO training
    windows round to calendar months (`walk_forward.py:312-320`), so
    PPO's fold-0 window is 4,344 bars against the RF's 4,320 — a 24-bar
@@ -1000,14 +1248,83 @@ themselves.*
     100-bar warmup can reach ~30 bars past the embargo boundary. The
     embargo is a decay tolerance, not a strict no-dependence guarantee.
 
-7. **Inferential unit.** The reported pooled paired test treats the
-   per-bar return difference as the unit of observation (n = 4,314),
-   while the method-level claim concerns a *training procedure
-   evaluated six times*. A fold-clustered analysis would have an
-   effective n near 6, so the true power is LOWER than reported, not
-   higher. No replacement p-value is computed here: the appropriate
-   estimand depends on the intended claim and is not specified. This
-   limitation makes the underpowering finding STRONGER, not weaker.
+13. **Exposure-trace control horizon.** The untrained ETH control
+    terminates in fold 4 when equity falls below the environment's 50%
+    initial-equity threshold, yielding 4,220 observed rows rather than the
+    trained control's 4,320. Its 49.15% exposure is therefore an observed
+    pre-termination mean, not a padded full-horizon estimate; the trace
+    artifact preserves the termination rather than inventing post-termination
+    zero-action rows.
+
+14. **The simulation action space includes a primitive absent from the
+    production execution path.** The evaluation environment implements
+    three execution engines — grid, trend, and swing (swing entry at
+    `src/rl/env.py:559-583`) — and the frozen action distributions
+    record swing selections (ETH: 39/0/36 and BNB: 10/8/1 selections at
+    swing size 0.5/1.0/1.5 of 4,320 trained steps; derivable from
+    `reports/exposure_diagnosis.json` action proportions). The
+    production Rust engine deleted its swing strategy in July 2026
+    (commit `eb91a15`), so 3 of the 10 simulated actions cannot be
+    executed by the deployed system. The deletion was made in the Rust
+    production path only — the Python evaluation environment retains
+    swing, and the frozen results are internally consistent with it
+    (they are environment replays, not production replays). No reported
+    result is affected. The item is recorded as a concrete instance of
+    the simulation-to-deployment gap: an action space validated only
+    against primitives the production path no longer contains.
+
+### 5.3.1 Deployment-layer limitations (documented, not fixed)
+
+An operational audit (2026-08-23) reconciled the deployed system
+against this manuscript. The research results are frozen backtests and
+are unaffected by anything below; the freeze stands. These are
+documented deployment-layer limitations, presented as known
+characteristics of the live system rather than defects scheduled for
+repair:
+
+1. **The regime models are frozen at the 2026-08-15 retrain, and the
+   automated retraining workflow is inoperative.** The monthly workflow
+   invokes a module that no longer exists
+   (`.github/workflows/retrain.yml:32` targets `src.ml.train_pipeline`,
+   removed leaving only a stale `.pyc`), so every scheduled run fails
+   before training. This is intentional with respect to the frozen
+   evaluation but means the deployed classifiers will not refresh.
+2. **The drift monitor observes but never reports.** Every prediction
+   feeds `RegimeDriftMonitor.observe()` (`src/ml/regime_pusher.py:338`),
+   but the report/alert path is never invoked from the pusher's main
+   loop (`src/ml/regime_pusher.py:377-383`); no drift alert can fire in
+   production as deployed.
+3. **The regime cache TTL equals the push interval.** The Rust
+   `RegimeCache` expires entries after 180,000 ms
+   (`trading-engine-core/src/main.rs:96`) while the pusher cycles at
+   180 s, and pushes land late; each cycle therefore ends with a window
+   in which the regime reads as absent and both ML gates silently fall
+   back to technical-analysis gating.
+4. **Several YAML risk parameters have no code reader.**
+   `trend.max_positions`, `trend.max_drawdown_pct`, and
+   `trend.daily_loss_limit_pct` are declared in `config/strategy.yaml`
+   but enforced nowhere in the Rust engine; no concurrent-position cap
+   or daily loss limit exists in the deployed system.
+5. **Routing is global while regime is per-pair.** The routing cache
+   holds a single fleet-wide decision trained on one asset; if routing
+   were made live, one asset's policy would gate all pairs identically.
+
+Two related deployment facts complete the record. First, the deployed
+configuration locks routing to shadow mode (`config/strategy.yaml:80`):
+the mode is read once at boot by `AppConfig::load`
+(`trading-engine-core/src/config.rs:479`), no API endpoint or
+environment variable can change it, and the running container's
+configuration is byte-identical to the committed default — but the
+deploy workflow auto-deploys every push to `main`, so a configuration
+commit is an automated path by which routing could reach live mode.
+Second, a latent duplicate-sell defect exists in the live-mode
+force-flat path: the duplicate-order guard
+(`trading-engine-core/src/grid.rs:947`) is defeated by a same-cycle
+drain of pending exits (`grid.rs:550-552`) combined with the paper-fill
+cooldown, so enabling live routing could emit repeated full-inventory
+reduce-only market sells. The evaluation freeze leaves both
+unaddressed; they are documented here as known deployment risks, and
+live routing must not be enabled on this codebase.
 
 ## 5.4 Future Work
 
@@ -1033,7 +1350,23 @@ themselves.*
 
 # References
 - Bailey, D.H. and López de Prado, M. (2014) 'The Deflated Sharpe Ratio', *Journal of Portfolio Management*, 40(5), pp. 94–107.
+- Brinson, G.P., Hood, L.R. and Beebower, G.L. (1986) 'Determinants of Portfolio Performance', *Financial Analysts Journal*, 42(4), pp. 4–10.
+- Chow, C.K. (1970) 'On Optimum Recognition Error and Reject Tradeoff', *IEEE Transactions on Information Theory*, 16(1), pp. 41–46.
+- Cremers, M. and Petajisto, A. (2009) 'How Active Is Your Fund Manager? A New Measure That Predicts Performance', *Journal of Finance*, 64(5), pp. 2333–2365.
 - Diebold, F.X. and Mariano, R.S. (1995) 'Comparing Predictive Accuracy', *Journal of Business & Economic Statistics*, 13(3), pp. 253–263.
+- Frazzini, A. and Pedersen, L.H. (2014) 'Betting Against Beta', *Journal of Financial Economics*, 111(1), pp. 1–25.
+- Gašperov, B. and Kostanjčar, Z. (2021) 'Market Making With Signals Through Deep Reinforcement Learning', *IEEE Access*, 9, pp. 61611–61622.
+- Geifman, Y. and El-Yaniv, R. (2017) 'Selective Classification for Deep Neural Networks', *Advances in Neural Information Processing Systems 30 (NeurIPS 2017)*.
+- Geifman, Y., Undersander, E. and El-Yaniv, R. (2019) 'SelectiveNet: A Deep Neural Network with an Integrated Reject Option', *Proceedings of the 36th International Conference on Machine Learning (ICML 2019)*, PMLR 97.
+- Hafsi and Vittori (2024) 'Optimal Execution with Reinforcement Learning', arXiv:2411.06389.
+- Lin, Z., Zhao, L., Yang, D., Qin, T., Yang, G. and Liu, T.-Y. (2019) 'Distributional Reward Decomposition for Reinforcement Learning', *Advances in Neural Information Processing Systems 32 (NeurIPS 2019)*.
+- Lin, Z., Yang, D., Zhao, L., Qin, T., Yang, G. and Liu, T.-Y. (2020) 'RD2: Reward Decomposition with Representation Disentanglement', *Advances in Neural Information Processing Systems 33 (NeurIPS 2020)*, pp. 11298–11308.
+- Liu, B. et al. (2023) 'Lazy Agents: A New Perspective on Solving Sparse Reward Problem in Multi-agent Reinforcement Learning', *Proceedings of the 40th International Conference on Machine Learning (ICML 2023)*, PMLR 202.
+- Ma, Y. (2025) 'Myopic Optimality: Why Reinforcement Learning Portfolio Management Strategies Lose Money', arXiv:2509.12764.
+- Marot, A. et al. (2021) 'Learning to Run a Power Network Challenge: A Retrospective Analysis', arXiv:2103.03104.
 - Mnih, V. et al. (2015) 'Human-level control through deep reinforcement learning', *Nature*, 518(7540), pp. 529–533.
+- Mohl, V. et al. (2025) 'JaxMARL-HFT: GPU-Accelerated Large-Scale Multi-Agent Reinforcement Learning for High-Frequency Trading', arXiv:2511.02136.
 - Schulman, J. et al. (2017) 'Proximal Policy Optimization Algorithms', arXiv:1707.06347.
+- Wang, Z., Ventre, C. and Polukarov, M. (2025) 'Robust Market Making: To Quote, or not To Quote', arXiv:2508.16588.
 - Zadrozny, B. and Elkan, C. (2002) 'Transforming Classifier Scores into Accurate Multiclass Probability Estimates', *KDD*, pp. 694–699.
+- Zhang, J. (2025) 'Law-Strength Frontiers and a No-Free-Lunch Result for Law-Seeking Reinforcement Learning on Volatility Law Manifolds', arXiv:2511.17304.

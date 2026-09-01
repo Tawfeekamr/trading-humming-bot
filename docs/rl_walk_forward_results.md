@@ -13,6 +13,11 @@
 >   down LESS than PPO on both pairs.
 > - The boundary defect, zero embargo, and non-fold-pure baseline below
 >   were all fixed in the corrected protocol.
+> - The *Paper-only verification runbook* below was never executed: the
+>   shadow routing sidecar was never deployed, no shipped container can
+>   run the router, and no `data/shadow_routing.jsonl` log was ever
+>   produced (operational audit, 2026-08-23). The paper gate was merged
+>   but never operationally run; all reported results are backtests.
 > Authoritative results: docs/dissertation_manuscript.md Chapter 4 and
 > FIX_REPORT.md (batches 1-3). Retained below as the historical record.
 

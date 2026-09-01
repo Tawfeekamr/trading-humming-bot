@@ -30,12 +30,13 @@ All paths are repository-relative. All headline numbers are on the
 | 13 | Seed sweep: 27pp swing (BNB f3 −22.99/+3.95); MaxDD 0.007–0.312; paired stat −0.92..+0.80 (4.3.2) | `reports/seed_sensitivity.json` | `per_seed` rows + `scope_annotation` |
 | 14 | Run provenance: commit, data hashes, seeds, library versions | `reports/run_manifest_20260815T030518Z.json` | all top-level keys |
 | 15 | Raw per-bar return series (the audit trail underpinning 1–6) | `reports/returns/<PAIR>_<strat>_<fold>.csv` (36 files) | column `return`, index `timestamp` |
+| 16 | Per-bar trained/untrained exposure traces: action, position, inventory, turnover, grid buy-level crossings (4.1) | `reports/exposure_traces/<PAIR>_<policy>_fold<N>.csv` (24 files) | `timestamp`, `policy`, `action_label`, `position_value/equity`, `inventory_units`, `turnover_this_bar`, `grid_active`, `grid_levels_crossed_this_bar` |
 
 ---
 
 ## Section B — Five-minute verification
 
-Requires only Python + pandas and the committed CSVs. No training, no
+Requires only Python + pandas and the available CSVs. No training, no
 models, no network. Run from the repository root.
 
 ### B1. Compounded total return per strategy per pair
@@ -83,7 +84,9 @@ EOF
 ```
 
 Expected (ETH ppo folds .0769/.0083/.0145/.0490/.1200/.0071 — median
-0.0317; BNB ppo median 0.0529; ETH ta median 0.1947; BNB ta 0.1975).
+0.0317; BNB ppo median 0.0529; ETH rf folds
+.1475/.1780/.0763/.1274/.0872/.0806 — median 0.1073; BNB rf median
+0.1172; ETH ta median 0.1947; BNB ta 0.1975).
 
 ### B3. Confirm the arithmetic-vs-compounded defect was real
 
@@ -101,10 +104,15 @@ for pair in ("ETHUSDT","BNBUSDT"):
 EOF
 ```
 
-Expected: the stored value equals the SUM (the superseded arithmetic
-definition), and differs from compounded. On BNB the sign flips
-(+0.0378 vs −0.0427) — this is the Batch-7 correction, verifiable from
-raw data.
+Expected: the stored value equals the COMPOUNDED result (Batch 7 made
+compounded canonical and rewrote the stored JSON values, commit
+231f0af) and differs from the naive SUM — the superseded arithmetic
+definition that the pre-Batch-7 artifacts stored. On BNB the two
+definitions flip sign (+0.0378 vs −0.0427) — the Batch-7 correction,
+verifiable from raw data. *[Erratum fixed, Batch 14 (2026-08-23): this
+note previously asserted the stored value equals the SUM, describing
+the pre-correction artifacts rather than the committed ones; a reader
+running B3 against the committed JSONs sees stored == compounded.]*
 
 ### B4. Flat-vs-trained cell count (claim 7)
 
@@ -120,6 +128,65 @@ EOF
 ```
 
 Expected: `19 of 20`; exception `[("BNBUSDT", 3, 999, 0.0143)]`.
+
+### B5. Verify exposure traces and the learned-versus-structural split
+
+```bash
+python3 - <<'EOF'
+import pandas as pd
+from pathlib import Path
+
+for pair in ("ETHUSDT", "BNBUSDT"):
+    for policy in ("trained", "untrained"):
+        fs = sorted(Path("reports/exposure_traces").glob(
+            f"{pair}_{policy}_fold*.csv"))
+        d = pd.concat((pd.read_csv(f) for f in fs), ignore_index=True)
+        counts = d["action_label"].value_counts().to_dict()
+        print(pair, policy, len(d), counts.get("FLAT", 0),
+              f"{d['position_value/equity'].mean():.6f}")
+EOF
+```
+
+Expected anchor output:
+
+```text
+ETHUSDT trained 4320 1812 0.042676
+ETHUSDT untrained 4220 10 0.491529
+BNBUSDT trained 4320 1980 0.052470
+BNBUSDT untrained 4320 1 0.493500
+```
+
+The trace CSVs are diagnostic evidence only: this check reads persisted
+rows and does not train, re-evaluate returns, or use the network.
+
+### B5a. A/B/C bar-level decomposition (diagnostic 5 of §4.1)
+
+```bash
+python3 - <<'EOF'
+import pandas as pd
+from pathlib import Path
+for pair in ("ETHUSDT", "BNBUSDT"):
+    for policy in ("trained", "untrained"):
+        fs = sorted(Path("reports/exposure_traces").glob(f"{pair}_{policy}_fold*.csv"))
+        d = pd.concat((pd.read_csv(f) for f in fs), ignore_index=True)
+        a = int((d["action_label"] == "FLAT").sum())
+        active = d[d["action_label"] != "FLAT"]
+        b = int((active["inventory_units"] == 0).sum())
+        c = int((active["inventory_units"] != 0).sum())
+        print(f"{pair} {policy} A/B/C: {a} / {b} / {c}  (sum {a+b+c})")
+EOF
+```
+
+Expected (A = explicit FLAT; B = active action, zero inventory;
+C = active action, non-zero inventory — the explicit/concealed
+abstention split of §4.1 diagnostic 4):
+
+```text
+ETHUSDT trained A/B/C: 1812 / 1979 / 529  (sum 4320)
+ETHUSDT untrained A/B/C: 10 / 1760 / 2450  (sum 4220)
+BNBUSDT trained A/B/C: 1980 / 1806 / 534  (sum 4320)
+BNBUSDT untrained A/B/C: 1 / 1844 / 2475  (sum 4320)
+```
 
 ---
 

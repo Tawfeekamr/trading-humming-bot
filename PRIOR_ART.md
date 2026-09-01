@@ -344,8 +344,10 @@ absence changed a conclusion").
    hold relevant work (Quantitative Finance, JFM, Mathematical
    Finance, Management Science) were not systematically searched.
 3. **Sub-literatures NOT covered:**
-   - Offline RL pessimism/conservative policies (CQL and successors) —
-     pessimism-induced inaction is adjacent and unsearched.
+   - ~~Offline RL pessimism/conservative policies (CQL and successors) —
+     pessimism-induced inaction is adjacent and unsearched.~~
+     *[Searched 2026-08-23 (Batch 15, Task 8) — see Section 6. No
+     verdict moved.]*
    - Classical (non-RL) market making: Avellaneda–Stoikov descendants
      study quoting regions and trading interrupts — optimal no-quote
      regions may be established there outside any RL framing.
@@ -363,3 +365,68 @@ absence changed a conclusion").
 Search evidence: 32 tool results from the prior session (18:27–18:44)
 recovered verbatim from its transcript, plus 7 results this session;
 all quotes above are short summaries, not extracts.
+
+---
+
+## Section 6 — Gap-closure search: offline-RL pessimism (2026-08-23)
+
+The one §5 gap most adjacent to the thesis finding — pessimism-induced
+inaction in offline RL — was searched on 2026-08-23 (Batch 15, Task 8;
+three queries: "conservative Q-learning pessimism induced inaction",
+"offline RL over-conservatism degenerate policy", "constrained MDP
+intervention cost inaction").
+
+**What was found (the adjacent mechanism is real and documented):**
+
+- Conservative Q-Learning (Kumar et al., 2020, arXiv:2006.04779)
+  penalises over-estimated out-of-distribution actions — deliberately
+  pessimistic value estimates.
+- A substantial follow-up literature documents OVER-conservatism as a
+  failure mode: Mildly Conservative Q-Learning (previous offline RL
+  "too conservative" about OOD actions); "Efficient Offline RL With
+  Relaxed Conservatism" (conservatism causes policy degradation);
+  "Decoupling Policy Improvement and Conservatism" (static constraints
+  over-conservative); "Plan Better Amid Conservism" (conservative
+  offline RL degrades in multi-agent settings); the BAIR blog
+  ("Offline RL: How Conservative Algorithms Can Limit Performance");
+  ICML 2022 oral ("Offline RL Policies Should Be Trained to be
+  Adaptive" — exclusive reliance on conservatism has drawbacks); COMBO
+  (NeurIPS 2021) and COCOA as algorithmic recalibrations of the
+  conservatism level.
+- Constrained-MDP/safe-RL (survey arXiv:2505.17342; SNO-MDP, Wachi et
+  al. ICML 2020; constraint-conditioned policies, NeurIPS 2023) treats
+  intervention cost as a first-class constraint — the setting in which
+  doing less can be optimal by design.
+
+**Why no verdict moves:**
+
+1. **Different mechanism.** Offline-RL conservatism is an ALGORITHMIC
+   bias (pessimistic value estimates on OOD actions, induced to avoid
+   distribution shift). This thesis's withdrawal is REWARD-shaped — a
+   penalty term dominating the PnL term under online training with no
+   pessimism mechanism anywhere in the algorithm. The adjacent
+   literature documents algorithm-induced caution; the thesis
+   documents reward-induced abstention.
+2. **Different detection.** The offline-RL literature detects
+   over-conservatism by PERFORMANCE comparison (conservative policies
+   underperform benchmarks) — not by scoring a permanently-flat policy
+   under the training reward as a misspecification test, and not by
+   exposure matching. No found work does either.
+3. **Different framing.** No found work frames degenerate abstention
+   as invisible to risk metrics (evaluation blindness); conservative
+   policies are discussed as an accuracy/performance trade-off, not as
+   something that FLATTERS risk-adjusted metrics.
+4. **Different domain.** Standard control benchmarks, not trading
+   evaluation.
+
+**Net effect on verdicts:** D1 remains PARTIALLY ANTICIPATED — the
+"established outside trading" column gains one more domain
+(algorithmic pessimism producing documented inaction-biased
+policies), which if anything REINFORCES the search's central finding:
+the mechanic is common property, while the training-reward-scored
+misspecification test in trading evaluation remains unclaimed. D2, D3,
+and P1 are untouched. Section 4's "what survives" statements are
+unchanged.
+
+(The remaining §5 gaps — classical A-S-descendant quoting regions,
+behavioural-cloning no-op defaults, deep-hedging — remain unsearched.)
