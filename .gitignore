@@ -38,6 +38,8 @@ models/*.pkl
 models/rl/*.log
 # walk-forward per-slice research checkpoints (regenerable via the sweep)
 models/rl/_wf_*
+# seed-sweep robustness artifacts (results live in the docs; zips regenerable)
+models/rl/_seed_*
 logs/
 reports/
 tb/
@@ -60,3 +62,8 @@ trading-engine-core/target/
 
 # local pre-retrain safety backup (not for commit)
 models/_pre_retrain_backup_*/
+# 103 MB regime-pkl snapshot taken before the 2026-08-15 manifest rework
+models/_pre_manifest_backup_*/
+
+# stray Claude memory note created in repo root (real store lives outside the repo)
+/memory/
