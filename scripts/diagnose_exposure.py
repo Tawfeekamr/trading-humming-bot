@@ -25,6 +25,88 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from src.rl.data import load_klines  # noqa: E402
 from src.rl.walk_forward import DEFAULT_EMBARGO_BARS, walk_forward_slices  # noqa: E402
 
+TRACE_COLUMNS = [
+    "timestamp",
+    "pair",
+    "policy",
+    "fold",
+    "seed",
+    "action_index",
+    "action_label",
+    "position_value",
+    "equity",
+    "position_value/equity",
+    "inventory_units",
+    "turnover_this_bar",
+    "grid_active",
+    "grid_levels_crossed_this_bar",
+]
+
+
+def write_trace_csv(path: Path, rows: list[dict]) -> None:
+    """Persist one per-bar policy trace without affecting aggregate diagnostics."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(rows, columns=TRACE_COLUMNS).to_csv(path, index=False)
+
+
+def _grid_crossings_this_bar(env, info: dict) -> int:
+    """Count grid levels touched by the just-completed bar."""
+    if info.get("engine") != "grid":
+        return 0
+    state = env._engine_state
+    if not state.get("deployed"):
+        return 0
+    bar_idx = int(info["bar_idx"])
+    low = float(env._lows[bar_idx])
+    high = float(env._highs[bar_idx])
+    buy_levels = state.get("buy_levels", ())
+    return sum(low <= float(level) <= high for level in buy_levels)
+
+
+def _inventory_units(env, info: dict) -> float:
+    """Read current inventory units from the environment's observable state."""
+    state = env._engine_state
+    if info.get("engine") == "grid":
+        return float(state.get("inventory", 0.0))
+    if state.get("in_position"):
+        return float(state.get("side", 1.0) * state.get("size", 0.0))
+    return 0.0
+
+
+def _trace_row(test_df, env, info: dict, action: int, pair: str,
+               policy: str, fold: int, seed: int) -> dict:
+    bar_idx = int(info["bar_idx"])
+    equity = float(info["equity"])
+    position_value = float(info["position_value"])
+    return {
+        "timestamp": test_df.index[bar_idx].isoformat(),
+        "pair": pair,
+        "policy": policy,
+        "fold": fold,
+        "seed": seed,
+        "action_index": int(action),
+        "action_label": ACTION_LABELS[int(action)],
+        "position_value": position_value,
+        "equity": equity,
+        "position_value/equity": position_value / max(equity, 1e-9),
+        "inventory_units": _inventory_units(env, info),
+        "turnover_this_bar": float(info.get("turnover", 0.0)),
+        "grid_active": bool(info.get("engine") == "grid"),
+        "grid_levels_crossed_this_bar": _grid_crossings_this_bar(env, info),
+    }
+
+
+ACTION_LABELS = tuple(
+    f"{engine}_{size}" if engine != "flat" else "FLAT"
+    for engine, size in [
+        ("grid", 0.5), ("grid", 1.0), ("grid", 1.5),
+        ("trend", 0.5), ("trend", 1.0), ("trend", 1.5),
+        ("swing", 0.5), ("swing", 1.0), ("swing", 1.5),
+        ("flat", 0.0),
+    ]
+)
+
+
 WORKER = r'''
 import sys, json
 sys.path.insert(0, ".")
@@ -52,21 +134,61 @@ if {untrained}:
 else:
     router = PPORouter({model!r})
 
-# --- run the router, collecting actions, sizes, rewards ---
+# --- run the router, collecting actions, sizes, rewards, and per-bar traces ---
 obs, info = env.reset(seed=42)
 actions = []
+trace_rows = []
 pos_vals = []
 max_notionals = []
 rew_pnl, rew_fee, rew_dd = [], [], []
+action_labels = [
+    "grid_0.5", "grid_1", "grid_1.5",
+    "trend_0.5", "trend_1", "trend_1.5",
+    "swing_0.5", "swing_1", "swing_1.5", "FLAT",
+]
 done = False
-import src.rl.env as envmod
 while not done:
     a = router.predict(obs)
-    actions.append(int(a))
-    obs, r, term, trunc, info = env.step(a)
-    pos_vals.append(float(info["position_value"]))
+    action = int(a)
+    actions.append(action)
+    obs, r, term, trunc, info = env.step(action)
+    pos_value = float(info["position_value"])
+    equity = float(info["equity"])
+    state = env._engine_state
+    if info["engine"] == "grid":
+        inventory_units = float(state.get("inventory", 0.0))
+        if state.get("deployed"):
+            bi = int(info["bar_idx"])
+            low, high = float(env._lows[bi]), float(env._highs[bi])
+            buy_levels = list(state.get("buy_levels", []))
+            grid_crossings = sum(low <= float(level) <= high for level in buy_levels)
+        else:
+            grid_crossings = 0
+    elif state.get("in_position"):
+        inventory_units = float(state.get("side", 1.0) * state.get("size", 0.0))
+        grid_crossings = 0
+    else:
+        inventory_units = 0.0
+        grid_crossings = 0
+    trace_rows.append({{
+        "timestamp": test_df.index[int(info["bar_idx"])].isoformat(),
+        "pair": {pair!r},
+        "policy": {policy!r},
+        "fold": {fold},
+        "seed": {seed},
+        "action_index": action,
+        "action_label": action_labels[action],
+        "position_value": pos_value,
+        "equity": equity,
+        "position_value/equity": pos_value / max(equity, 1e-9),
+        "inventory_units": inventory_units,
+        "turnover_this_bar": float(info.get("turnover", 0.0)),
+        "grid_active": bool(info["engine"] == "grid"),
+        "grid_levels_crossed_this_bar": int(grid_crossings),
+    }})
+    pos_vals.append(pos_value)
     # available max notional this bar: engine ceiling x equity
-    engine, size_mult = ACTION_TO_ENGINE_SIZE[int(a)]
+    engine, size_mult = ACTION_TO_ENGINE_SIZE[action]
     if engine == "flat":
         max_notionals.append(0.0)
     elif engine == "grid":
@@ -108,6 +230,7 @@ while not done:
 
 res = {{
     "actions": actions,
+    "trace_rows": trace_rows,
     "pos_frac_of_equity": [v / max(e, 1e-9) for v, e in zip(pos_vals, [{{"e": x}}["e"] for x in [info["equity"]] * len(pos_vals)])],
     "n": len(actions),
     "reward_pnl_total": float(np.sum(rew_pnl)),
@@ -142,14 +265,20 @@ def main() -> int:
             tmp = Path(f"reports/returns/_diag.csv")
             df.iloc[max(0, vs - warmup):ve].to_csv(tmp)
             for untrained in (False, True):
+                policy = "untrained" if untrained else "trained"
                 script = WORKER.format(csv=str(tmp), model=model, warmup=warmup,
-                                       untrained="True" if untrained else "False", seed=42)
+                                       untrained="True" if untrained else "False",
+                                       seed=42, pair=pair, policy=policy, fold=i)
                 proc = subprocess.run([sys.executable, "-c", script],
                                       capture_output=True, text=True)
                 if proc.returncode != 0:
                     print(f"{pair} fold{i} untrained={untrained} FAILED: {proc.stderr[-400:]}", file=sys.stderr)
                     continue
                 res = json.loads(proc.stdout.strip().splitlines()[-1])
+                write_trace_csv(
+                    Path(f"reports/exposure_traces/{pair}_{policy}_fold{i}.csv"),
+                    res["trace_rows"],
+                )
                 if untrained:
                     agg["untrained_actions"].extend(res["actions"])
                     continue
