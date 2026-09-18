@@ -41,6 +41,11 @@ impl BinanceWs {
         Self { base_url }
     }
 
+    /// Construct with an explicit base URL (lets tests point at a local server).
+    pub fn with_base_url(base_url: String) -> Self {
+        Self { base_url }
+    }
+
     /// Subscribe to combined streams for a trading pair
     pub async fn subscribe(
         &self,
@@ -70,6 +75,9 @@ impl BinanceWs {
                         info!("Binance WebSocket connected");
                         retry_delay = std::time::Duration::from_secs(5); // reset on success
                         let (_, mut read) = ws_stream.split();
+                        // Ping/Pong need no explicit handling here: tungstenite's
+                        // read() eagerly flushes the auto-queued pong (pinned by
+                        // ws_client_answers_server_ping_with_pong).
 
                         while let Some(msg) = read.next().await {
                             match msg {
@@ -139,6 +147,9 @@ impl BinanceWs {
                         info!("Binance WebSocket connected (multi-pair)");
                         retry_delay = std::time::Duration::from_secs(5); // reset on success
                         let (_, mut read) = ws_stream.split();
+                        // Ping/Pong need no explicit handling here: tungstenite's
+                        // read() eagerly flushes the auto-queued pong (pinned by
+                        // ws_client_answers_server_ping_with_pong).
 
                         while let Some(msg) = read.next().await {
                             match msg {

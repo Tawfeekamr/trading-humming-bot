@@ -184,6 +184,12 @@ impl Engine {
 
     /// Run the main trading loop
     pub async fn run(&mut self) -> Result<()> {
+        // Market-data source: paper mode defaults to PRODUCTION data; the
+        // testnet feed is opt-in via paper.market_data_testnet. exchange.testnet
+        // alone only selects the paper-trade connector — it must not decide the
+        // data feed (it silently sourced live bars/fills from the flaky testnet).
+        let md_testnet = self.config.exchange.testnet && self.config.paper.market_data_testnet;
+
         // Startup notification
         let engines = format!(
             "Grid/Trend | Signal {}",
@@ -194,7 +200,7 @@ impl Engine {
         );
         self.telegram.send(
             &self.telegram.format_startup_message(
-                if self.config.exchange.testnet { "testnet" } else { "production" },
+                if md_testnet { "testnet" } else { "production" },
                 &self.config.pairs.iter().filter(|(_, pc)| pc.enabled).map(|(s, _)| s.clone()).collect::<Vec<_>>().join(", "),
                 &engines,
             )
@@ -215,7 +221,7 @@ impl Engine {
             .filter(|(_, pc)| pc.enabled)
             .map(|(s, _)| s.clone())
             .collect();
-        let ws = BinanceWs::new(self.config.exchange.testnet);
+        let ws = BinanceWs::new(md_testnet);
         let mut ws_rx = ws.subscribe_multi(&pairs, &self.config.timeframe).await?;
 
         info!("Engine running — processing events for {} pairs", pairs.len());
