@@ -106,11 +106,13 @@ def test_report_aggregates_engine_and_regime_deterministically(tmp_path):
             "ml_age_ms": 100,
         }
     )
+    # pnl feeds summarize_returns' compounded total return (batch 7's
+    # canonical prod(1+r)-1), so fixtures use fractional per-trade returns.
     _db(
         db_path,
         [
-            (2, "2026-08-01T00:02:00+00:00", "trend", "ETH-USDT", "BUY", 100, 102, 1, 2, "tp", 30, 0.2, None, context),
-            (1, "2026-08-01T00:01:00+00:00", "trend", "ETH-USDT", "BUY", 100, 99, 1, -1, "sl", 20, 0.2, None, context),
+            (2, "2026-08-01T00:02:00+00:00", "trend", "ETH-USDT", "BUY", 100, 102, 1, 0.02, "tp", 30, 0.2, None, context),
+            (1, "2026-08-01T00:01:00+00:00", "trend", "ETH-USDT", "BUY", 100, 99, 1, -0.01, "sl", 20, 0.2, None, context),
         ],
     )
 
@@ -119,7 +121,7 @@ def test_report_aggregates_engine_and_regime_deterministically(tmp_path):
 
     assert first == second
     assert first["metrics"]["trade_count"] == 2
-    assert first["metrics"]["net_pnl"] == 1.0
+    assert first["metrics"]["net_pnl"] == pytest.approx((1 + 0.02) * (1 - 0.01) - 1)
     assert first["metrics"]["by_engine"]["trend"]["trade_count"] == 2
     assert first["metrics"]["by_regime"]["trending"]["trade_count"] == 2
     assert first["status"]["cache"]["model_version"] == "rf-v1"

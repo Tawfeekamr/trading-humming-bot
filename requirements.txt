@@ -28,6 +28,10 @@ scikit-learn==1.6.1
 
 # Backtesting
 vectorbt==1.0.0
+# Transitive dep of vectorbt (>=4.12, unpinned upper). Plotly 7 removed
+# 'scattermapbox' from layout templates, which vectorbt 1.0.0 still emits
+# (ValueError on every MR backtest run). 6.7.0 verified working.
+plotly<7
 
 # Testing
 pytest==8.3.4
