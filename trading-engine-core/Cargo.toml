@@ -31,7 +31,12 @@ parking_lot = "0.12"
 
 # HTTP + WebSocket
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking"] }
-tokio-tungstenite = { version = "0.24", features = ["rustls-tls-native-roots"] }
+# native-tls (OpenSSL handshake) for the WS market-data clients: Binance's
+# edge RST-kills rustls-ClientHello connections from this deployment's host
+# every ~3-7 min (Sep 2026) while identical-subscription OpenSSL clients from
+# the same host survive indefinitely. REST (reqwest) keeps rustls — the filter
+# only bites long-lived streaming connections.
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
