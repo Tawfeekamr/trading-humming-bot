@@ -420,6 +420,14 @@ pub struct MlConfig {
 #[derive(Debug, Deserialize)]
 pub struct SignalConfig {
     pub enabled: bool,
+    /// Whether THIS engine's SL/TP manage loop runs. The Python listener is the
+    /// sole position manager and sole exchange executor for signal positions;
+    /// when this mirror also managed the shared signal_positions.json, its
+    /// stale-snapshot closes raced Python's (duplicate CLOSE rows in
+    /// signal_journal.db + ghost exit prices in trades.db — 2026-09/10 audit).
+    /// false = read-only mirror (status / Telegram / journal enrichment).
+    #[serde(default = "default_true")]
+    pub manage_positions: bool,
     #[serde(default)]
     pub audit_mode: bool,
     #[serde(default = "default_ai_model")]

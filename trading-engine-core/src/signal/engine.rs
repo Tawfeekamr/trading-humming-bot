@@ -79,6 +79,15 @@ impl SignalEngine {
     /// Manage open positions (SL/TP checks). Call on every tick.
     pub async fn manage_positions(&self, connector: &dyn Connector) {
         if !self.enabled || self.manual_pause { return; }
+        // This mirror must NOT manage positions: the Python listener is the sole
+        // manager AND sole exchange executor. Both loops ran snapshot → HTTP
+        // price fetch → decide/close against the shared signal_positions.json,
+        // so whenever one closed during the other's fetch window the stale
+        // snapshot closed it AGAIN — duplicate CLOSE rows in signal_journal.db
+        // and ghost exit prices in trades.db (2026-09/10 audit). Default-off
+        // via signal_copy.manage_positions; kept switchable for paper
+        // experiments where the Python listener is absent.
+        if !self.config.manage_positions { return; }
 
         // Snapshot positions under a brief lock, then RELEASE. We must not hold the
         // position lock across the per-pair HTTP price fetches (or the telegram /
@@ -293,6 +302,131 @@ impl SignalEngine {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::SignalConfig;
+    use crate::connector::types::*;
+    use crate::connector::Connector;
+    use async_trait::async_trait;
+    use std::collections::HashMap;
+
+    fn config(manage_positions: bool) -> SignalConfig {
+        SignalConfig {
+            enabled: true,
+            manage_positions,
+            audit_mode: false,
+            ai_model: "test".to_string(),
+            // High cap: the manager loads cwd data/signal_positions.json at
+            // construction, which locally carries stale opens leaked by months
+            // of position.rs test runs (CI is ephemeral and starts clean).
+            max_positions: 200,
+            per_trade_risk_pct: 3.0,
+            capital_pct: 10.0,
+            max_capital_usdt: 1000.0,
+            min_rr_ratio: 0.0,
+            max_sl_distance_pct: 10.0,
+            default_sl_atr_multiplier: 2.0,
+            max_entry_zone_pct: 3.0,
+            min_quality_score: 5,
+            tp1_close_pct: 33.0,
+            tp2_close_pct: 50.0,
+            daily_loss_limit_pct: 5.0,
+            max_trades_per_day: 10,
+            cooldown_minutes: 5,
+            use_btc_correlation_gate: false,
+            blacklisted_pairs: Vec::new(),
+            session_name: "test".to_string(),
+        }
+    }
+
+    /// Connector stub whose order book always mids at `mid`. Only get_order_book
+    /// is implemented — a manage pass that respects the manage_positions=false
+    /// gate never reaches any other method (they'd panic).
+    struct StubBook { mid: f64 }
+
+    #[async_trait]
+    impl Connector for StubBook {
+        async fn place_order(&self, _req: &OrderRequest) -> anyhow::Result<OrderResponse> { unimplemented!() }
+        async fn cancel_order(&self, _symbol: &str, _order_id: &str) -> anyhow::Result<()> { unimplemented!() }
+        async fn cancel_all_orders(&self, _symbol: &str) -> anyhow::Result<Vec<CancelResult>> { unimplemented!() }
+        async fn get_balances(&self) -> anyhow::Result<HashMap<String, f64>> { unimplemented!() }
+        async fn get_open_orders(&self, _symbol: &str) -> anyhow::Result<Vec<OpenOrder>> { unimplemented!() }
+        async fn get_order_book(&self, symbol: &str, _limit: u16) -> anyhow::Result<OrderBook> {
+            Ok(OrderBook {
+                symbol: symbol.to_string(),
+                bids: vec![(self.mid - 0.5, 10.0)],
+                asks: vec![(self.mid + 0.5, 10.0)],
+                timestamp: 0,
+            })
+        }
+        async fn get_klines(&self, _symbol: &str, _interval: &str, _limit: u16)
+            -> anyhow::Result<Vec<crate::models::bar::Bar>> { unimplemented!() }
+    }
+
+    fn unique_symbol(prefix: &str) -> String {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .subsec_nanos();
+        format!("{}{}-USDT", prefix, nanos)
+    }
+
+    /// Open a long (entry 100, SL 95) whose stop is breached by the stub mid.
+    async fn open_breached_position(engine: &SignalEngine, symbol: &str) {
+        let mut mgr = engine.position_mgr().await;
+        mgr.open_position(symbol, 100.0, 1.0, 95.0, vec![105.0, 110.0, 115.0],
+                          "high", "test", "test", "long")
+            .expect("open_position");
+    }
+
+    /// Best-effort removal of this test's entry from the shared state file so
+    /// repeated local runs don't accumulate (position.rs tests already leak).
+    fn remove_from_state_file(symbol: &str) {
+        let path = std::path::Path::new("data/signal_positions.json");
+        let Ok(file) = std::fs::File::open(path) else { return };
+        let Ok(mut disk) = serde_json::from_reader::<_, serde_json::Value>(file) else { return };
+        if let Some(map) = disk.as_object_mut() {
+            if map.remove(symbol).is_some() {
+                let _ = std::fs::write(path, serde_json::to_string_pretty(&disk).unwrap_or_default());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn manage_disabled_leaves_breached_position_open() {
+        let engine = SignalEngine::new(&config(false), None);
+        let symbol = unique_symbol("NOOP");
+        open_breached_position(&engine, &symbol).await;
+
+        engine.manage_positions(&StubBook { mid: 90.0 }).await; // 90 <= SL 95
+
+        let mgr = engine.position_mgr().await;
+        let still_open = mgr.get_position(&symbol).is_some();
+        drop(mgr);
+        remove_from_state_file(&symbol);
+        assert!(still_open,
+                "manage_positions=false must leave even an SL-breached position untouched — \
+                 the Python listener is the sole manager");
+    }
+
+    #[tokio::test]
+    async fn manage_enabled_closes_breached_position() {
+        let engine = SignalEngine::new(&config(true), None);
+        let symbol = unique_symbol("SL");
+        open_breached_position(&engine, &symbol).await;
+
+        engine.manage_positions(&StubBook { mid: 90.0 }).await;
+
+        let mgr = engine.position_mgr().await;
+        let still_open = mgr.get_position(&symbol).is_some();
+        drop(mgr);
+        remove_from_state_file(&symbol);
+        assert!(!still_open,
+                "manage_positions=true must close the SL-breach (control test for the stub)");
+    }
+}
+
 pub struct SignalEngineStatus {
     pub state: String,
     pub audit_mode: bool,
@@ -307,6 +441,7 @@ impl Clone for SignalConfig {
     fn clone(&self) -> Self {
         Self {
             enabled: self.enabled,
+            manage_positions: self.manage_positions,
             audit_mode: self.audit_mode,
             ai_model: self.ai_model.clone(),
             max_positions: self.max_positions,

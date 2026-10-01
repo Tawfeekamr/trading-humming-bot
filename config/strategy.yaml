@@ -198,6 +198,9 @@ fee_optimization:
 # ── Signal Copy Engine ──────────────────────────────────────────
 signal_copy:
   enabled: true                     # Signal Copy Engine active
+  manage_positions: false           # Rust engine is a READ-ONLY mirror — Python listener is the sole
+                                    # position manager + executor. Rust's manage loop raced Python's
+                                    # closes (duplicate CLOSE rows, ghost trades.db exits — 2026-10-01 audit)
   audit_mode: false                 # Execute trades (paper money on testnet)
   exchange: "gate_io_paper_trade"   # Dedicated exchange for signal copy (3000+ tokens)
   ai_model: "deepseek-chat"          # DeepSeek model for signal parsing

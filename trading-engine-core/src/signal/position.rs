@@ -317,6 +317,7 @@ mod tests {
     fn config() -> SignalConfig {
         SignalConfig {
             enabled: true,
+            manage_positions: true,
             audit_mode: false,
             ai_model: "test".to_string(),
             max_positions: 3,
