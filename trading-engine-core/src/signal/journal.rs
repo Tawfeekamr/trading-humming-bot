@@ -12,8 +12,12 @@ pub struct SignalJournal {
 
 impl SignalJournal {
     pub fn new() -> Result<Self> {
-        let dir = PathBuf::from("data");
-        std::fs::create_dir_all(&dir)?;
+        Self::new_at(&PathBuf::from("data"))
+    }
+
+    /// Test seam: build the journal inside `dir` instead of the cwd `data/`.
+    pub fn new_at(dir: &std::path::Path) -> Result<Self> {
+        std::fs::create_dir_all(dir)?;
         let db_path = dir.join("signal_journal.db");
         let conn = Connection::open(&db_path)?;
         conn.execute_batch("PRAGMA journal_mode=WAL;")?;
@@ -21,7 +25,7 @@ impl SignalJournal {
         journal.init_db()?;
         if let Ok(n) = journal.dedup_closes() {
             if n > 0 {
-                info!("Signal journal dedup: removed {} duplicate CLOSE rows (kept earliest per position)", n);
+                info!("Signal journal dedup: removed {} duplicate CLOSE rows (kept partials + earliest full close per position)", n);
             }
         }
         Ok(journal)
@@ -154,10 +158,27 @@ impl SignalJournal {
         }
     }
 
-    /// Idempotent one-time cleanup of duplicate CLOSE rows left by the
-    /// Rust/Python dual-write duplicate-close bug: keep the EARLIEST CLOSE per
-    /// (symbol, entry_price) — the real first close — and delete the phantom
-    /// re-closes. Safe to run on every boot (no-op once clean).
+    /// Idempotent boot-time cleanup of ghost CLOSE rows left by the
+    /// Rust/Python dual-write duplicate-close bug: after one manager closed a
+    /// position, the other's stale snapshot re-closed it seconds later,
+    /// journaling a duplicate FULL close.
+    ///
+    /// A position's legitimate lifecycle is: first tp1 partial, first tp2
+    /// partial, and ONE full close (any reason other than tp1/tp2 — tp3,
+    /// stop_loss, manual, trader_close). So we keep the earliest tp1/tp2 row
+    /// per (symbol, entry_price) — preserving the partial ladder — plus the
+    /// earliest FULL close per (symbol, entry_price), and delete every later
+    /// full close. A ghost must not be rescued by its reason string: the
+    /// racing mirror often logged the ghost under a DIFFERENT reason than the
+    /// real close (real `tp3` + ghost `stop_loss`), so full-close reasons are
+    /// never grouped — position-level "first full close wins" is the only rule.
+    ///
+    /// The earlier GROUP BY (symbol, entry_price) variant kept ONLY the
+    /// earliest row per position, silently eating the tp2 and final-close legs
+    /// of every multi-TP position on every boot since 2026-06-15. Safe to run
+    /// on every boot (no-op once clean). Known limit: two separate positions
+    /// in the same symbol at the identical entry price are indistinguishable
+    /// (no position id exists in this schema).
     pub fn dedup_closes(&self) -> Result<usize> {
         let conn = self.conn.lock().unwrap();
         let n = conn.execute(
@@ -166,6 +187,12 @@ impl SignalJournal {
                AND id NOT IN (
                  SELECT MIN(id) FROM signal_trades
                  WHERE action LIKE 'CLOSE_%'
+                   AND exit_reason IN ('tp1','tp2')
+                 GROUP BY symbol, entry_price, exit_reason
+                 UNION
+                 SELECT MIN(id) FROM signal_trades
+                 WHERE action LIKE 'CLOSE_%'
+                   AND exit_reason NOT IN ('tp1','tp2')
                  GROUP BY symbol, entry_price
                )",
             [],
@@ -226,4 +253,118 @@ pub struct RecentSignal {
     pub action: String,
     pub pair: String,
     pub text: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn close_trade(symbol: &str, entry: f64, reason: &str) -> SignalTrade {
+        SignalTrade {
+            timestamp: Utc::now().to_rfc3339(),
+            symbol: symbol.to_string(),
+            channel_name: "test".to_string(),
+            action: format!("CLOSE_{}", reason),
+            entry_price: entry,
+            current_price: 100.0,
+            quantity: 1.0,
+            realized_pnl: 1.0,
+            exit_reason: reason.to_string(),
+            signal_confidence: "high".to_string(),
+            stop_loss: 95.0,
+            take_profits: "[]".to_string(),
+            tp1_hit: 1,
+            tp2_hit: 1,
+            tp3_hit: 1,
+            raw_message: String::new(),
+            parse_reasoning: String::new(),
+            is_audit: 0,
+        }
+    }
+
+    fn journal_in_temp_dir() -> (SignalJournal, PathBuf) {
+        let dir = std::env::temp_dir().join(format!(
+            "sig_journal_test_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let journal = SignalJournal::new_at(&dir).expect("journal in temp dir");
+        (journal, dir)
+    }
+
+    /// The CLOSE rows still in the journal, as (symbol, exit_reason) pairs.
+    fn surviving_closes(journal: &SignalJournal) -> Vec<(String, String)> {
+        let conn = journal.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT symbol, exit_reason FROM signal_trades WHERE action LIKE 'CLOSE_%' ORDER BY id")
+            .unwrap();
+        stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap()
+    }
+
+    /// A position's legitimate lifecycle is tp1 + tp2 partials, then ONE full
+    /// close. The dual-manager race appended a ghost re-close of the SAME
+    /// remaining quantity seconds later — dedup must drop only that ghost, not
+    /// the tp2/tp3 legs (the 2026-10-01 boot ate tp2+final rows because the old
+    /// GROUP BY (symbol, entry_price) kept just the single earliest row).
+    #[test]
+    fn dedup_keeps_partials_and_drops_only_ghost_full_closes() {
+        let (journal, dir) = journal_in_temp_dir();
+        // Real lifecycle: tp1, tp2, tp3 full close …
+        journal.log_trade(&close_trade("DASH-USDT", 59.115, "tp1"));
+        journal.log_trade(&close_trade("DASH-USDT", 59.115, "tp2"));
+        journal.log_trade(&close_trade("DASH-USDT", 59.115, "tp3"));
+        // … then the Rust mirror's ghost re-close seconds later.
+        journal.log_trade(&close_trade("DASH-USDT", 59.115, "stop_loss"));
+
+        let n = journal.dedup_closes().expect("dedup runs");
+
+        assert_eq!(n, 1, "only the ghost full close is a duplicate");
+        assert_eq!(
+            surviving_closes(&journal),
+            vec![
+                ("DASH-USDT".to_string(), "tp1".to_string()),
+                ("DASH-USDT".to_string(), "tp2".to_string()),
+                ("DASH-USDT".to_string(), "tp3".to_string()),
+            ],
+            "partials + the real full close must survive; only the ghost dies"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Two stop_loss rows for one position (real close, then ghost): the ghost
+    /// is the LATER full close and must be the one deleted.
+    #[test]
+    fn dedup_drops_later_ghost_of_same_reason() {
+        let (journal, dir) = journal_in_temp_dir();
+        journal.log_trade(&close_trade("GRAM-USDT", 1.3755, "stop_loss")); // real
+        journal.log_trade(&close_trade("GRAM-USDT", 1.3755, "stop_loss")); // ghost
+
+        let n = journal.dedup_closes().expect("dedup runs");
+
+        assert_eq!(n, 1);
+        assert_eq!(
+            surviving_closes(&journal),
+            vec![("GRAM-USDT".to_string(), "stop_loss".to_string())]
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Positions with a single clean close (the common case) are untouched,
+    /// and re-running dedup on clean data deletes nothing (idempotent boot).
+    #[test]
+    fn dedup_is_noop_for_clean_history() {
+        let (journal, dir) = journal_in_temp_dir();
+        journal.log_trade(&close_trade("TRX-USDT", 0.338, "stop_loss"));
+        journal.log_trade(&close_trade("XRP-USDT", 1.5, "tp3"));
+
+        assert_eq!(journal.dedup_closes().unwrap(), 0);
+        assert_eq!(journal.dedup_closes().unwrap(), 0, "idempotent on re-run");
+        assert_eq!(surviving_closes(&journal).len(), 2);
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }
