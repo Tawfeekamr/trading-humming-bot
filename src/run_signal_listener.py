@@ -24,55 +24,90 @@ def load_config():
         return yaml.safe_load(f)
 
 
+# The Rust engine rejects non-reduce-only orders while the symbol's book is
+# price-suspect (engine.rs place_api_order bails BEFORE placing anything) —
+# which is exactly when channel signals fire, on fast-moving alts. This 502
+# body string identifies that class; it is retry-safe because the order was
+# never sent to the venue (HYPE/RENDER/ICP buys were lost this way, 2026-09).
+_PRICE_SUSPECT_BLOCK = "order blocked: price suspect"
+_ORDER_RETRY_DELAY_S = 3.0
+
+
 def _signal_order(side, symbol, amount, price=None):
-    """Place a signal order via the Rust engine API after checking CapitalManager. Returns order_id."""
-    try:
-        import urllib.request, json
+    """Place a signal order via the Rust engine API after checking CapitalManager.
 
-        rust_url = os.environ.get("RUST_ENGINE_URL", "http://localhost:3030")
+    Returns order_id, or None when the order could not be placed. A price-suspect
+    502 is retried once after a short delay (the block clears once the book
+    re-verifies); every other failure — dropped engine response, timeout,
+    transport — leaves the order's execution state ambiguous and is NOT retried
+    (a retry there could double-execute).
+    """
+    import urllib.error, urllib.request, json
 
-        # CapitalManager check for BUY orders
-        if side == "BUY":
+    rust_url = os.environ.get("RUST_ENGINE_URL", "http://localhost:3030")
+
+    # CapitalManager check for BUY orders
+    if side == "BUY":
+        try:
+            cap_url = f"{rust_url}/api/v1/capital"
+            cap_resp = urllib.request.urlopen(cap_url, timeout=5)
+            cap_data = json.loads(cap_resp.read())
+            free_cap = float(cap_data.get("free_capital", 0.0))
+
+            est_price = float(price) if price else float(_get_price(symbol) or 0.0)
+            req_notional = float(amount) * est_price
+
+            if req_notional > 0 and free_cap > 0 and req_notional > free_cap:
+                logger.warning(
+                    f"Signal BUY rejected by CapitalManager: {symbol} notional ${req_notional:.2f} > free capital ${free_cap:.2f}"
+                )
+                return None
+        except Exception as cap_err:
+            logger.warning(f"CapitalManager pre-check warning for {symbol}: {cap_err}")
+
+    url = rust_url + "/api/v1/order"
+    attempts = []
+    for attempt in (1, 2):
+        try:
+            body = json.dumps({
+                "symbol": symbol.replace("-", ""),
+                "side": side,
+                "order_type": "Market",
+                # signal_engine passes amount as Decimal; json.dumps can't serialize
+                # Decimal, which silently broke every live signal buy (prod bug,
+                # 2026-06-20). Coerce to float at this JSON boundary.
+                "quantity": float(amount),
+                "price": None,
+                "time_in_force": None,
+                "client_order_id": f"sig_{symbol.replace('-','_')}_{int(time.time())}",
+                "reduce_only": side == "SELL",
+            }).encode()
+            req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
+            resp = urllib.request.urlopen(req, timeout=10)
+            data = json.loads(resp.read())
+            oid = data.get("orderId", "unknown")
+            if attempts:
+                logger.info(f"Signal {side} placed on retry {attempt}: {symbol} qty={amount} -> {oid}")
+            else:
+                logger.info(f"Signal {side} placed: {symbol} qty={amount} -> {oid}")
+            return oid
+        except urllib.error.HTTPError as e:
+            # Surface the engine's actual error string — the bare "HTTP Error
+            # 502" hid the cause of every failed buy until 2026-10-02.
+            detail = ""
             try:
-                cap_url = f"{rust_url}/api/v1/capital"
-                cap_resp = urllib.request.urlopen(cap_url, timeout=5)
-                cap_data = json.loads(cap_resp.read())
-                free_cap = float(cap_data.get("free_capital", 0.0))
-
-                est_price = float(price) if price else float(_get_price(symbol) or 0.0)
-                req_notional = float(amount) * est_price
-
-                if req_notional > 0 and free_cap > 0 and req_notional > free_cap:
-                    logger.warning(
-                        f"Signal BUY rejected by CapitalManager: {symbol} notional ${req_notional:.2f} > free capital ${free_cap:.2f}"
-                    )
-                    return None
-            except Exception as cap_err:
-                logger.warning(f"CapitalManager pre-check warning for {symbol}: {cap_err}")
-
-        url = rust_url + "/api/v1/order"
-        body = json.dumps({
-            "symbol": symbol.replace("-", ""),
-            "side": side,
-            "order_type": "Market",
-            # signal_engine passes amount as Decimal; json.dumps can't serialize
-            # Decimal, which silently broke every live signal buy (prod bug,
-            # 2026-06-20). Coerce to float at this JSON boundary.
-            "quantity": float(amount),
-            "price": None,
-            "time_in_force": None,
-            "client_order_id": f"sig_{symbol.replace('-','_')}_{int(time.time())}",
-            "reduce_only": side == "SELL",
-        }).encode()
-        req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
-        resp = urllib.request.urlopen(req, timeout=10)
-        data = json.loads(resp.read())
-        oid = data.get("orderId", "unknown")
-        logger.info(f"Signal {side} placed: {symbol} qty={amount} -> {oid}")
-        return oid
-    except Exception as e:
-        logger.error(f"Signal {side} FAILED for {symbol}: {e}")
-        return None
+                detail = (json.loads(e.read().decode()) or {}).get("error", "")
+            except Exception:
+                pass
+            attempts.append(f"HTTP {e.code}: {detail or str(e)}")
+            if detail != _PRICE_SUSPECT_BLOCK or attempt == 2:
+                break
+            time.sleep(_ORDER_RETRY_DELAY_S)
+        except Exception as e:
+            attempts.append(str(e))
+            break
+    logger.error(f"Signal {side} FAILED for {symbol} after {len(attempts)} attempt(s): {' | '.join(attempts)}")
+    return None
 
 
 def _get_price(symbol):
