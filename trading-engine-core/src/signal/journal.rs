@@ -19,7 +19,28 @@ impl SignalJournal {
     pub fn new_at(dir: &std::path::Path) -> Result<Self> {
         std::fs::create_dir_all(dir)?;
         let db_path = dir.join("signal_journal.db");
-        let conn = Connection::open(&db_path)?;
+        // First-open race: when two openers hit a BRAND-NEW db file (fresh CI
+        // checkout, parallel manage_* engine tests, restart overlap), both run
+        // the WAL-mode transition on the empty file and the loser errors with
+        // a lock failure the busy timeout does not cover (CI panic
+        // "Signal journal creation failed", 2026-10-02). Its retry finds the
+        // file already initialized and succeeds, so retry a few times before
+        // giving up. Every step below is idempotent.
+        let mut last_err = None;
+        for _ in 0..5 {
+            match Self::open_journal(&db_path) {
+                Ok(journal) => return Ok(journal),
+                Err(e) => {
+                    last_err = Some(e);
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+            }
+        }
+        Err(last_err.unwrap())
+    }
+
+    fn open_journal(db_path: &std::path::Path) -> Result<Self> {
+        let conn = Connection::open(db_path)?;
         conn.execute_batch("PRAGMA journal_mode=WAL;")?;
         let journal = Self { conn: Mutex::new(conn) };
         journal.init_db()?;
@@ -366,5 +387,33 @@ mod tests {
         assert_eq!(journal.dedup_closes().unwrap(), 0, "idempotent on re-run");
         assert_eq!(surviving_closes(&journal).len(), 2);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Two SignalEngine instances can open the same BRAND-NEW journal file
+    /// concurrently (cargo test runs the manage_* engine tests in parallel on
+    /// a fresh CI checkout where data/signal_journal.db doesn't exist yet).
+    /// Both run the WAL-mode first-initialization of the empty file; the
+    /// loser's open errors with a lock/mode-transition failure that the busy
+    /// timeout does NOT cover, which panicked "Signal journal creation
+    /// failed" in CI on 2026-10-02. Both openers must succeed.
+    #[test]
+    fn concurrent_first_open_both_succeed() {
+        for i in 0..10 {
+            let dir = std::env::temp_dir().join(format!(
+                "sig_journal_race_{}_{}",
+                i,
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            let opener_dir = dir.clone();
+            let other = std::thread::spawn(move || SignalJournal::new_at(&opener_dir).is_ok());
+            let mine = SignalJournal::new_at(&dir).is_ok();
+
+            assert!(mine, "iter {i}: our open failed on a fresh db");
+            assert!(other.join().unwrap(), "iter {i}: racing open failed on a fresh db");
+            let _ = std::fs::remove_dir_all(dir);
+        }
     }
 }
