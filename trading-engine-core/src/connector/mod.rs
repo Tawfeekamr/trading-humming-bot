@@ -36,4 +36,16 @@ pub trait Connector: Send + Sync {
     async fn fund_reconstructed_position(&self, _symbol: &str, _qty: f64, _entry_price: f64) -> Result<f64> {
         Ok(0.0)
     }
+
+    /// Cumulative realized PnL tracked by the paper book (Task 6 invariant
+    /// bound). Default None — unavailable on live connectors.
+    fn paper_realized_pnl(&self) -> Option<f64> {
+        None
+    }
+
+    /// Average cost basis (quantity, price) per base asset tracked by the paper
+    /// book. Default None — unavailable on live connectors.
+    fn paper_cost_basis(&self) -> Option<HashMap<String, (f64, f64)>> {
+        None
+    }
 }

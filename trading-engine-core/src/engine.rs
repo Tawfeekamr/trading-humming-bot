@@ -112,6 +112,9 @@ pub struct Engine {
     capital: CapitalManager,
     /// Throttle for risk-state persistence (see feed_breaker). None = save next tick.
     last_risk_save: Option<Instant>,
+    /// Whether the peak-equity invariant has logged its healthy first pass —
+    /// one positive confirmation per boot, then silence.
+    invariant_first_pass_logged: bool,
     /// client_order_id (owner-tagged) → (symbol, exchange order_id) for orders
     /// this engine has placed, so strategies can cancel their own resting orders
     /// (e.g. swing's resting TP1 / hard stop) via `pending_cancels`.
@@ -158,6 +161,7 @@ impl Engine {
             routing_cache,
             capital,
             last_risk_save: None,
+            invariant_first_pass_logged: false,
             placed_orders: HashMap::new(),
             api_commands: None,
         };
@@ -821,6 +825,65 @@ impl Engine {
         }
         self.capital.set_deployed(deployed);
         let was_halted = self.risk.circuit_breaker.is_halted_raw();
+        // Peak-equity invariant (Task 6): the breaker's peak can never
+        // legitimately exceed initial capital + realized + unrealised PnL by
+        // more than 1%. A violation NEVER trips the breaker — it freezes peak
+        // updates and alerts. Checked BEFORE record_equity so a phantom spike
+        // cannot ratchet the peak past the bound first. Paper mode only: live
+        // books hold balances at the exchange and the engine cannot track
+        // realized PnL there.
+        if self.config.exchange.testnet {
+            if let (Some(realized), Some(basis)) =
+                (self.connector.paper_realized_pnl(), self.connector.paper_cost_basis())
+            {
+                let mut unrealised = 0.0;
+                for (pair, ob) in &self.order_books {
+                    if let Some(mid) = ob.mid_price() {
+                        let base = pair.split('-').next().unwrap_or("");
+                        let held = balances.get(base).copied().unwrap_or(0.0);
+                        if held > 0.0 && !base.is_empty() {
+                            let entry = basis.get(base).map(|(_, p)| *p).unwrap_or(0.0);
+                            unrealised += (mid - entry) * held;
+                        }
+                    }
+                }
+                let already_frozen = self.risk.circuit_breaker.is_peak_frozen();
+                if let Some((peak, bound)) = self.risk.check_equity_invariant(
+                    self.config.capital.account_usdt,
+                    realized,
+                    unrealised,
+                ) {
+                    if !already_frozen {
+                        error!(
+                            "RISK INVARIANT ALERT: breaker peak {:.2} exceeds the legitimate maximum {:.2} \
+                             (initial {:.2} + realized {:.2} + unrealised {:.2}, ×1.01). Peak updates FROZEN \
+                             pending review; the breaker was NOT tripped and trading continues.",
+                            peak, bound, self.config.capital.account_usdt, realized, unrealised
+                        );
+                        let _ = self.telegram.send(&format!(
+                            "⚠️ RISK INVARIANT: breaker peak ${:.2} exceeds legitimate max ${:.2} \
+                             (initial+realized+unrealised ×1.01). Peak frozen for review — trading NOT halted.",
+                            peak, bound
+                        )).await;
+                    }
+                } else if !self.invariant_first_pass_logged {
+                    // One positive confirmation per boot so a silent invariant
+                    // is distinguishable from a skipped one.
+                    let bound = RiskManager::equity_invariant_bound(
+                        self.config.capital.account_usdt,
+                        realized,
+                        unrealised,
+                    );
+                    info!(
+                        "Peak-equity invariant OK: peak {:.2} ≤ legitimate maximum {:.2} \
+                         (initial {:.2} + realized {:.2} + unrealised {:.2}, ×1.01)",
+                        self.risk.circuit_breaker.peak_equity(), bound,
+                        self.config.capital.account_usdt, realized, unrealised
+                    );
+                    self.invariant_first_pass_logged = true;
+                }
+            }
+        }
         self.risk.record_equity(equity);
         // Daily reset at UTC midnight.
         let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
@@ -1319,6 +1382,7 @@ mod tests {
             routing_cache,
             capital: CapitalManager::new(20.0),
             last_risk_save: None,
+            invariant_first_pass_logged: false,
             placed_orders: HashMap::new(),
             api_commands: None,
         }

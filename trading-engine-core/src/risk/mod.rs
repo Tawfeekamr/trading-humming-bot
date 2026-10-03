@@ -44,6 +44,35 @@ impl RiskManager {
         self.circuit_breaker.update_peak(current_equity);
         let _ = self.circuit_breaker.check(current_equity) || self.circuit_breaker.check_daily(current_equity);
     }
+
+    /// The legitimate maximum for the breaker peak: initial capital + realized
+    /// + unrealised, with 1% headroom.
+    pub fn equity_invariant_bound(initial_capital: f64, realized_pnl: f64, unrealised_pnl: f64) -> f64 {
+        (initial_capital + realized_pnl + unrealised_pnl) * 1.01
+    }
+
+    /// Peak-equity invariant (Task 6): the breaker's peak can never
+    /// legitimately exceed (initial capital + cumulative realized PnL +
+    /// current unrealised PnL) by more than 1%. On violation this NEVER trips
+    /// the breaker — a phantom peak must not halt trading — it freezes peak
+    /// updates pending review and returns `(suspect_peak, legitimate_bound)`
+    /// for the caller to alert on. Returns `None` when the peak is inside the
+    /// bound.
+    pub fn check_equity_invariant(
+        &mut self,
+        initial_capital: f64,
+        realized_pnl: f64,
+        unrealised_pnl: f64,
+    ) -> Option<(f64, f64)> {
+        let bound = Self::equity_invariant_bound(initial_capital, realized_pnl, unrealised_pnl);
+        let peak = self.circuit_breaker.peak_equity();
+        if peak > bound {
+            self.circuit_breaker.freeze_peak();
+            Some((peak, bound))
+        } else {
+            None
+        }
+    }
 }
 
 /// Persisted circuit-breaker state (loaded on startup, saved on changes).
@@ -191,6 +220,7 @@ pub fn load_state(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::risk::PositionGuard;
 
     fn fresh_path(tag: &str) -> String {
         let p = std::env::temp_dir().join(format!("risk_state_test_{tag}_{}.json",
@@ -280,6 +310,51 @@ mod tests {
         assert!((c.peak_equity() - 100_000.0).abs() < 1e-9);
         assert!((c.start_of_day_equity() - 99_000.0).abs() < 1e-9);
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// Task 6 spec test: inject an inflated peak → the invariant fires, the
+    /// alert names both the suspect peak and the legitimate bound, the breaker
+    /// is NOT tripped, and peak updates freeze until reviewed.
+    #[test]
+    fn inflated_peak_raises_invariant_alert_without_tripping() {
+        let mut rm = RiskManager::new(
+            PositionGuard::new(80.0, 100.0, 10_000.0),
+            CircuitBreaker::new(10.0, 5.0),
+        );
+        rm.circuit_breaker.set_peak_equity(124_933.84);
+        rm.circuit_breaker.set_start_of_day_equity(100_000.0);
+
+        // bound = (100,000 initial + 4,800 realized + 0 unrealised) × 1.01 = 105,848
+        let (peak, bound) = rm
+            .check_equity_invariant(100_000.0, 4_800.0, 0.0)
+            .expect("a phantom peak 19% above the legitimate max must violate the invariant");
+        assert!((peak - 124_933.84).abs() < 1e-6, "alert names the suspect peak");
+        assert!((bound - 105_848.0).abs() < 1e-6, "alert names the legitimate bound, got {}", bound);
+
+        assert!(!rm.circuit_breaker.is_halted(), "the invariant must never trip the breaker");
+        assert!(rm.circuit_breaker.is_peak_frozen(), "peak updates frozen pending review");
+
+        // Even a further phantom equity spike must not ratchet the peak.
+        rm.record_equity(999_999.0);
+        assert!(
+            (rm.circuit_breaker.peak_equity() - 124_933.84).abs() < 1e-6,
+            "frozen peak ignores further phantom spikes"
+        );
+    }
+
+    #[test]
+    fn healthy_peak_passes_the_invariant_quietly() {
+        let mut rm = RiskManager::new(
+            PositionGuard::new(80.0, 100.0, 10_000.0),
+            CircuitBreaker::new(10.0, 5.0),
+        );
+        rm.circuit_breaker.set_peak_equity(104_000.0);
+        rm.circuit_breaker.set_start_of_day_equity(100_000.0);
+
+        // bound = (100,000 + 4,800 + 1,000) × 1.01 = 106,878 — 104,000 is inside.
+        let alert = rm.check_equity_invariant(100_000.0, 4_800.0, 1_000.0);
+        assert!(alert.is_none(), "a legitimate peak must not raise the invariant");
+        assert!(!rm.circuit_breaker.is_peak_frozen());
     }
 
     #[test]

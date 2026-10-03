@@ -26,6 +26,11 @@ pub struct CircuitBreaker {
     /// throwing away the real trip time). `None` while not halted.
     halted_at_unix: Option<i64>,
     last_reset_date: String,
+    /// Set when the peak-equity invariant fires (peak exceeds the legitimate
+    /// maximum): `update_peak` stops and drawdown trips against the suspect
+    /// peak are suspended until review. In-memory only — never persisted — so
+    /// a restart after review starts clean.
+    peak_frozen: bool,
 }
 
 impl CircuitBreaker {
@@ -38,6 +43,7 @@ impl CircuitBreaker {
             halted: false,
             halted_at_unix: None,
             last_reset_date: String::new(),
+            peak_frozen: false,
         }
     }
 
@@ -54,15 +60,19 @@ impl CircuitBreaker {
     }
 
     pub fn update_peak(&mut self, current_equity: f64) {
+        if self.peak_frozen {
+            return; // suspect peak under review — do not ratchet further
+        }
         if current_equity > self.peak_equity {
             self.peak_equity = current_equity;
         }
     }
 
     /// Check max-drawdown-from-peak. Latches the halt and returns true if the
-    /// drawdown threshold is breached.
+    /// drawdown threshold is breached. Suspended while the peak is frozen: a
+    /// suspect peak must not halt trading through the drawdown back door.
     pub fn check(&mut self, current_equity: f64) -> bool {
-        if self.peak_equity <= 0.0 { return false; }
+        if self.peak_equity <= 0.0 || self.peak_frozen { return false; }
         let drawdown_pct = (self.peak_equity - current_equity) / self.peak_equity * 100.0;
         if drawdown_pct >= self.max_drawdown_pct {
             self.trip();
@@ -141,6 +151,23 @@ impl CircuitBreaker {
         self.update_peak(current_equity);
         self.check(current_equity) || self.check_daily(current_equity)
     }
+
+    /// Freeze peak updates (peak-equity invariant violation). While frozen,
+    /// `update_peak` is a no-op and `check` suspends drawdown trips against the
+    /// suspect peak — the invariant alert must never halt trading — but daily
+    /// loss protection stays fully live. In-memory only: a restart (or risk
+    /// state reset) unfreezes after review.
+    pub fn freeze_peak(&mut self) {
+        self.peak_frozen = true;
+    }
+
+    pub fn unfreeze_peak(&mut self) {
+        self.peak_frozen = false;
+    }
+
+    pub fn is_peak_frozen(&self) -> bool {
+        self.peak_frozen
+    }
 }
 
 #[cfg(test)]
@@ -153,6 +180,27 @@ mod tests {
         c.set_peak_equity(100_000.0);
         c.set_start_of_day_equity(100_000.0);
         c
+    }
+
+    /// Task 6: when the peak-equity invariant fires, peak updates freeze and
+    /// drawdown checks against the suspect peak must not trip the breaker.
+    /// Daily-loss protection (independent of the peak) stays fully live.
+    #[test]
+    fn frozen_peak_stops_ratchet_and_suspends_drawdown_trips() {
+        let mut c = cb();
+        c.freeze_peak();
+
+        c.update_peak(150_000.0);
+        assert_eq!(c.peak_equity(), 100_000.0, "frozen peak must not ratchet");
+
+        assert!(!c.check(50_000.0), "no drawdown trip against a suspect peak");
+        assert!(!c.is_halted(), "an invariant violation must never halt trading");
+
+        assert!(c.check_daily(94_000.0), "daily loss protection unaffected by the freeze");
+
+        c.unfreeze_peak();
+        c.update_peak(150_000.0);
+        assert_eq!(c.peak_equity(), 150_000.0, "unfreeze resumes the ratchet after review");
     }
 
     #[test]

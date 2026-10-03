@@ -56,6 +56,13 @@ pub struct PaperTradeEngine {
     slippage_bps: f64,
     taker_fee_bps: f64,
     maker_fee_bps: f64,
+    /// Cumulative realized PnL across round trips (sells against average cost,
+    /// fees deducted). Backs the peak-equity invariant bound.
+    realized_pnl: f64,
+    /// Average cost basis per base asset: (quantity held, average entry price).
+    /// Buys weight into it (fees capitalize); sells draw it down. Backs the
+    /// unrealised-PnL half of the invariant bound.
+    cost_basis: HashMap<String, (f64, f64)>,
 }
 
 impl PaperTradeEngine {
@@ -70,6 +77,8 @@ impl PaperTradeEngine {
             slippage_bps: 0.0,
             taker_fee_bps: 10.0, // 0.1%
             maker_fee_bps: 10.0, // 0.1%
+            realized_pnl: 0.0,
+            cost_basis: HashMap::new(),
         }
     }
 
@@ -232,10 +241,31 @@ impl PaperTradeEngine {
                     OrderSide::Buy => {
                         *self.balances.entry(base.to_string()).or_insert(0.0) += fill_qty;
                         *self.balances.entry(quote.to_string()).or_insert(0.0) -= fill_price * fill_qty + fee;
+                        // Weight into average cost; the fee capitalizes into basis.
+                        let (bq, bp) = self.cost_basis.get(base).copied().unwrap_or((0.0, 0.0));
+                        let total_qty = bq + fill_qty;
+                        let avg = if total_qty > 0.0 {
+                            (bq * bp + fill_price * fill_qty + fee) / total_qty
+                        } else {
+                            0.0
+                        };
+                        self.cost_basis.insert(base.to_string(), (total_qty, avg));
                     }
                     OrderSide::Sell => {
                         *self.balances.entry(base.to_string()).or_insert(0.0) -= fill_qty;
                         *self.balances.entry(quote.to_string()).or_insert(0.0) += fill_price * fill_qty - fee;
+                        // Realize against average cost. Seeded inventory with no
+                        // tracked basis counts as basis 0 — the bound errs loose
+                        // (fewer false alerts), and phantom credits are still
+                        // caught by the naked-sell clamp upstream.
+                        let (bq, bp) = self.cost_basis.get(base).copied().unwrap_or((0.0, 0.0));
+                        self.realized_pnl += (fill_price - bp) * fill_qty - fee;
+                        let remaining_basis_qty = (bq - fill_qty).max(0.0);
+                        if remaining_basis_qty > 1e-12 {
+                            self.cost_basis.insert(base.to_string(), (remaining_basis_qty, bp));
+                        } else {
+                            self.cost_basis.remove(base);
+                        }
                     }
                 }
 
@@ -266,6 +296,16 @@ impl PaperTradeEngine {
 
     pub fn balances(&self) -> &HashMap<String, f64> {
         &self.balances
+    }
+
+    /// Cumulative realized PnL across round trips (fees deducted).
+    pub fn realized_pnl(&self) -> f64 {
+        self.realized_pnl
+    }
+
+    /// Average cost basis per base asset: (quantity, average entry price).
+    pub fn cost_basis(&self) -> &HashMap<String, (f64, f64)> {
+        &self.cost_basis
     }
 
     pub fn open_order_count(&self) -> usize {
@@ -491,9 +531,29 @@ impl crate::connector::Connector for PaperTradeConnector {
             );
             return Ok(0.0);
         }
-        *engine.balances.entry(base).or_insert(0.0) += qty;
+        *engine.balances.entry(base.clone()).or_insert(0.0) += qty;
         *engine.balances.entry(quote).or_insert(0.0) -= cost;
+        // Seed cost basis at the entry price so the funded position's
+        // unrealised P&L counts toward the peak-equity invariant bound —
+        // otherwise reconstruction itself would look like a violation.
+        let (bq, bp) = engine.cost_basis.get(&base).copied().unwrap_or((0.0, 0.0));
+        let total_qty = bq + qty;
+        let avg = if total_qty > 0.0 { (bq * bp + qty * entry_price) / total_qty } else { 0.0 };
+        engine.cost_basis.insert(base, (total_qty, avg));
         Ok(qty)
+    }
+
+    /// Paper-book stats backing the peak-equity invariant (Task 6). Only the
+    /// paper connector tracks these; live connectors keep balances at the
+    /// exchange and return the trait defaults (None).
+    fn paper_realized_pnl(&self) -> Option<f64> {
+        let engine = self.engine.lock().unwrap();
+        Some(engine.realized_pnl())
+    }
+
+    fn paper_cost_basis(&self) -> Option<HashMap<String, (f64, f64)>> {
+        let engine = self.engine.lock().unwrap();
+        Some(engine.cost_basis().clone())
     }
 }
 
@@ -789,6 +849,67 @@ mod tests {
         let fills = e.try_fill_at_price("BTCUSDT", 50_000.0);
         // Maker fills at its resting limit, no slippage.
         assert!((fills[0].price - 50_000.0).abs() < 1e-9);
+    }
+
+    // Task 6: the peak-equity invariant bound needs realized PnL + average
+    // cost basis from the paper book. Buys set average cost (fees capitalize
+    // into basis); sells realize (price − basis) × qty − fee.
+    #[test]
+    fn paper_stats_track_realized_pnl_and_cost_basis() {
+        let mut bal = HashMap::new();
+        bal.insert("USDT".to_string(), 10_000.0);
+        let mut e = PaperTradeEngine::new(bal);
+        e.set_realism(0.0, 0.0, 0.0); // zero fees → exact numbers
+
+        e.place_order(&market_buy(1.0)).unwrap();
+        e.try_fill_at_price("BTCUSDT", 100.0);
+        assert!((e.realized_pnl() - 0.0).abs() < 1e-9, "a buy realizes nothing");
+        assert_eq!(e.cost_basis().get("BTC").copied(), Some((1.0, 100.0)));
+
+        e.place_order(&market_sell(0.5, false)).unwrap();
+        e.try_fill_at_price("BTCUSDT", 120.0);
+        assert!((e.realized_pnl() - 10.0).abs() < 1e-9, "(120 − 100) × 0.5 = 10");
+        assert_eq!(
+            e.cost_basis().get("BTC").copied(),
+            Some((0.5, 100.0)),
+            "basis quantity falls with the holding, price unchanged"
+        );
+    }
+
+    #[test]
+    fn buy_fees_capitalize_into_cost_basis() {
+        let mut bal = HashMap::new();
+        bal.insert("USDT".to_string(), 10_000.0);
+        let mut e = PaperTradeEngine::new(bal);
+        e.set_realism(0.0, 0.0, 10.0); // maker 10 bps, zero slippage
+
+        e.place_order(&OrderRequest {
+            symbol: "BTCUSDT".to_string(),
+            side: OrderSide::Buy,
+            order_type: OrderTypeReq::LimitMaker,
+            price: Some(100.0),
+            quantity: 1.0,
+            time_in_force: None,
+            client_order_id: None,
+            reduce_only: false,
+        }).unwrap();
+        e.try_fill_at_price("BTCUSDT", 100.0);
+        // fee = 100 × 1 × 10bps = 0.1 → average cost 100.1
+        assert_eq!(e.cost_basis().get("BTC").copied(), Some((1.0, 100.1)));
+
+        e.place_order(&OrderRequest {
+            symbol: "BTCUSDT".to_string(),
+            side: OrderSide::Sell,
+            order_type: OrderTypeReq::LimitMaker,
+            price: Some(100.0),
+            quantity: 1.0,
+            time_in_force: None,
+            client_order_id: None,
+            reduce_only: false,
+        }).unwrap();
+        e.try_fill_at_price("BTCUSDT", 100.0);
+        // realized = (100 − 100.1) × 1 − 0.1 fee = −0.2
+        assert!((e.realized_pnl() - (-0.2)).abs() < 1e-9, "got {}", e.realized_pnl());
     }
 
     #[test]

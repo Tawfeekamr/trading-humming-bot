@@ -46,6 +46,17 @@ async fn reconcile_funds_remaining_long_inventory() {
         "remaining 6.0 SKY must be re-credited, got {:?}", bal.get("SKY"));
     assert!((bal.get("USDT").copied().unwrap_or(0.0) - 99_880.0).abs() < 1e-6,
         "cost 6.0 × $20 must be debited from USDT, got {:?}", bal.get("USDT"));
+    // Task 6: the reconstruction also seeds cost basis, so the position's
+    // unrealised P&L counts toward the peak-equity invariant bound instead of
+    // making a funded position look like an invariant violation.
+    let basis = c.paper_cost_basis().expect("paper connector exposes basis");
+    assert_eq!(
+        basis.get("SKY").copied(),
+        Some((6.0, 20.0)),
+        "reconstructed inventory carries its entry cost"
+    );
+    assert!((c.paper_realized_pnl().unwrap_or(f64::NAN) - 0.0).abs() < 1e-9,
+        "reconstruction realizes no PnL");
 }
 
 // Spot shorts are not backed by base inventory and closed positions own
