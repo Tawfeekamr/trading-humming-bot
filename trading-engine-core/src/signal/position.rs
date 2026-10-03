@@ -372,4 +372,30 @@ mod tests {
 
         assert!((pnl - 300.0).abs() < 1e-6);
     }
+
+    /// 4efac99 regression: two exit signals for one position — the real close,
+    /// then the second manager's ghost seconds later — must produce exactly one
+    /// close and one credit. The second close is a no-op: None, PnL untouched,
+    /// no inventory resurrected.
+    #[test]
+    fn second_close_4s_later_is_rejected_and_never_recredits() {
+        let mut mgr = SignalPositionManager::new(&config());
+        mgr.positions.clear();
+        let symbol = unique_symbol("DOUBLE-CLOSE");
+        mgr.open_position(&symbol, 100.0, 5.0, 95.0, vec![110.0], "high", "x", "c", "long").unwrap();
+
+        let first = mgr.close_position(&symbol, 105.0, "tp3").expect("first close returns PnL");
+        assert!((first - 25.0).abs() < 1e-6, "5 × (105 − 100) = 25");
+
+        // The ghost exit, seconds later at a different price.
+        let second = mgr.close_position(&symbol, 99.0, "tp3");
+        assert!(second.is_none(), "second close must not re-credit");
+        let ghost_partial = mgr.partial_close(&symbol, 0.5, 99.0, "tp2");
+        assert!(ghost_partial.abs() < 1e-12, "partial close after full close credits nothing");
+
+        let pos = mgr.positions.get(&symbol).unwrap();
+        assert!(pos.is_closed);
+        assert!((pos.realized_pnl - 25.0).abs() < 1e-6, "PnL unchanged by the ghost");
+        assert!(pos.remaining_amount().abs() < 1e-9, "no inventory to re-close");
+    }
 }

@@ -303,6 +303,15 @@ mod tests {
         }
     }
 
+    /// Same as close_trade, with an explicit timestamp — the production ghost
+    /// close landed seconds after the real one, and dedup must catch it at any
+    /// time distance, not just same-instant writes.
+    fn close_trade_at(symbol: &str, entry: f64, reason: &str, ts: &str) -> SignalTrade {
+        let mut t = close_trade(symbol, entry, reason);
+        t.timestamp = ts.to_string();
+        t
+    }
+
     fn journal_in_temp_dir() -> (SignalJournal, PathBuf) {
         // Uniqueness MUST NOT rely on the timestamp alone: two tests calling
         // this within the same clock tick (cargo test runs the module's tests
@@ -379,6 +388,27 @@ mod tests {
         assert_eq!(
             surviving_closes(&journal),
             vec![("GRAM-USDT".to_string(), "stop_loss".to_string())]
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The production double-close (4efac99, dual-manager race) was two exit
+    /// signals for one position seconds apart — the real close, then the second
+    /// manager's ghost of the same remaining quantity. Dedup must collapse that
+    /// to exactly one journal row regardless of the time gap.
+    #[test]
+    fn ghost_close_4s_after_real_close_is_deduped() {
+        let (journal, dir) = journal_in_temp_dir();
+        journal.log_trade(&close_trade_at("SKY-USDT", 0.72, "stop_loss", "2026-10-01T12:00:00+00:00"));
+        journal.log_trade(&close_trade_at("SKY-USDT", 0.72, "stop_loss", "2026-10-01T12:00:04+00:00"));
+
+        let n = journal.dedup_closes().expect("dedup runs");
+
+        assert_eq!(n, 1, "the 4s-later ghost is the duplicate");
+        assert_eq!(
+            surviving_closes(&journal).len(),
+            1,
+            "exactly one close survives for the position"
         );
         let _ = std::fs::remove_dir_all(dir);
     }

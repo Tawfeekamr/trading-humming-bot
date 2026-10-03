@@ -672,6 +672,50 @@ mod tests {
         assert!(btc.abs() < 1e-12, "base must stay at zero, got {}", btc);
     }
 
+    /// 4efac99 + root-cause-B regression at the book layer: two exit sells for
+    /// one position, the second 4s after the first. The first consumes the
+    /// reconstructed base and credits proceeds exactly once; the ghost exit
+    /// finds zero base and must credit NOTHING.
+    #[tokio::test]
+    async fn second_exit_sell_4s_after_first_credits_nothing() {
+        let mut bal = HashMap::new();
+        bal.insert("SKY".to_string(), 6.0);
+        bal.insert("USDT".to_string(), 100_000.0);
+        let c = PaperTradeConnector::new(bal);
+
+        let exit = OrderRequest {
+            symbol: "SKYUSDT".to_string(),
+            side: OrderSide::Sell,
+            order_type: OrderTypeReq::Limit,
+            price: Some(21.0),
+            quantity: 6.0,
+            time_in_force: Some(TimeInForceReq::Gtc),
+            client_order_id: Some("listener-exit".into()),
+            reduce_only: true,
+        };
+        c.place_order(&exit).await.unwrap();
+        let fills = c.try_fill_at_price("SKYUSDT", 21.0).await;
+        assert_eq!(fills.len(), 1, "first exit fills");
+        let after_first = c.get_balances().await.unwrap();
+        assert!(after_first.get("SKY").copied().unwrap_or(0.0).abs() < 1e-9, "base consumed");
+        // 100_000 + 6 × 21 − maker fee (6 × 21 × 10bps = 0.126)
+        assert!(
+            (after_first.get("USDT").copied().unwrap_or(0.0) - 100_125.874).abs() < 1e-6,
+            "credited exactly once"
+        );
+
+        // The ghost exit, seconds later: identical sell, nothing left to sell.
+        c.place_order(&exit).await.unwrap();
+        let ghost_fills = c.try_fill_at_price("SKYUSDT", 21.0).await;
+        assert!(ghost_fills.is_empty(), "ghost exit must be rejected, not filled");
+        let after_second = c.get_balances().await.unwrap();
+        assert!(
+            (after_second.get("USDT").copied().unwrap_or(0.0)
+                - after_first.get("USDT").copied().unwrap_or(0.0)).abs() < 1e-9,
+            "USDT must not move twice for one position"
+        );
+    }
+
     #[test]
     fn sell_beyond_held_is_clamped_to_held() {
         let mut bal = HashMap::new();
