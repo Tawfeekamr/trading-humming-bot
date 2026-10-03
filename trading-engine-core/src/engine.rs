@@ -21,6 +21,7 @@ use crate::strategy::routing_cache::RoutingCache;
 use crate::models::bar::Bar;
 use crate::bar_cache::BarCache;
 use crate::signal::SignalEngine;
+use crate::signal::types::SignalPosition;
 use crate::api::order_command::EngineCommand;
 
 async fn recv_api_command(rx: &mut Option<mpsc::Receiver<EngineCommand>>) -> Option<EngineCommand> {
@@ -269,6 +270,18 @@ impl Engine {
         // baseline describes a book that no longer exists and is rebased (with a
         // loud log); live mode persists balances, so a latched halt refuses to start.
         let risk_path = std::env::var("RISK_STATE_PATH").unwrap_or_else(|_| "data/risk_state.json".to_string());
+        // Paper-mode boot reconciliation runs FIRST so boot equity (and the
+        // rebased breaker baseline) accounts for reconstructed positions' cost.
+        if self.config.exchange.testnet {
+            if let Some(signal_engine) = &self.signal {
+                let positions = {
+                    let mut mgr = signal_engine.position_mgr().await;
+                    mgr.reload_state();
+                    mgr.get_open_positions().into_iter().cloned().collect::<Vec<_>>()
+                };
+                Self::reconcile_signal_positions(self.connector.as_ref(), &positions).await;
+            }
+        }
         let boot_balances = self.connector.get_balances().await.unwrap_or_default();
         let boot_equity = Self::portfolio_equity_mtm(&boot_balances, &self.order_books);
         let continuity = if self.config.exchange.testnet {
@@ -759,6 +772,40 @@ impl Engine {
             }
         }
         equity
+    }
+
+    /// Boot reconciliation for a reseeded paper book (root cause C, Oct 2026):
+    /// signal_positions.json persists across restarts but paper balances do
+    /// not — a restart wiped the base a spot signal long had bought while its
+    /// exits kept crediting USDT. Reconstruct each open spot long into the
+    /// book: credit `remaining` base AND debit `remaining × entry_price` cash.
+    /// Both halves of the original BUY are restored, so this cannot create
+    /// USDT from nothing — at entry-price marks, equity is unchanged. Skips
+    /// shorts (not backed by base inventory), closed positions, and any
+    /// position whose cost exceeds available cash (funding it would mint
+    /// value; the naked-sell clamp still bounds its exits).
+    pub async fn reconcile_signal_positions(connector: &dyn Connector, positions: &[SignalPosition]) {
+        for pos in positions {
+            if pos.is_closed || pos.side != "long" {
+                continue;
+            }
+            let remaining = pos.remaining_amount();
+            if remaining <= 1e-12 {
+                continue;
+            }
+            match connector.fund_reconstructed_position(&pos.symbol, remaining, pos.entry_price).await {
+                Ok(funded) if funded > 0.0 => {
+                    info!(
+                        "Reconstructed signal position {} into reseeded paper book: +{:.8} base, -${:.2} cash (entry {:.4}, remaining of {:.8})",
+                        pos.symbol, funded, funded * pos.entry_price, pos.entry_price, pos.amount
+                    );
+                }
+                Ok(_) => {} // already funded or skipped — logged by the connector
+                Err(e) => {
+                    warn!("Signal position {} reconstruction failed: {}", pos.symbol, e);
+                }
+            }
+        }
     }
 
     /// Feed mark-to-market portfolio equity to the circuit breaker + persist.

@@ -464,6 +464,37 @@ impl crate::connector::Connector for PaperTradeConnector {
         }
         fills
     }
+
+    /// Boot reconciliation for a reseeded paper book: re-fund a position whose
+    /// base was wiped by a restart. Credits `qty` base AND debits
+    /// `qty × entry_price` cash — both halves of the original BUY — so no USDT
+    /// is created: at entry-price marks, equity is unchanged by this call.
+    /// Returns 0.0 without touching the book when the base is already held
+    /// (idempotent) or when cash cannot cover the cost (funding would mint
+    /// value; the naked-sell clamp still bounds that position's exits).
+    async fn fund_reconstructed_position(&self, symbol: &str, qty: f64, entry_price: f64) -> anyhow::Result<f64> {
+        let mut engine = self.engine.lock().unwrap();
+        let (base, quote) = {
+            let (b, q) = split_pair(symbol);
+            (b.to_string(), q.to_string())
+        };
+        let held = *engine.balances().get(&base).unwrap_or(&0.0);
+        if held >= qty - 1e-12 {
+            return Ok(0.0); // already funded — nothing to reconstruct
+        }
+        let cost = qty * entry_price;
+        let cash = *engine.balances().get(&quote).unwrap_or(&0.0);
+        if cash + 1e-9 < cost {
+            warn!(
+                "position {} NOT reconstructed into paper book: needs ${:.2} cash, book holds ${:.2} — funding it would create USDT from nothing",
+                symbol, cost, cash
+            );
+            return Ok(0.0);
+        }
+        *engine.balances.entry(base).or_insert(0.0) += qty;
+        *engine.balances.entry(quote).or_insert(0.0) -= cost;
+        Ok(qty)
+    }
 }
 
 #[cfg(test)]

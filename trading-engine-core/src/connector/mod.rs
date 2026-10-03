@@ -28,4 +28,12 @@ pub trait Connector: Send + Sync {
     async fn try_fill_at_price(&self, _symbol: &str, _market_price: f64) -> Vec<types::Fill> {
         Vec::new()
     }
+
+    /// Paper-mode boot reconciliation: fund a position whose base inventory was
+    /// wiped by a paper restart (see `Engine::reconcile_signal_positions`).
+    /// Returns the quantity actually funded. Default: no-op — live books
+    /// persist balances at the exchange and never need reconstruction.
+    async fn fund_reconstructed_position(&self, _symbol: &str, _qty: f64, _entry_price: f64) -> Result<f64> {
+        Ok(0.0)
+    }
 }
