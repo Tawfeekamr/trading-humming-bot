@@ -265,10 +265,32 @@ impl Engine {
         info!("Placed orders loaded from file");
 
         // Restore circuit-breaker state (peak equity, daily baseline, halt) across restarts.
+        // Paper/testnet mode reseeds the in-memory book at boot, so a persisted
+        // baseline describes a book that no longer exists and is rebased (with a
+        // loud log); live mode persists balances, so a latched halt refuses to start.
         let risk_path = std::env::var("RISK_STATE_PATH").unwrap_or_else(|_| "data/risk_state.json".to_string());
         let boot_balances = self.connector.get_balances().await.unwrap_or_default();
         let boot_equity = Self::portfolio_equity_mtm(&boot_balances, &self.order_books);
-        crate::risk::load_state(&mut self.risk.circuit_breaker, &risk_path, boot_equity);
+        let continuity = if self.config.exchange.testnet {
+            crate::risk::BookContinuity::Reseeded
+        } else {
+            crate::risk::BookContinuity::Persisted
+        };
+        match crate::risk::load_state(&mut self.risk.circuit_breaker, &risk_path, boot_equity, continuity) {
+            Ok(Some(discarded)) => {
+                warn!(
+                    "REBASED circuit-breaker baseline to boot equity {:.2}: the paper book was reseeded at boot, \
+                     discarding persisted peak={:.2} start_of_day={:.2} halted={} (stale baseline from a wiped book \
+                     latched the breaker against an unreachable peak)",
+                    boot_equity, discarded.peak_equity, discarded.start_of_day_equity, discarded.was_halted
+                );
+            }
+            Ok(None) => {}
+            Err(reason) => {
+                error!("Circuit breaker refusing to start: {}", reason);
+                anyhow::bail!("circuit breaker refused to start: {}", reason);
+            }
+        }
         info!("Circuit breaker loaded: peak={:.0} sod={:.0} halted={}",
             self.risk.circuit_breaker.peak_equity(),
             self.risk.circuit_breaker.start_of_day_equity(),

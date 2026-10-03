@@ -3,7 +3,7 @@ use trading_engine_core::connector::types::{OrderRequest, OrderTypeReq, TimeInFo
 use trading_engine_core::engine::Engine;
 use trading_engine_core::models::order::OrderSide;
 use trading_engine_core::risk::circuit_breaker::CircuitBreaker;
-use trading_engine_core::risk::{RiskManager, PositionGuard};
+use trading_engine_core::risk::{RiskManager, PositionGuard, BookContinuity};
 
 #[test]
 fn test_breaker_trips_on_drawdown_and_persists_fields() {
@@ -39,7 +39,8 @@ fn test_risk_state_roundtrip() {
     trading_engine_core::risk::save_state(&cb, path.to_str().unwrap());
 
     let mut cb2 = CircuitBreaker::new(10.0, 5.0);
-    trading_engine_core::risk::load_state(&mut cb2, path.to_str().unwrap(), 10000.0);
+    // Live mode: healthy persisted state (not latched) loads verbatim.
+    trading_engine_core::risk::load_state(&mut cb2, path.to_str().unwrap(), 10000.0, BookContinuity::Persisted).unwrap();
     assert_eq!(cb2.peak_equity(), 12000.0, "peak restored");
     assert_eq!(cb2.start_of_day_equity(), 11500.0, "SOD restored");
     assert_eq!(cb2.last_reset_date(), "2026-06-14");
@@ -48,7 +49,7 @@ fn test_risk_state_roundtrip() {
 #[test]
 fn test_risk_state_missing_initializes_from_equity() {
     let mut cb = CircuitBreaker::new(10.0, 5.0);
-    trading_engine_core::risk::load_state(&mut cb, "/nonexistent/risk_state.json", 9000.0);
+    trading_engine_core::risk::load_state(&mut cb, "/nonexistent/risk_state.json", 9000.0, BookContinuity::Persisted).unwrap();
     assert_eq!(cb.peak_equity(), 9000.0, "no file -> peak = current equity");
     assert_eq!(cb.start_of_day_equity(), 9000.0);
 }
@@ -90,7 +91,7 @@ fn test_load_state_resets_stale_realized_peak() {
     // Legacy (pre-MTM) state: inflated realized-based peak + halted, old metric.
     std::fs::write(&path, r#"{"peak_equity":44707.0,"start_of_day_equity":20000.0,"halted":true,"halted_at_unix":1700000000,"last_reset_date":"2026-06-14","metric":"realized"}"#).unwrap();
     let mut cb = CircuitBreaker::new(10.0, 5.0);
-    trading_engine_core::risk::load_state(&mut cb, path.to_str().unwrap(), 11000.0);
+    trading_engine_core::risk::load_state(&mut cb, path.to_str().unwrap(), 11000.0, BookContinuity::Reseeded).unwrap();
     assert!((cb.peak_equity() - 11000.0).abs() < 1e-6, "stale realized peak reset to current MTM equity");
     assert!(!cb.is_halted_raw(), "halt cleared on metric migration");
 }
