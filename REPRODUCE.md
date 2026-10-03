@@ -201,9 +201,13 @@ python -m src.rl.walk_forward --pairs ETHUSDT BNBUSDT \
 ```
 
 - **Pinned data-end:** 2026-07-05 (required flag; no default).
-- **Library versions:** scikit-learn 1.6.1, numpy 2.4.x, pandas 2.3.x,
+- **Library versions:** scikit-learn 1.6.1, numpy 2.5.2, pandas 3.0.5,
   torch 2.13, stable-baselines3 2.9 (see
-  `reports/run_manifest_20260815T030518Z.json`).
+  `reports/run_manifest_20260815T030518Z.json`). *[Corrected 2026-09-19:
+  this line previously read "numpy 2.4.x, pandas 2.3.x", contradicting
+  the run manifest the same sentence cites — the third instance of the
+  documentation-drift class (failure-register row 21, Chapter 3
+  Appendix 3.A); the manifest values were always authoritative.]*
 - **Hardware assumption:** Apple Silicon (M-series); PPO training ~5
   min/1M steps on CPU. With all models cached, the walk-forward
   re-evaluation is ~2 minutes; a from-scratch run (12 PPO trainings +

@@ -45,7 +45,7 @@ Special thanks are also due to the faculty members of the Department of Computer
 
 Cryptocurrency markets exhibit extreme non-stationarity, where static quantitative trading strategies systematically bleed capital when market regimes transition between ranging, trending, and market-wide crisis states. This dissertation addresses the "single-strategy trap" by building a **regime-aware multi-asset trading system** powered by a supervised Random Forest classifier with isotonic probability calibration and cross-asset correlation gating.
 
-Operating across a 4-asset basket (`ETH`, `BNB`, `XRP`, `DOGE`), the system routes capital between the two production trading engines (Grid, Trend) with additional strategy prototypes (Swing, Mean-Reversion) explored in research backtests. We cast the regime-switched routing problem into a formal Markov Decision Process (MDP) and conduct a walk-forward evaluation comparing our calibrated supervised routing policy against Proximal Policy Optimization (PPO) agents under simulated market frictions (fees and slippage in the bar-level replay environment).
+Operating across a 4-asset basket (`ETH`, `BNB`, `XRP`, `DOGE`), the system routes capital between the two production trading engines (Grid, Trend) with additional strategy prototypes (Swing, Mean-Reversion) explored in research backtests. We cast the regime-switched routing problem into a formal Markov Decision Process (MDP) and conduct a walk-forward evaluation comparing our calibrated supervised routing policy against Proximal Policy Optimization (PPO) agents under simulated market frictions (a 0.1%-per-side fee in the bar-level replay environment; slippage was not modelled — Section 5.3, item 15).
 
 Empirical results are reported from a corrected walk-forward evaluation protocol (timestamp-aligned comparators, 70-bar train/test embargo, fold-specific supervised baselines, pinned data windows, multiplicative-drawdown definitions). Under this protocol, **neither the supervised gating policy nor the PPO agent outperformed passive buy-and-hold** on either asset over the evaluated window (ETH: B&H +38.0% vs gated −21.2% vs PPO −12.8%; BNB: B&H −4.3% vs gated −20.3% vs PPO −25.9%), and no routing comparison is statistically interpretable: the design's minimum detectable effect (82–179% cumulative return at 80% power, compounded basis) exceeds the observed differences by an order of magnitude, PPO seed variance (up to 27pp return swing within a fold) dominates between-method differences, and the two policies operated at materially different capital deployment (4–5% vs 21–61% capital-weighted exposure). Diagnostic analysis further shows the PPO agent's low exposure is *learned withdrawal under a drawdown-penalising reward* — a permanently-flat policy outscores the trained policy in 19 of 20 seed-fold-pair cells. This withdrawal is documented under one reward specification that double-counts transaction costs (fees enter both the equity return and, again, an explicit reward penalty) on top of a drawdown penalty at lambda=0.5 — comparative evidence from published punitive rewards that did NOT produce abstention indicates the fee double-count, not the drawdown penalty, is the likely distinguishing mechanism; no ablation separates them, no threshold in lambda is established, and generalisation to other reward designs is untested. The evaluation further shows that the regime classifier's DANGER warnings are false 38–47% of the time, forgoing upside that buy-and-hold captures. The dissertation's contribution is the negative result, the protocol that establishes it, and the causal diagnosis of why learned routing degenerates to abstention; it does not claim a validated trading edge.
 
@@ -94,7 +94,7 @@ Empirical results are reported from a corrected walk-forward evaluation protocol
 
 ## List of Mathematical Equations & Symbols
 
-- Equation 3.1: State Space Vector Representation $s_t \in \mathbb{R}^{18}$
+- Equation 3.1: State Space Vector Representation $s_t \in \mathbb{R}^{25}$
 - Equation 3.2: Reward Function Formulation $r_t$
 - Equation 3.3: Isotonic Regression Probability Calibration
 - Equation 3.4: Expected Calibration Error (ECE)
@@ -121,7 +121,7 @@ Traditional quantitative execution suffers from the **Single-Strategy Trap**:
 3. **Cross-Asset Contagion**: Altcoin trading bots operating in isolation fail to account for systemic market panic driven by Bitcoin (`BTC`), purchasing falling knives during market-wide crashes.
 
 ## 1.3 Research Aims & Objectives
-This dissertation constructs a production-grade multi-engine trading framework as the experimental apparatus to evaluate supervised regime routing against Deep Reinforcement Learning (PPO) under simulated market frictions (fees and slippage in the bar-level replay environment).
+This dissertation constructs a production-grade multi-engine trading framework as the experimental apparatus to evaluate supervised regime routing against Deep Reinforcement Learning (PPO) under simulated market frictions (a 0.1%-per-side fee in the bar-level replay environment; slippage was not modelled — Section 5.3, item 15).
 
 ## 1.4 Research Questions & Hypotheses
 ### Research Question
@@ -144,7 +144,17 @@ This dissertation constructs a production-grade multi-engine trading framework a
 ## 3.1 MDP Formulation of Regime-Switched Execution
 We cast regime-switched multi-asset execution as a finite-horizon Markov Decision Process $\mathcal{M} = (\mathcal{S}, \mathcal{A}, \mathcal{P}, \mathcal{R}, \gamma)$:
 
-$$\text{State Vector: } s_t = \Big( [X_{t,1}, \dots, X_{t,14}], I_t, U_t, \Delta t \Big) \in \mathbb{R}^{18}$$
+$$\text{State Vector: } s_t = \Big( \underbrace{[X_{t,1}, \dots, X_{t,14}]}_{\text{14 market features}},\ \underbrace{\tau_t}_{\substack{\text{3 time} \\ \text{features}}},\ \underbrace{e_t}_{\substack{\text{engine one-hot} \\ \in \{0,1\}^{4}}},\ \underbrace{u_t,\, d_t,\, p_t,\, a_t}_{\substack{\text{4 account} \\ \text{variables}}} \Big) \in \mathbb{R}^{25}$$
+
+where $e_t$ is a one-hot over {flat, grid, trend, swing};
+$u_t = (E_t - E_0)/E_0$ is unrealised PnL relative to initial equity;
+$d_t = (\text{peak}_t - E_t)/\text{peak}_t$ is drawdown-from-peak;
+$p_t = |\text{position}_t| / E_0$ is position notional relative to initial
+equity; and $a_t$ is the count of consecutive bars in the current engine,
+normalised by its cap. *[Corrected 2026-09-19: an earlier version stated
+$s_t \in \mathbb{R}^{18}$ with an equation whose own terms summed to 17;
+the implementation defines 25 dimensions exactly as decomposed above
+(`src/rl/env.py:16-28`).]*
 
 $$\text{Reward Function (implemented): } r_t = \underbrace{(R^{eq}_t - R^{bh}_t)}_{\text{excess over buy\&hold}} - \underbrace{f \cdot \text{Turnover}_t}_{\text{fee}} - \underbrace{\lambda \cdot \Delta DD_t}_{\text{drawdown step}}, \quad \lambda = 0.5$$
 
@@ -433,8 +443,9 @@ All results in this chapter come from the corrected walk-forward protocol:
 6 chronological folds per asset (train 4,320 bars, test 720, step 2,160,
 70-bar embargo sized to the maximum feature lookback), fold-specific
 Random-Forest baselines, timestamp-aligned comparators, pinned data window
-ending 2026-07-05, and canonical (multiplicative, pooled-by-concatenation)
-drawdowns. The full audit trail - per-bar timestamped return series,
+ending 2026-07-05, and canonical drawdowns (multiplicative equity curve,
+per-fold distributions summarised by the median — never pooled across the
+1,440-bar fold gaps). The full audit trail - per-bar timestamped return series,
 per-fold model provenance manifests, run manifest, and three corrective
 batches of protocol fixes - is committed alongside this manuscript.
 
@@ -999,10 +1010,15 @@ answer to its research question is a **well-evidenced negative result**:
    capital-matched random entries at the same deployment drew down less
    than PPO on both assets.
 2. **The comparison itself is uninterpretable at this scale.** The
-   minimum detectable effect (60–103% cumulative at 80% power) exceeds
-   every observed difference; detecting them would require 21–36 years of
-   hourly data; and PPO seed variance (up to 27pp within a fold)
-   dominates between-method differences. **CH3 is upheld only in a
+   minimum detectable effect (81.7pp on ETH and 179.3pp on BNB cumulative
+   at 80% power) exceeds every observed difference (9.66 and −11.34
+   points); detecting literature-anchored effect sizes would require on
+   the order of 2,506 years (ETH) and 7,413 years (BNB) of hourly data at
+   the 1.7%-per-year anchor, or 72 and 214 years at a 10%-per-year crypto
+   anchor — the observed-anchored "21–36 years" formerly quoted here was
+   retracted in Batch 10 as retrospective (Hoenig & Heisey, 2001); and
+   PPO seed variance (up to 27pp within a fold) dominates
+   between-method differences. **CH3 is upheld only in a
    power-qualified form**: non-significance here documents an
    underpowered design, not parity.
 3. **The learned policy is abstention.** The PPO agent's 4–5%
@@ -1178,10 +1194,14 @@ themselves.*
    draw in BNB fold 0. The headline figures are therefore pessimistic
    toward the reinforcement-learning agent rather than flattering to
    it.*
-4. **Underpowered by construction.** Detecting the observed differences
-   at 80% power would require 21-36 years of hourly data
-   (Section 4.3.1). The evaluation design cannot support method-level
-   claims at any effect size it plausibly encounters.
+4. **Underpowered by construction.** Detecting literature-anchored effect
+   sizes at 80% power would require on the order of 2,506–7,413 years of
+   hourly data at the 1.7%-per-year anchor (72–214 years at a
+   10%-per-year crypto anchor); the observed-anchored "21–36 years"
+   formerly quoted here was retracted in Batch 10 as retrospective
+   (Hoenig & Heisey, 2001) (Section 4.3.1). The evaluation design cannot
+   support method-level claims at any effect size it plausibly
+   encounters.
 5. **Baseline ordering.** The supervised baseline was chosen because it
    represents the prevailing approach and because existing
    infrastructure allowed the decision layer to be isolated as the only
@@ -1273,6 +1293,21 @@ themselves.*
     the simulation-to-deployment gap: an action space validated only
     against primitives the production path no longer contains.
 
+15. **No slippage was modelled.** The only simulated friction is the
+    environment's 0.1%-per-side fee on turnover; the walk-forward
+    harness's fee and slippage overlays default to zero and the corrected
+    run passed neither flag (`src/rl/walk_forward.py`), so every fill —
+    including market-style closes at the previous bar's close — executes
+    at the bar price with no spread or impact. This matters jointly with
+    the fee double-count disclosure (Section 3.1): the cost signal the
+    agent saw was amplified in one respect — transaction costs subtracted
+    twice — and absent in another — no price impact on execution. The
+    learned-withdrawal finding is documented under a cost treatment that
+    is simultaneously too punitive on fees and too optimistic on
+    execution, and neither direction is individually representative of
+    live trading. *[Added 2026-09-19; the abstract and §1.3 previously
+    claimed "fees and slippage".]*
+
 ### 5.3.1 Deployment-layer limitations (documented, not fixed)
 
 An operational audit (2026-08-23) reconciled the deployed system
@@ -1355,10 +1390,14 @@ live routing must not be enabled on this codebase.
 - Cremers, M. and Petajisto, A. (2009) 'How Active Is Your Fund Manager? A New Measure That Predicts Performance', *Journal of Finance*, 64(5), pp. 2333–2365.
 - Diebold, F.X. and Mariano, R.S. (1995) 'Comparing Predictive Accuracy', *Journal of Business & Economic Statistics*, 13(3), pp. 253–263.
 - Frazzini, A. and Pedersen, L.H. (2014) 'Betting Against Beta', *Journal of Financial Economics*, 111(1), pp. 1–25.
+- Flyvbjerg, B. (2006) 'Five Misunderstandings About Case-Study Research', *Qualitative Inquiry*, 12(2), pp. 219–245.
 - Gašperov, B. and Kostanjčar, Z. (2021) 'Market Making With Signals Through Deep Reinforcement Learning', *IEEE Access*, 9, pp. 61611–61622.
+- Gelman, A. and Carlin, J. (2014) 'Beyond Power Calculations: Assessing Type S (Sign) and Type M (Magnitude) Errors', *Perspectives on Psychological Science*, 9(6), pp. 641–651.
 - Geifman, Y. and El-Yaniv, R. (2017) 'Selective Classification for Deep Neural Networks', *Advances in Neural Information Processing Systems 30 (NeurIPS 2017)*.
 - Geifman, Y., Undersander, E. and El-Yaniv, R. (2019) 'SelectiveNet: A Deep Neural Network with an Integrated Reject Option', *Proceedings of the 36th International Conference on Machine Learning (ICML 2019)*, PMLR 97.
 - Hafsi and Vittori (2024) 'Optimal Execution with Reinforcement Learning', arXiv:2411.06389.
+- Hoenig, J.M. and Heisey, D.M. (2001) 'The Abuse of Power: The Pervasive Fallacy of Power Calculations for Data Analysis', *The American Statistician*, 55(1), pp. 19–24.
+- Holm, S. (1979) 'A Simple Sequentially Rejective Multiple Test Procedure', *Scandinavian Journal of Statistics*, 6(2), pp. 65–70.
 - Lin, Z., Zhao, L., Yang, D., Qin, T., Yang, G. and Liu, T.-Y. (2019) 'Distributional Reward Decomposition for Reinforcement Learning', *Advances in Neural Information Processing Systems 32 (NeurIPS 2019)*.
 - Lin, Z., Yang, D., Zhao, L., Qin, T., Yang, G. and Liu, T.-Y. (2020) 'RD2: Reward Decomposition with Representation Disentanglement', *Advances in Neural Information Processing Systems 33 (NeurIPS 2020)*, pp. 11298–11308.
 - Liu, B. et al. (2023) 'Lazy Agents: A New Perspective on Solving Sparse Reward Problem in Multi-agent Reinforcement Learning', *Proceedings of the 40th International Conference on Machine Learning (ICML 2023)*, PMLR 202.
@@ -1366,7 +1405,11 @@ live routing must not be enabled on this codebase.
 - Marot, A. et al. (2021) 'Learning to Run a Power Network Challenge: A Retrospective Analysis', arXiv:2103.03104.
 - Mnih, V. et al. (2015) 'Human-level control through deep reinforcement learning', *Nature*, 518(7540), pp. 529–533.
 - Mohl, V. et al. (2025) 'JaxMARL-HFT: GPU-Accelerated Large-Scale Multi-Agent Reinforcement Learning for High-Frequency Trading', arXiv:2511.02136.
+- Newey, W.K. and West, K.D. (1987) 'A Simple, Positive Semi-Definite, Heteroskedasticity and Autocorrelation Consistent Covariance Matrix', *Econometrica*, 55(3), pp. 703–708.
+- Politis, D.N. and Romano, J.P. (1994) 'The Stationary Bootstrap', *Journal of the American Statistical Association*, 89(428), pp. 1303–1313.
+- Politis, D.N. and White, H. (2004) 'Automatic Block-Length Selection for the Dependent Bootstrap', *Econometric Reviews*, 23(1), pp. 53–70.
 - Schulman, J. et al. (2017) 'Proximal Policy Optimization Algorithms', arXiv:1707.06347.
+- Tsang, E.W.K. (2014) 'Generalizing from Research Findings: The Merits of Case Studies', *International Journal of Management Reviews*, 16(4), pp. 369–383.
 - Wang, Z., Ventre, C. and Polukarov, M. (2025) 'Robust Market Making: To Quote, or not To Quote', arXiv:2508.16588.
 - Zadrozny, B. and Elkan, C. (2002) 'Transforming Classifier Scores into Accurate Multiclass Probability Estimates', *KDD*, pp. 694–699.
 - Zhang, J. (2025) 'Law-Strength Frontiers and a No-Free-Lunch Result for Law-Seeking Reinforcement Learning on Volatility Law Manifolds', arXiv:2511.17304.
