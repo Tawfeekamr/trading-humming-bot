@@ -2,6 +2,7 @@ use anyhow::{Result, anyhow};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 use crate::connector::types::*;
 use crate::connector::binance_rest::BinanceRest;
 use crate::models::order::OrderSide;
@@ -170,25 +171,47 @@ impl PaperTradeEngine {
             if should_fill {
                 let (base, quote) = split_pair(&order.symbol);
 
-                // Enforce reduce_only: a reduce_only order may only CLOSE an
-                // existing position, never open one. Live exchanges reject these
-                // with no position; paper must match, or grid (flat) "sells"
-                // inventory it never bought — a naked short booked as fake profit.
-                if order.reduce_only {
+                // Enforce reduce_only for BUY-side short closes: a reduce_only
+                // buy may only CLOSE an existing short (base <= -qty), never
+                // open one. (The sell side is subsumed by the naked-sell rule
+                // below, which applies to reduce_only and plain sells alike.)
+                if order.reduce_only && order.side == OrderSide::Buy {
                     let base_bal = *self.balances.get(base).unwrap_or(&0.0);
-                    let blocked = match order.side {
-                        // Sell closes a long → need base_bal >= qty.
-                        OrderSide::Sell => base_bal < order.quantity - 1e-12,
-                        // Buy closes a short → need base_bal <= -qty.
-                        OrderSide::Buy => base_bal > -order.quantity + 1e-12,
-                    };
-                    if blocked {
+                    if base_bal > -order.quantity + 1e-12 {
                         remaining.push(order);
                         continue;
                     }
                 }
 
-                let fill_qty = order.quantity;
+                // A SELL may never exceed the base actually held: filling beyond
+                // it pushes the base negative and credits phantom USDT (Oct 2026
+                // incident: a +$24.9k phantom peak inflated the breaker until it
+                // latched forever). Zero base → reject and drop the order (it can
+                // never fill); partial base → clamp to what is held. Reduce-only
+                // bypasses the circuit-breaker HALT, never this balance check.
+                let fill_qty = if order.side == OrderSide::Sell {
+                    let base_bal = *self.balances.get(base).unwrap_or(&0.0);
+                    if base_bal <= 1e-12 {
+                        warn!(
+                            "NAKED SELL rejected: sell {} {} attempted with {} held — crediting nothing \
+                             (order {}, client_order_id={:?}, reduce_only={})",
+                            order.quantity, base, base_bal, order.id, order.client_order_id, order.reduce_only
+                        );
+                        continue; // drop: a sell with no base can never fill
+                    }
+                    if order.quantity > base_bal + 1e-12 {
+                        warn!(
+                            "sell clamped to held base: requested {} {}, held {} — filling {} only \
+                             (order {}, client_order_id={:?}, reduce_only={})",
+                            order.quantity, base, base_bal, base_bal, order.id, order.client_order_id, order.reduce_only
+                        );
+                        base_bal
+                    } else {
+                        order.quantity
+                    }
+                } else {
+                    order.quantity
+                };
                 // Maker limits fill at their resting price (no slippage);
                 // taker orders (Market, StopMarket) fill at the mark minus
                 // adverse slippage (buys higher, sells lower).
@@ -427,11 +450,16 @@ impl crate::connector::Connector for PaperTradeConnector {
     }
 
     async fn try_fill_at_price(&self, symbol: &str, market_price: f64) -> Vec<Fill> {
-        let fills = {
+        let (fills, book_changed) = {
             let mut engine = self.engine.lock().unwrap();
-            engine.try_fill_at_price(symbol, market_price)
+            let before = engine.open_order_count();
+            let fills = engine.try_fill_at_price(symbol, market_price);
+            (fills, engine.open_order_count() != before)
         };
-        if !fills.is_empty() {
+        // Persist on fills, but also when the book shrank without one — a
+        // rejected naked sell is dropped from the book and must not resurrect
+        // from paper_orders.json on the next restart.
+        if !fills.is_empty() || book_changed {
             let _ = self.persist_state();
         }
         fills
@@ -560,6 +588,78 @@ mod tests {
         assert_eq!(fills.len(), 1, "reduce_only sell must fill when you hold the base");
         let btc = e.balances().get("BTC").copied().unwrap_or(0.0);
         assert!((btc - 0.5).abs() < 1e-9, "BTC should drop 1.0 → 0.5");
+    }
+
+    fn market_sell(qty: f64, reduce_only: bool) -> OrderRequest {
+        OrderRequest {
+            symbol: "BTCUSDT".to_string(),
+            side: OrderSide::Sell,
+            order_type: OrderTypeReq::Market,
+            price: None,
+            quantity: qty,
+            time_in_force: None,
+            client_order_id: None,
+            reduce_only,
+        }
+    }
+
+    // Root cause B (Oct 2026 phantom peak): a paper SELL beyond the base
+    // actually held pushed the base negative and credited phantom USDT — the
+    // +$24.9k phantom peak. A sell may never exceed held base: zero base →
+    // reject (no fill, no credit, order removed); partial base → clamp.
+    // Reduce-only bypasses the HALT, never this balance check.
+    #[test]
+    fn zero_base_reduce_only_sell_is_rejected_and_credits_nothing() {
+        let mut bal = HashMap::new();
+        bal.insert("USDT".to_string(), 10_000.0); // no BTC held
+        let mut e = PaperTradeEngine::new(bal);
+        e.place_order(&market_sell(0.5, true)).unwrap();
+        let fills = e.try_fill_at_price("BTCUSDT", 50_000.0);
+        assert!(fills.is_empty(), "naked reduce-only sell must be rejected, not filled");
+        assert_eq!(
+            e.balances().get("USDT").copied().unwrap_or(0.0),
+            10_000.0,
+            "a rejected sell must credit no USDT"
+        );
+        assert_eq!(e.open_order_count(), 0, "rejected sell is removed from the book, not left resting");
+    }
+
+    #[test]
+    fn zero_base_plain_sell_is_rejected_and_credits_nothing() {
+        let mut bal = HashMap::new();
+        bal.insert("USDT".to_string(), 10_000.0);
+        let mut e = PaperTradeEngine::new(bal);
+        e.place_order(&market_sell(0.5, false)).unwrap();
+        let fills = e.try_fill_at_price("BTCUSDT", 50_000.0);
+        assert!(fills.is_empty(), "non-reduce-only naked sell must also be rejected");
+        assert_eq!(
+            e.balances().get("USDT").copied().unwrap_or(0.0),
+            10_000.0,
+            "no phantom USDT from a sell with no inventory"
+        );
+        let btc = e.balances().get("BTC").copied().unwrap_or(0.0);
+        assert!(btc.abs() < 1e-12, "base must stay at zero, got {}", btc);
+    }
+
+    #[test]
+    fn sell_beyond_held_is_clamped_to_held() {
+        let mut bal = HashMap::new();
+        bal.insert("BTC".to_string(), 0.3); // holds less than the 0.5 sell
+        bal.insert("USDT".to_string(), 10_000.0);
+        let mut e = PaperTradeEngine::new(bal);
+        e.place_order(&limit_sell(0.5, false)).unwrap(); // maker limit @ 51,000
+        let fills = e.try_fill_at_price("BTCUSDT", 51_000.0);
+        assert_eq!(fills.len(), 1);
+        assert!(
+            (fills[0].quantity - 0.3).abs() < 1e-9,
+            "fill quantity must clamp to the 0.3 actually held, got {}",
+            fills[0].quantity
+        );
+        let btc = e.balances().get("BTC").copied().unwrap_or(0.0);
+        assert!(btc.abs() < 1e-9, "base must not go negative, got {}", btc);
+        // Proceeds credited for the clamped 0.3 only: 10_000 + 51_000*0.3 - fee(51_000*0.3*10bps = 15.3)
+        let usdt = e.balances().get("USDT").copied().unwrap_or(0.0);
+        assert!((usdt - 25_284.7).abs() < 1e-6, "USDT credited for clamped qty only, got {}", usdt);
     }
 
     fn market_buy(qty: f64) -> OrderRequest {

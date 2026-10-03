@@ -35,7 +35,11 @@ fn sell(symbol: &str, price: f64, qty: f64) -> OrderRequest {
 /// producing cross-pair contamination.
 #[test]
 fn test_fills_are_symbol_isolated() {
-    let mut engine = PaperTradeEngine::new(HashMap::new());
+    // Fund the base the sell draws down — a sell may never exceed held base
+    // (naked-sell rejection), so fixtures must hold real inventory.
+    let mut balances = HashMap::new();
+    balances.insert("XRP".to_string(), 100.0);
+    let mut engine = PaperTradeEngine::new(balances);
 
     // XRP sell that SHOULD fill at the XRP mid (1.15 >= 1.10).
     engine.place_order(&sell("XRP-USDT", 1.10, 100.0)).unwrap();
@@ -84,7 +88,9 @@ fn test_symbol_normalization() {
 /// this is what breaks the paper instant-fill entry/exit churn loop.
 #[test]
 fn test_fill_cooldown_suppresses_rapid_refill() {
-    let mut engine = PaperTradeEngine::new(HashMap::new());
+    let mut balances = HashMap::new();
+    balances.insert("XRP".to_string(), 200.0); // covers both sells
+    let mut engine = PaperTradeEngine::new(balances);
     engine.set_fill_cooldown(10_000); // 10s cooldown
 
     engine.place_order(&sell("XRP-USDT", 1.10, 100.0)).unwrap();
@@ -101,7 +107,10 @@ fn test_fill_cooldown_suppresses_rapid_refill() {
 /// Cooldown is per-symbol: a fill on XRP must not block a simultaneous BNB fill.
 #[test]
 fn test_fill_cooldown_is_per_symbol() {
-    let mut engine = PaperTradeEngine::new(HashMap::new());
+    let mut balances = HashMap::new();
+    balances.insert("XRP".to_string(), 100.0);
+    balances.insert("BNB".to_string(), 1.0);
+    let mut engine = PaperTradeEngine::new(balances);
     engine.set_fill_cooldown(10_000);
 
     engine.place_order(&sell("XRP-USDT", 1.10, 100.0)).unwrap();
