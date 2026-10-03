@@ -304,8 +304,16 @@ mod tests {
     }
 
     fn journal_in_temp_dir() -> (SignalJournal, PathBuf) {
+        // Uniqueness MUST NOT rely on the timestamp alone: two tests calling
+        // this within the same clock tick (cargo test runs the module's tests
+        // in parallel) silently shared ONE database file and deleted each
+        // other's rows — a ~15% flake in both dedup tests. A process-global
+        // counter is collision-proof regardless of timing.
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let dir = std::env::temp_dir().join(format!(
-            "sig_journal_test_{}",
+            "sig_journal_test_{}_{}",
+            n,
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
