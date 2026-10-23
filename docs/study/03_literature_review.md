@@ -1,3 +1,6 @@
+> **SUPERSEDED (June 2026, pre-audit framing). Do not use as draft text.
+> Current manuscript: docs/dissertation_manuscript.md.**
+
 # Chapter 2: Literature Review
 
 *(Note: You will need to find and cite academic papers to fill this section out. Google Scholar is your friend here.)*

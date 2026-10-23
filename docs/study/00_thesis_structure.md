@@ -1,3 +1,6 @@
+> **SUPERSEDED (June 2026, pre-audit framing). Do not use as draft text.
+> Current manuscript: docs/dissertation_manuscript.md.**
+
 # Thesis Structure and Writing Guide
 
 ## Project Title

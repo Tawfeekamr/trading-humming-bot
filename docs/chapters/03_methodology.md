@@ -42,7 +42,8 @@ trades in paper mode only.
 
 ## 3.2 The reinforcement-learning agent
 
-The agent acts once per completed hourly bar. The action space is
+The agent — trained with Proximal Policy Optimization (PPO; Schulman
+et al., 2017) — acts once per completed hourly bar. The action space is
 `Discrete(10)`, decoded by one mapping shared by training and every
 downstream consumer (`src/rl/action_map.py:15-26`): actions 0–2 select the
 grid engine at size multiplier 0.5, 1.0 or 1.5; actions 3–5 select trend at
@@ -182,7 +183,7 @@ this dissertation regards as unsafe and whose consequence this project
 measured directly when its own pooling defect (Section 3.7, item 11)
 treated non-adjacent windows as one series and inflated headline drawdowns
 by factors of 2.3 to 5.5. The cost — fewer test paths and lower effective
-sample size — is accepted knowingly; arXiv:2209.05559 documents the
+sample size — is accepted knowingly; Gort et al. (2022) documents the
 alternative and reports CPCV-trained agents outperforming walk-forward
 ones; CPCV is future work (Section 5.4).
 
@@ -367,7 +368,9 @@ Grid bars with zero inventory count as "deployed" in the first but hold no
 capital, so a policy reported at "58% exposure" was in fact deploying 4.3%
 of capital, and the exposure-matched baselines were matched on inconsistent
 definitions. Re-matched on capital-weighted exposure, the random-entry
-medians are 0.0509 (ETH) and 0.0508 (BNB) against PPO's 0.165 and 0.293 —
+medians are 0.0509 (ETH) and 0.0508 (BNB) against PPO's 0.165 and 0.293
+(both sides on the superseded pooled basis; the canonical per-fold
+medians are 0.032 and 0.053, as stated above) —
 the worst, 100th-percentile position on both pairs — reversing the
 previously stated ETH verdict that PPO's drawdown advantage "survives
 exposure matching." Matching a baseline on a quantity that is not the
@@ -402,7 +405,8 @@ interpretability.
 false DANGER warnings was first computed by summing 24-bar forward returns
 across hourly signal bars, so each price move was counted in up to 24
 overlapping windows: 2,242.9 percentage points (ETH) and 1,183.2 (BNB) of
-"foregone return" on windows where buy-and-hold returned +44.8% and +3.8% —
+"foregone return" on windows where buy-and-hold returned +38.0% and
+−4.3% (compounded basis) —
 impossible as portfolio costs, since multiply-counted sums inflate without
 bound. The retracted figures were replaced by three measured quantities:
 per-signal mean forward return on false DANGER signals (+3.34% and +3.88%),
@@ -544,11 +548,12 @@ invalidate the evidence chain.
 & West (1987), Holm (1979), Politis & Romano (1994) and Politis & White
 (2004) were added to the manuscript's reference list on 2026-09-19,
 together with Flyvbjerg (2006) and Tsang (2014), which were also cited in
-body text without entries. One body citation remains unverifiable:
-"Agarwal et al. 2021" (manuscript §4.6) matches no locatable work —
-flagged for the author rather than given an invented entry. arXiv:2209.05559
-and arXiv:2510.06466 are cited by identifier in the text as in the existing
-manuscript.*
+body text without entries. On 2026-10-23 the remaining bare citations were
+resolved: Agarwal et al. (2021) was located and verified (NeurIPS 34), and
+full entries for Xue & Ye (2025), Amirzadeh et al. (2023), Gort et al.
+(2022), Felizardo et al. (2022) and Kochliaridis et al. (2023) were added
+to the manuscript's reference list; the body text of both files now cites
+them author-year.*
 
 ## Appendix 3.A — Evaluation-defect register
 

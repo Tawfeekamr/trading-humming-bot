@@ -1,3 +1,6 @@
+> **SUPERSEDED (June 2026, pre-audit framing). Do not use as draft text.
+> Current manuscript: docs/dissertation_manuscript.md.**
+
 # Chapter 1: Introduction
 
 ## 1.1 Background

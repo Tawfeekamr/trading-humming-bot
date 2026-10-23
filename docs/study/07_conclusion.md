@@ -1,3 +1,6 @@
+> **SUPERSEDED (June 2026, pre-audit framing). Do not use as draft text.
+> Current manuscript: docs/dissertation_manuscript.md.**
+
 # Chapter 6: Conclusion and Future Work
 
 ## 6.1 Summary of Contributions

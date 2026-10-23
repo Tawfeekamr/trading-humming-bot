@@ -1,3 +1,6 @@
+> **SUPERSEDED (June 2026, pre-audit framing). Do not use as draft text.
+> Current manuscript: docs/dissertation_manuscript.md.**
+
 # Chapter 4: System Architecture and Implementation
 
 This chapter shifts from theory to software engineering, detailing how the framework was built and deployed.

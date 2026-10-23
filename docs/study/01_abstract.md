@@ -1,3 +1,6 @@
+> **SUPERSEDED (June 2026, pre-audit framing). Do not use as draft text.
+> Current manuscript: docs/dissertation_manuscript.md.**
+
 # Abstract
 
 *(Note: The Abstract is typically written last, after all results and conclusions are finalized. Below is a template based on your project.)*

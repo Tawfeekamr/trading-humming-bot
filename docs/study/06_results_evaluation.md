@@ -1,3 +1,6 @@
+> **SUPERSEDED (June 2026, pre-audit framing). Do not use as draft text.
+> Current manuscript: docs/dissertation_manuscript.md.**
+
 # Chapter 5: Results and Evaluation
 
 This chapter provides the empirical evidence proving the system works.

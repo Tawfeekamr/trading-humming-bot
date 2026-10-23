@@ -54,26 +54,26 @@ Empirical results are reported from a corrected walk-forward evaluation protocol
 ## Table of Contents
 
 - [Abstract](#abstract)
-- [List of Figures](#list-of-figures)
-- [List of Tables](#list-of-tables)
+- [List of Figures](#list-of-figures) (to be written)
+- [List of Tables](#list-of-tables) (to be written)
 - [List of Mathematical Equations & Symbols](#list-of-mathematical-equations--symbols)
 - [Chapter 1: Introduction](#chapter-1-introduction)
   - [1.1 Background & Context](#11-background--context)
   - [1.2 Problem Statement](#12-problem-statement)
   - [1.3 Research Aims & Objectives](#13-research-aims--objectives)
   - [1.4 Research Questions & Hypotheses](#14-research-questions--hypotheses)
-  - [1.5 Novelty & Contributions](#15-novelty--contributions)
-- [Chapter 2: Literature Review](#chapter-2-literature-review)
-  - [2.1 Regime-Switching Models in Quantitative Finance](#21-regime-switching-models-in-quantitative-finance)
-  - [2.2 Machine Learning & Probability Calibration](#22-machine-learning--probability-calibration)
-  - [2.3 Deep Reinforcement Learning for Optimal Execution](#23-deep-reinforcement-learning-for-optimal-execution)
-  - [2.4 Cross-Asset Contagion & Microstructure Frictions](#24-cross-asset-contagion--microstructure-frictions)
-  - [2.5 Evaluation Methodology & Statistical Significance](#25-evaluation-methodology--statistical-significance)
-- [Chapter 3: System Methodology & Mathematical Formalism](#chapter-3-system-methodology--mathematical-formalism)
+  - [1.5 Novelty & Contributions](#15-novelty--contributions) (to be written)
+- [Chapter 2: Literature Review](#chapter-2-literature-review) (to be written)
+  - [2.1 Regime-Switching Models in Quantitative Finance](#21-regime-switching-models-in-quantitative-finance) (to be written)
+  - [2.2 Machine Learning & Probability Calibration](#22-machine-learning--probability-calibration) (to be written)
+  - [2.3 Deep Reinforcement Learning for Optimal Execution](#23-deep-reinforcement-learning-for-optimal-execution) (to be written)
+  - [2.4 Cross-Asset Contagion & Microstructure Frictions](#24-cross-asset-contagion--microstructure-frictions) (to be written)
+  - [2.5 Evaluation Methodology & Statistical Significance](#25-evaluation-methodology--statistical-significance) (to be written)
+- [Chapter 3: System Methodology & Mathematical Formalism](#chapter-3-system-methodology--mathematical-formalism) — current version: docs/chapters/03_methodology.md (the section below is an earlier compressed draft)
   - [3.1 MDP Formulation of Regime-Switched Execution](#31-mdp-formulation-of-regime-switched-execution)
   - [3.2 14-Feature Technical Indicator Engineering Space](#32-14-feature-technical-indicator-engineering-space)
   - [3.3 Supervised Random Forest Classifier & Isotonic Calibration](#33-supervised-random-forest-classifier--isotonic-calibration)
-  - [3.4 Permissibility Gating Matrix & Cross-Asset BTC Risk Gate](#34-permissibility-gating-matrix--cross-asset-btc-risk-gate)
+  - [3.4 Permissibility Gating Matrix & Cross-Asset BTC Risk Gate](#34-permissibility-gating-matrix--cross-asset-btc-risk-gate) (to be written)
   - [3.5 Specialized Execution Engines & Geometric Grid Spacing](#35-specialized-execution-engines--geometric-grid-spacing)
   - [3.6 Evaluation Failure Modes and Their Effect on Inference](#36-evaluation-failure-modes-and-their-effect-on-inference)
 - [Chapter 4: Empirical Results & Hypothesis Testing](#chapter-4-empirical-results--hypothesis-testing)
@@ -88,7 +88,7 @@ Empirical results are reported from a corrected walk-forward evaluation protocol
   - [5.3 Limitations](#53-limitations)
   - [5.4 Future Work](#54-future-work)
 - [References](#references)
-- [Appendix 1: System Architecture Code Manifest](#appendix-1-system-architecture-code-manifest)
+- [Appendix 1: System Architecture Code Manifest](#appendix-1-system-architecture-code-manifest) (to be written)
 
 ---
 
@@ -121,7 +121,7 @@ Traditional quantitative execution suffers from the **Single-Strategy Trap**:
 3. **Cross-Asset Contagion**: Altcoin trading bots operating in isolation fail to account for systemic market panic driven by Bitcoin (`BTC`), purchasing falling knives during market-wide crashes.
 
 ## 1.3 Research Aims & Objectives
-This dissertation constructs a production-grade multi-engine trading framework as the experimental apparatus to evaluate supervised regime routing against Deep Reinforcement Learning (PPO) under simulated market frictions (a 0.1%-per-side fee in the bar-level replay environment; slippage was not modelled — Section 5.3, item 15).
+This dissertation constructs a production-grade multi-engine trading framework as the experimental apparatus to evaluate supervised regime routing against Deep Reinforcement Learning (PPO; Mnih et al., 2015; Schulman et al., 2017) under simulated market frictions (a 0.1%-per-side fee in the bar-level replay environment; slippage was not modelled — Section 5.3, item 15).
 
 ## 1.4 Research Questions & Hypotheses
 ### Research Question
@@ -366,7 +366,9 @@ headline missed.
    exposure" policy can be a 4.3%-exposure policy. *Figures:* ETH PPO
    time-in-market 58.1% vs capital-weighted 4.3%; baselines re-matched
    on capital: random-entry median MaxDD 0.0509 (ETH) / 0.0508 (BNB) vs
-   PPO's 0.165 / 0.293. *Effect:* **CONCLUSION FLIP** — the ETH
+   PPO's 0.165 / 0.293 (both sides of this comparison on the superseded
+   pooled basis; the canonical per-fold medians are 0.032 / 0.053,
+   Section 4.2). *Effect:* **CONCLUSION FLIP** — the ETH
    "drawdown advantage survives exposure matching" verdict reversed to
    PPO at the 100th percentile (worst) on both assets.
 
@@ -374,7 +376,7 @@ headline missed.
    cost summed 24-bar forward returns across hourly signal bars, so
    each price move was counted in up to 24 windows. *Mechanism:*
    multiply-counting inflates a sum without bound; 2,243pp of
-   "foregone return" on a window where B&H returned +44.8% is
+   "foregone return" on a window where B&H returned +38.0% is
    impossible as a portfolio cost. *Figures:* ~~2,242.9pp (ETH) /
    1,183.2pp (BNB)~~ retracted; replaced by per-signal means (+3.34% /
    +3.88%), non-overlapping 24-bar block gaps (0.96pp / 0.72pp), and
@@ -625,7 +627,10 @@ either asset. The lower drawdowns of the routed policies are an exposure
 effect, not a timing effect: capital-matched random-entry baselines at
 PPO's own 4-5% deployment produced median MaxDD of 5.1% on both assets
 (ETH 0.0509 / BNB 0.0508, reports/exposure_match_*.json), versus PPO's
-16.5-29.3% - PPO sits at the 100th percentile (worst) of the
+16.5-29.3% — both sides of this comparison on the superseded pooled
+drawdown basis, as computed by the exposure-matching diagnostic (the
+canonical per-fold medians are 3.2% / 5.3%, the table rows above) —
+PPO sits at the 100th percentile (worst) of the
 exposure-matched random distribution on both assets.
 
 The previously reported table (Sharpe 1.85, MaxDD -0.4%, from the
@@ -712,7 +717,7 @@ results, not from this study):
 
 | anchor (source) | ETH n-required | BNB n-required |
 | :--- | :---: | :---: |
-| 1.7pp/yr (arXiv:2510.06466, S&P RL) | 2,506 years | 7,413 years |
+| 1.7pp/yr (Xue & Ye, 2025 — S&P RL) | 2,506 years | 7,413 years |
 | 10pp/yr (crypto-RL order-of-magnitude; stated assumption) | 72 years | 214 years |
 
 Even at effect sizes far larger than anything this study observed, the
@@ -811,22 +816,22 @@ A substantial published literature reports reinforcement-learning
 trading policies outperforming passive exposure; this dissertation's
 negative result must be read against it, not instead of it.
 
-- **arXiv:2510.06466** (attention-enhanced RL): PPO terminal wealth
+- **Xue & Ye (2025)** (attention-enhanced RL): PPO terminal wealth
   2.11 vs buy-and-hold 1.94, Sharpe 0.73 vs 0.66 (S&P 500, 2020-2025)
   — a positive result with an effect of roughly 1.7pp CAGR, which this
   dissertation uses as its S&P literature anchor (4.3.1).
-- **Felizardo et al.** (Expert Systems with Applications): reports
+- **Felizardo et al. (2022)** (*Expert Systems with Applications*): reports
   outperforming buy-and-hold in all tests on crypto assets.
-- **arXiv:2310.09462** (causal RL): CRN-PPO reports positive ROI on
+- **Amirzadeh et al. (2023)** (causal RL): CRN-PPO reports positive ROI on
   ETH where buy-and-hold was negative — a direct inversion of this
   study's ETH finding, and a useful reminder that the disagreement is
   between systems, not between datasets alone.
-- **arXiv:2209.05559**: PPO trained with combinatorial purged
+- **Gort et al. (2022)**: PPO trained with combinatorial purged
   cross-validation (CPCV) outperforms walk-forward and K-fold agents
   and the S&P DBM index — notably, from the same evaluation-methodology
-  tradition (citing Agarwal et al. 2021) this dissertation relies on,
+  tradition (citing Agarwal et al., 2021) this dissertation relies on,
   reaching a positive conclusion.
-- **10.1007/s00521-023-08516-x**: five PPO variants failed to beat
+- **Kochliaridis et al. (2023)**: five PPO variants failed to beat
   buy-and-hold — but with NO transaction costs modelled, a different
   failure mechanism from this study's (where costs are, if anything,
   double-counted).
@@ -898,7 +903,7 @@ the differences above, not explained away.*
 ## 4.7 The withdrawal claim, narrowed by the same literature
 
 The positive-result literature also constrains the withdrawal
-diagnosis. arXiv:2510.06466 and the Bitcoin-hourly PPO/SAC/TD3/A2C
+diagnosis. Xue & Ye (2025) and the Bitcoin-hourly PPO/SAC/TD3/A2C
 studies report reward functions combining transaction costs, drawdown
 penalties, volatility penalties, and delayed rewards — specifications
 at least as punitive as this study's — WITHOUT producing abstention.
@@ -1082,6 +1087,10 @@ not a dissertation chapter.
    caught here:
 
    a. **The flat-policy floor.** Compare any trained policy against
+      permanent abstention under the same reward before concluding it
+      learned anything. Cost: one line of computation over the
+      evaluation rollouts. Would have caught: the abstention result
+      before any performance claim was made.
       *Origin: naive-baseline flooring (RL evaluation practice) —
       institutionalised outside trading: the do-nothing agent is the
       score-0 reference against which every competitor is normalised
@@ -1090,11 +1099,7 @@ not a dissertation chapter.
       "a relatively strong benchmark" in market-making RL (Gašperov &
       Kostanjčar, 2021, IEEE Access 9); a passive policy inactive 60%
       of the time is a standard baseline in execution RL (Hafsi &
-      Vittori, 2024, arXiv:2411.06389);*
-      permanent abstention under the same reward before concluding it
-      learned anything. Cost: one line of computation over the
-      evaluation rollouts. Would have caught: the abstention result
-      before any performance claim was made.
+      Vittori, 2024, arXiv:2411.06389).*
       *Residual after an adversarial prior-art search (PRIOR_ART.md,
       2026-08-17): do-nothing baselines are established outside
       trading — L2RPN scoring, trivial-policy benchmarks in market
@@ -1104,14 +1109,6 @@ not a dissertation chapter.
       reward-misspecification test appears unclaimed. This is a scoped
       observation from one search, not a priority claim.*
    b. **Reward-component decomposition.** Report the magnitude of each
-      *Origin: reward decomposition — the explainable-RL literature
-      (Distributional Reward Decomposition, NeurIPS 2019; RD2,
-      NeurIPS 2020; Explainable RL via Reward Decomposition, IJCAI)
-      and RL debugging practice (torchrl debugging guidance
-      explicitly instructs checking whether the agent favours a single
-      reward component). An earlier draft attributed this origin to
-      "econometric model diagnostics" — the wrong discipline; that
-      attribution is superseded.*
       reward term, not just the total, so a dominating penalty is
       visible. Cost: instrumenting the reward (already summed per
       step). Would have caught: the drawdown penalty rivaling the
@@ -1122,7 +1119,18 @@ not a dissertation chapter.
       which its absence concealed a drawdown penalty rivalling the
       entire PnL term, plus a fee double-count, across four
       self-audit passes.
+      *Origin: reward decomposition — the explainable-RL literature
+      (Distributional Reward Decomposition, NeurIPS 2019; RD2,
+      NeurIPS 2020; Explainable RL via Reward Decomposition, IJCAI)
+      and RL debugging practice (torchrl debugging guidance
+      explicitly instructs checking whether the agent favours a single
+      reward component). An earlier draft attributed this origin to
+      "econometric model diagnostics" — the wrong discipline; that
+      attribution is superseded.*
    c. **Capital-exposure matching.** Match baselines on
+      capital-weighted exposure, not time-in-market, and report both.
+      Cost: one env field (per-bar position notional). Would have
+      caught: the exposure-artifact "drawdown advantage" verdicts.
       *Origin: exposure matching (portfolio attribution) — Cremers &
       Petajisto's Active Share (2009); Brinson-model performance
       attribution (Brinson, Hood & Beebower, 1986); Frazzini &
@@ -1130,26 +1138,23 @@ not a dissertation chapter.
       closest structural analogy, selective prediction (Chow, 1970;
       Geifman & El-Yaniv, NeurIPS 2017; SelectiveNet, ICML 2019),
       where abstention improving metrics is the founding observation
-      and coverage reporting the established cure;*
-      capital-weighted exposure, not time-in-market, and report both.
-      Cost: one env field (per-bar position notional). Would have
-      caught: the exposure-artifact "drawdown advantage" verdicts.
+      and coverage reporting the established cure.*
    d. **Fold-aware pooling.** Never concatenate non-adjacent test
-      *Origin: purging and embargo (quantitative-finance cross-validation);*
       windows into a single equity curve or dependence structure.
       Cost: tracking fold indices (already present). Would have
       caught: the five-fold MaxDD inflation and the boundary-crossing
       HAC/bootstrap dependence.
+      *Origin: purging and embargo (quantitative-finance cross-validation).*
    e. **Power reporting.** State the minimum detectable effect
-      *Origin: power analysis (clinical trials and applied statistics);*
       alongside any null result, and the effective n after clustering.
       Cost: closed-form from the existing variance estimate. Would
       have caught: every "parity" statement this report once made.
+      *Origin: power analysis (clinical trials and applied statistics).*
    f. **Seed-distribution reporting.** Never report a single-seed RL
-      *Origin: seed-distribution reporting (deep-RL reproducibility literature).*
       result. Cost: the training already amortises; reporting is a
       table. Would have caught: a headline resting on the seed at the
       unfavourable end of its own distribution.
+      *Origin: seed-distribution reporting (deep-RL reproducibility literature).*
 
 3. A causal diagnosis scoped precisely: a reward of this form —
    drawdown penalty at λ=0.5 on top of double-counted transaction
@@ -1384,20 +1389,25 @@ live routing must not be enabled on this codebase.
 ---
 
 # References
+- Agarwal, R., Schwarzer, M., Castro, P.S., Courville, A.C. and Bellemare, M.G. (2021) 'Deep Reinforcement Learning at the Edge of the Statistical Precipice', *Advances in Neural Information Processing Systems 34 (NeurIPS 2021)*.
+- Amirzadeh, R., Thiruvady, D., Nazari, A. and Ee, M.S. (2023) 'A Framework for Empowering Reinforcement Learning Agents with Causal Analysis: Enhancing Automated Cryptocurrency Trading', arXiv:2310.09462.
 - Bailey, D.H. and López de Prado, M. (2014) 'The Deflated Sharpe Ratio', *Journal of Portfolio Management*, 40(5), pp. 94–107.
 - Brinson, G.P., Hood, L.R. and Beebower, G.L. (1986) 'Determinants of Portfolio Performance', *Financial Analysts Journal*, 42(4), pp. 4–10.
 - Chow, C.K. (1970) 'On Optimum Recognition Error and Reject Tradeoff', *IEEE Transactions on Information Theory*, 16(1), pp. 41–46.
 - Cremers, M. and Petajisto, A. (2009) 'How Active Is Your Fund Manager? A New Measure That Predicts Performance', *Journal of Finance*, 64(5), pp. 2333–2365.
 - Diebold, F.X. and Mariano, R.S. (1995) 'Comparing Predictive Accuracy', *Journal of Business & Economic Statistics*, 13(3), pp. 253–263.
+- Felizardo, L.K. et al. (2022) 'Outperforming Algorithmic Trading Reinforcement Learning Systems: A Supervised Approach to the Cryptocurrency Market', *Expert Systems with Applications*, 202, Art. 117259.
 - Frazzini, A. and Pedersen, L.H. (2014) 'Betting Against Beta', *Journal of Financial Economics*, 111(1), pp. 1–25.
 - Flyvbjerg, B. (2006) 'Five Misunderstandings About Case-Study Research', *Qualitative Inquiry*, 12(2), pp. 219–245.
 - Gašperov, B. and Kostanjčar, Z. (2021) 'Market Making With Signals Through Deep Reinforcement Learning', *IEEE Access*, 9, pp. 61611–61622.
 - Gelman, A. and Carlin, J. (2014) 'Beyond Power Calculations: Assessing Type S (Sign) and Type M (Magnitude) Errors', *Perspectives on Psychological Science*, 9(6), pp. 641–651.
 - Geifman, Y. and El-Yaniv, R. (2017) 'Selective Classification for Deep Neural Networks', *Advances in Neural Information Processing Systems 30 (NeurIPS 2017)*.
 - Geifman, Y., Undersander, E. and El-Yaniv, R. (2019) 'SelectiveNet: A Deep Neural Network with an Integrated Reject Option', *Proceedings of the 36th International Conference on Machine Learning (ICML 2019)*, PMLR 97.
+- Gort, B.J.D., Liu, X.-Y., Sun, X., Gao, J., Chen, S. and Wang, C.D. (2022) 'Deep Reinforcement Learning for Cryptocurrency Trading: Practical Approach to Address Backtest Overfitting', arXiv:2209.05559.
 - Hafsi and Vittori (2024) 'Optimal Execution with Reinforcement Learning', arXiv:2411.06389.
 - Hoenig, J.M. and Heisey, D.M. (2001) 'The Abuse of Power: The Pervasive Fallacy of Power Calculations for Data Analysis', *The American Statistician*, 55(1), pp. 19–24.
 - Holm, S. (1979) 'A Simple Sequentially Rejective Multiple Test Procedure', *Scandinavian Journal of Statistics*, 6(2), pp. 65–70.
+- Kochliaridis, V., Kouloumpris, E. and Vlahavas, I. (2023) 'Combining Deep Reinforcement Learning with Technical Analysis and Trend Monitoring on Cryptocurrency Markets', *Neural Computing and Applications*, 35, pp. 21445–21462.
 - Lin, Z., Zhao, L., Yang, D., Qin, T., Yang, G. and Liu, T.-Y. (2019) 'Distributional Reward Decomposition for Reinforcement Learning', *Advances in Neural Information Processing Systems 32 (NeurIPS 2019)*.
 - Lin, Z., Yang, D., Zhao, L., Qin, T., Yang, G. and Liu, T.-Y. (2020) 'RD2: Reward Decomposition with Representation Disentanglement', *Advances in Neural Information Processing Systems 33 (NeurIPS 2020)*, pp. 11298–11308.
 - Liu, B. et al. (2023) 'Lazy Agents: A New Perspective on Solving Sparse Reward Problem in Multi-agent Reinforcement Learning', *Proceedings of the 40th International Conference on Machine Learning (ICML 2023)*, PMLR 202.
@@ -1411,5 +1421,6 @@ live routing must not be enabled on this codebase.
 - Schulman, J. et al. (2017) 'Proximal Policy Optimization Algorithms', arXiv:1707.06347.
 - Tsang, E.W.K. (2014) 'Generalizing from Research Findings: The Merits of Case Studies', *International Journal of Management Reviews*, 16(4), pp. 369–383.
 - Wang, Z., Ventre, C. and Polukarov, M. (2025) 'Robust Market Making: To Quote, or not To Quote', arXiv:2508.16588.
+- Xue, P. and Ye, Y. (2025) 'Attention-Enhanced Reinforcement Learning for Dynamic Portfolio Optimization', arXiv:2510.06466.
 - Zadrozny, B. and Elkan, C. (2002) 'Transforming Classifier Scores into Accurate Multiclass Probability Estimates', *KDD*, pp. 694–699.
 - Zhang, J. (2025) 'Law-Strength Frontiers and a No-Free-Lunch Result for Law-Seeking Reinforcement Learning on Volatility Law Manifolds', arXiv:2511.17304.
