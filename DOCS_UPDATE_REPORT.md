@@ -265,3 +265,106 @@ entry now reads:
    completed, §5.2 repaired, TOC and skeletons synced`. Commit hash:
    see chat message accompanying this report (a commit cannot contain its
    own hash).
+
+---
+
+# ADDENDUM — 2026-10-23, second pass (abstract + time_in_market definition)
+
+## A. Abstract inserted (Task 1 of second pass)
+
+The proposed abstract is now in `docs/dissertation_manuscript.md` with the
+approved change only: *"while holding a position on 58% of bars"* →
+*"while its reported time in market was 58%"*. **Final word count: 297**
+(within 250–350). Every figure re-verified against REPRODUCE.md §B / §A
+immediately before insertion: medians 0.032/0.107 and 0.053/0.117 (B2),
+58% time in market (exposure_definitions.json 0.580787), 4.3%/49.2%
+capital exposure (B5), 19 of 20 (B4), 20.6 + 24.3 pp and 41.9% FLAT
+(B5a / §A row 8), 82–179pp MDE (§A row 6), eighteen corrections
+(register rows 1–18).
+
+### Old abstract — SUPERSEDED (kept here, not in the manuscript)
+
+> **SUPERSEDED (2026-10-23) by the inserted abstract above.**
+>
+> Cryptocurrency markets exhibit extreme non-stationarity, where static quantitative trading strategies systematically bleed capital when market regimes transition between ranging, trending, and market-wide crisis states. This dissertation addresses the "single-strategy trap" by building a **regime-aware multi-asset trading system** powered by a supervised Random Forest classifier with isotonic probability calibration and cross-asset correlation gating.
+>
+> Operating across a 4-asset basket (`ETH`, `BNB`, `XRP`, `DOGE`), the system routes capital between the two production trading engines (Grid, Trend) with additional strategy prototypes (Swing, Mean-Reversion) explored in research backtests. We cast the regime-switched routing problem into a formal Markov Decision Process (MDP) and conduct a walk-forward evaluation comparing our calibrated supervised routing policy against Proximal Policy Optimization (PPO) agents under simulated market frictions (a 0.1%-per-side fee in the bar-level replay environment; slippage was not modelled — Section 5.3, item 15).
+>
+> Empirical results are reported from a corrected walk-forward evaluation protocol (timestamp-aligned comparators, 70-bar train/test embargo, fold-specific supervised baselines, pinned data windows, multiplicative-drawdown definitions). Under this protocol, **neither the supervised gating policy nor the PPO agent outperformed passive buy-and-hold** on either asset over the evaluated window (ETH: B&H +38.0% vs gated −21.2% vs PPO −12.8%; BNB: B&H −4.3% vs gated −20.3% vs PPO −25.9%), and no routing comparison is statistically interpretable: the design's minimum detectable effect (82–179% cumulative return at 80% power, compounded basis) exceeds the observed differences by an order of magnitude, PPO seed variance (up to 27pp return swing within a fold) dominates between-method differences, and the two policies operated at materially different capital deployment (4–5% vs 21–61% capital-weighted exposure). Diagnostic analysis further shows the PPO agent's low exposure is *learned withdrawal under a drawdown-penalising reward* — a permanently-flat policy outscores the trained policy in 19 of 20 seed-fold-pair cells. This withdrawal is documented under one reward specification that double-counts transaction costs (fees enter both the equity return and, again, an explicit reward penalty) on top of a drawdown penalty at lambda=0.5 — comparative evidence from published punitive rewards that did NOT produce abstention indicates the fee double-count, not the drawdown penalty, is the likely distinguishing mechanism; no ablation separates them, no threshold in lambda is established, and generalisation to other reward designs is untested. The evaluation further shows that the regime classifier's DANGER warnings are false 38–47% of the time, forgoing upside that buy-and-hold captures. The dissertation's contribution is the negative result, the protocol that establishes it, and the causal diagnosis of why learned routing degenerates to abstention; it does not claim a validated trading edge.
+
+## B. Definition check — how time_in_market is computed (read-only)
+
+**It counts active-engine bars, not bars with non-zero position value.**
+
+`src/rl/evaluate.py:165-178`:
+
+```python
+def _time_in_market(engine_flags: list[str]) -> float:
+    """Fraction of bars the strategy was deployed (engine != "flat")."""
+    if not engine_flags:
+        return 0.0
+    deployed = sum(1 for e in engine_flags if e != "flat")
+    return deployed / len(engine_flags)
+```
+
+`src/rl/evaluate.py:289` collects the flag per bar:
+`engine_flags.append(str(info.get("engine", "flat")))`, and
+`src/rl/env.py:685` exposes it as `"engine": self._current_engine` —
+set to `"flat"` only when the router's action is GO_FLAT
+(`src/rl/env.py:302-305`); any engine selection (including the grid
+engine holding zero inventory) leaves it non-flat. The metric's own
+docstring says "deployed"; and `src/rl/evaluate.py:340-344` already
+documents the divergence in-code: "DISTINCT from time_in_market
+(engine != flat): grid bars with zero inventory count as deployed in
+time_in_market but hold no capital".
+
+**Reconciliation of 58.1% vs 12.25%:** 58.1% (exposure_definitions.json,
+ETH PPO, 0.580787 = 2,509/4,320) is the active-engine fraction on the
+evaluation-loop engine-flag basis; the §B5a trace basis gives 2,508/4,320
+= 58.06% active actions — the two bases agree to within one bar of 4,320
+(BNB likewise: 54.19% vs 54.17%). Bars with non-zero inventory are a
+different, much smaller set: 529/4,320 = 12.25% (ETH) and 534/4,320 =
+12.36% (BNB). Same policy, three quantities: engine-active time,
+inventory time, capital-weighted exposure (4.3% / 5.2%).
+
+## C. Task 3 — definition documented (condition met: active-engine bars)
+
+- **Appendix 3.A row 22 added** (register now 22 rows; preamble updated):
+  defect = time_in_market counts active-engine bars, not bars holding
+  inventory; effect = drafted abstract read "holding a position on 58% of
+  bars", corrected and both quantities labelled; flipped = no (definition,
+  no reported figure changed); caught by = SELF-VERIFY (abstract vs
+  REPRODUCE B5a, 2026-10-23).
+- **ch3 §3.6** (Capital-exposure matching paragraph) — sentence added:
+  "On the trained runs the three quantities separate: time_in_market
+  counts active-engine bars (58% ETH, 54.2% BNB — the engine flag is
+  non-flat), bars actually holding inventory are far fewer (12.2% ETH,
+  12.4% BNB), and capital-weighted exposure averages 4.3% / 5.2%
+  (Section 3.7; REPRODUCE.md §B5a)."
+- **Manuscript §4.1** ("Why concealed abstention matters" paragraph) —
+  sentence added: "These are three distinct quantities: time_in_market
+  counts active-engine bars (58.1% ETH / 54.2% BNB — the engine flag is
+  non-flat), inventory was non-zero on only 12.2% (ETH) / 12.4% (BNB) of
+  bars (diagnostic 5), and capital-weighted exposure averaged 4.3% / 5.2%."
+- **FIX_REPORT B2.2** — dated erratum block inserted after the
+  definition text, quoting `_time_in_market` (evaluate.py:165-178) and
+  the 12.2%/12.4% inventory fractions, pointing to register row 22.
+
+## D. Task 4 — sweep for "58% = holding a position" phrasing
+
+Swept all markdown (repo root + docs/, including REPRODUCE.md,
+FIX_REPORT.md, CHAPTER3_CORRECTIONS.md, PRIOR_ART.md, docs/study/) for
+"held/holding a position on", "position on 58", "in the market 58",
+"held … 58% of bars". **No live equating phrasing found.** Correct
+usages confirmed at ms §4.1 ("acting on 54-58% of bars", "Time-in-market
+remains at 58%"), ms §3.6 ("'deployed' in time-in-market but hold no
+capital"), ch3 §3.7 ("time-in-market (engine not flat) … '58% exposure'
+was in fact deploying 4.3%"), ms §4.4/§5.3 (54-58% labelled
+time-in-market). The only remaining occurrences of the flawed phrasing
+are the two records of its correction (this report §3 of the first pass;
+register row 22), which quote it as corrected.
+
+## E. Commit
+
+One docs-only commit (see hash in chat). Freeze verified: diff over
+src/, reports/, models/, trading-engine-core/ empty.

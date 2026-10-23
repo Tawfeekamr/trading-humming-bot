@@ -258,6 +258,15 @@ quantity. All baselines are now matched on **capital-weighted exposure**
 fields renamed (`time_in_market` vs `capital_weighted_exposure`); the env
 now exposes per-bar `position_value`.
 
+> *[Erratum, 2026-10-23: this section's definition text left time_in_market
+> implicit. Precisely: time_in_market is the fraction of bars with the
+> engine flag ≠ "flat" (src/rl/evaluate.py:165-178, `_time_in_market`) —
+> active-engine bars, which include grid bars holding zero inventory — not
+> the fraction of bars with non-zero inventory, which is 12.2% (ETH) /
+> 12.4% (BNB) on the trained runs (REPRODUCE.md §B5a). The 58.1% / 54.2%
+> values in the table above are active-engine fractions. Register row 22,
+> Appendix 3.A of docs/chapters/03_methodology.md.]*
+
 **Verdict change (ETH flips):** matched on true capital exposure,
 random-entry MaxDD medians are 0.0509 (ETH) / 0.0508 (BNB) per the final
 committed artifacts (reports/exposure_match_*.json; the 0.029/0.035 quoted

@@ -279,7 +279,11 @@ Section 3.2, which passed unnoticed through four self-audit passes.
 
 **Capital-exposure matching** matches baselines on capital-weighted exposure
 — mean |position|/equity, one environment field — rather than time-in-market,
-and reports both. Its origins are portfolio attribution (Brinson, Hood &
+and reports both. On the trained runs the three quantities separate:
+time_in_market counts active-engine bars (58% ETH, 54.2% BNB — the
+engine flag is non-flat), bars actually holding inventory are far fewer
+(12.2% ETH, 12.4% BNB), and capital-weighted exposure averages 4.3% /
+5.2% (Section 3.7; REPRODUCE.md §B5a). Its origins are portfolio attribution (Brinson, Hood &
 Beebower, 1986; Cremers & Petajisto, 2009; Frazzini & Pedersen, 2014) and,
 structurally, selective prediction, where abstention improving metrics is
 the founding observation and coverage reporting the established cure (Chow,
@@ -557,10 +561,12 @@ them author-year.*
 
 ## Appendix 3.A — Evaluation-defect register
 
-All 21 rows. Rows 1–18 are the evaluation defects, copied from FIX_REPORT
+All 22 rows. Rows 1–18 are the evaluation defects, copied from FIX_REPORT
 (Batches 1–16); rows 19–20 are the operational findings of Section 3.8 and
 row 21 the documentation-drift finding, all three added 2026-09-19 and
-ratified by the author the same day. Rows 19–21 affect no reported figure.
+ratified by the author the same day. Row 22, added 2026-10-23, records a
+metric-definition ambiguity caught while verifying the abstract against
+the committed traces. Rows 19–22 affect no reported figure.
 
 | # | Defect | Effect on the figure | Flipped? | Caught by |
 |---|---|---|---|---|
@@ -585,6 +591,7 @@ ratified by the author the same day. Rows 19–21 affect no reported figure.
 | 19 | WS market-data endpoint wired to testnet for 110 days (31 May–18 Sep 2026) | live paper record priced partly off testnet feed; no evaluation result affected (Section 3.9) | no thesis conclusion | SYMPTOM-DRIVEN INVESTIGATION |
 | 20 | CI pipeline red since August 2026 while deploys proceeded | quality gate non-functional ~6 weeks | no thesis conclusion | SYMPTOM-DRIVEN INVESTIGATION |
 | 21 | REPRODUCE.md §C library versions contradicted the run manifest | reader instructed to expect numpy 2.4.x / pandas 2.3.x; manifest records 2.5.2 / 3.0.5 (corrected in place 2026-09-19) | no (documentation) | SELF-VERIFY |
+| 22 | time_in_market counts active-engine bars (engine flag ≠ "flat"), not bars holding inventory | drafted abstract read "holding a position on 58% of bars"; corrected to "reported time in market"; both quantities labelled (Section 3.6; manuscript §4.1; FIX_REPORT B2.2 erratum) | no (definition; no reported figure changed) | SELF-VERIFY (abstract vs REPRODUCE.md B5a, 2026-10-23) |
 
 Row 21 is the third instance of the documentation-drift class, after row
 18 (the guide's B3 expectation, invalidated by the Batch-7 compounding
