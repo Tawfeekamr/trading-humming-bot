@@ -517,6 +517,17 @@ impl GridStrategy {
     }
 }
 
+/// Bollinger window (bars) for the grid centre, bands and RSI bias. The
+/// engine passes up to 1,500 bars; using all of them (≈3 weeks of 1h bars)
+/// left the centre far above a falling market (26 Nov 2026: centre ~$620,
+/// BNB $551). Standard Bollinger period is 20.
+const BB_PERIOD: usize = 20;
+
+/// Closes of the last `n` bars (all of them if fewer).
+fn last_closes(bars: &[crate::models::bar::Bar], n: usize) -> Vec<f64> {
+    bars[bars.len().saturating_sub(n)..].iter().map(|b| b.close).collect()
+}
+
 fn round_down(value: f64, increment: f64) -> f64 {
     if increment <= 0.0 { return value; }
     (value / increment).floor() * increment
@@ -624,8 +635,8 @@ impl Strategy for GridStrategy {
         self.diag_near_support = self.sr.near_support(mid_price);
         self.diag_near_resistance = self.sr.near_resistance(mid_price);
 
-        if ctx.recent_bars.len() >= 20 {
-            let closes: Vec<f64> = ctx.recent_bars.iter().map(|b| b.close).collect();
+        if ctx.recent_bars.len() >= BB_PERIOD {
+            let closes = last_closes(&ctx.recent_bars, BB_PERIOD);
             let mean = closes.iter().sum::<f64>() / closes.len() as f64;
             let stddev = {
                 let variance = closes.iter().map(|c| (c - mean).powi(2)).sum::<f64>() / closes.len() as f64;
@@ -665,8 +676,8 @@ impl Strategy for GridStrategy {
         }
 
         // Calculate grid layout using BB bounds and ATR for spacing
-        let (bb_lower, bb_upper, atr_estimate) = if ctx.recent_bars.len() >= 20 {
-            let closes: Vec<f64> = ctx.recent_bars.iter().map(|b| b.close).collect();
+        let (bb_lower, bb_upper, atr_estimate) = if ctx.recent_bars.len() >= BB_PERIOD {
+            let closes = last_closes(&ctx.recent_bars, BB_PERIOD);
             let mean = closes.iter().sum::<f64>() / closes.len() as f64;
             let stddev = {
                 let variance = closes.iter().map(|c| (c - mean).powi(2)).sum::<f64>() / closes.len() as f64;
@@ -1299,6 +1310,38 @@ mod tests {
                 OrderSide::Sell => assert!(p > mid, "sell placed at {} <= market {}", p, mid),
             }
         }
+    }
+
+    /// The centre must follow the last 20 bars, not the whole buffer: after a
+    /// long stretch at $620 and a later flat spell around $551, buys land below $551.
+    #[tokio::test]
+    async fn grid_centre_uses_last_20_bars() {
+        use crate::connector::types::OrderBook;
+        use crate::models::bar::Bar;
+        let mut grid = make_grid();
+        let bars: Vec<Bar> = (0..500).map(|i| {
+            let base = if i < 380 { 620.0 } else { 551.0 }; // settled at 551 for 120 bars
+            let c = if i % 2 == 0 { base + 2.0 } else { base - 2.0 };
+            Bar { timestamp: 1_700_000_000_000 + i * 3_600_000, open: base,
+                  high: c + 6.0, low: c - 6.0, close: c, volume: 1.0 }
+        }).collect();
+        let mid = 551.0;
+        let ctx = TickContext {
+            order_book: OrderBook { symbol: "BTC-USDT".into(), bids: vec![(mid - 0.01, 10.0)],
+                                    asks: vec![(mid + 0.01, 10.0)], timestamp: 1 },
+            recent_bars: bars, balances: HashMap::new(), open_orders: vec![],
+            regime: None, regime_confidence: 0.0, regime_model_version: None,
+            regime_artifact_sha256: None, regime_feature_contract_hash: None,
+            regime_age_ms: None, router_mode: None, router_action: None,
+            router_engine: None, router_size_mult: None, timestamp: 1_800_000_000_000,
+            capital: None, replay: false,
+        };
+        grid.granted_capital = 20_000.0;
+        let orders = grid.on_tick(&ctx).await.unwrap();
+        assert_eq!(grid.state, GridState::Active, "test setup: grid should activate ({})", grid.pause_reason);
+        let centre = grid.grid_layout.as_ref().unwrap().mid_price;
+        assert!((centre - 551.0).abs() < 5.0, "centre should be ~551, got {}", centre);
+        assert!(orders.iter().any(|o| o.side == OrderSide::Buy), "buys below the market are placed");
     }
 
     #[test]
