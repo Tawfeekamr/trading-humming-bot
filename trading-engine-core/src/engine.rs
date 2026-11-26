@@ -856,7 +856,7 @@ impl Engine {
                     if !already_frozen {
                         error!(
                             "RISK INVARIANT ALERT: breaker peak {:.2} exceeds the legitimate maximum {:.2} \
-                             (initial {:.2} + realized {:.2} + unrealised {:.2}, ×1.01). Peak updates FROZEN \
+                             (highest of initial / initial + realized + unrealised seen, ×1.01; now: initial {:.2} + realized {:.2} + unrealised {:.2}). Peak updates FROZEN \
                              pending review; the breaker was NOT tripped and trading continues.",
                             peak, bound, self.config.capital.account_usdt, realized, unrealised
                         );
@@ -869,7 +869,7 @@ impl Engine {
                 } else if !self.invariant_first_pass_logged {
                     // One positive confirmation per boot so a silent invariant
                     // is distinguishable from a skipped one.
-                    let bound = RiskManager::equity_invariant_bound(
+                    let bound = self.risk.legit_bound(
                         self.config.capital.account_usdt,
                         realized,
                         unrealised,

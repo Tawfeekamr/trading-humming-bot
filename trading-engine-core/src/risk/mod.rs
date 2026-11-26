@@ -12,11 +12,15 @@ use crate::connector::types::Fill;
 pub struct RiskManager {
     pub position_guard: PositionGuard,
     pub circuit_breaker: CircuitBreaker,
+    /// Highest legitimate equity (initial + realized + unrealised) seen this
+    /// run. The peak-equity invariant bounds the breaker peak by THIS, not by
+    /// today's equity: a real peak followed by an ordinary dip is legitimate.
+    legit_equity_high: f64,
 }
 
 impl RiskManager {
     pub fn new(pg: PositionGuard, cb: CircuitBreaker) -> Self {
-        Self { position_guard: pg, circuit_breaker: cb }
+        Self { position_guard: pg, circuit_breaker: cb, legit_equity_high: 0.0 }
     }
 
     pub fn check_trading_allowed(&self) -> Result<()> {
@@ -45,26 +49,22 @@ impl RiskManager {
         let _ = self.circuit_breaker.check(current_equity) || self.circuit_breaker.check_daily(current_equity);
     }
 
-    /// The legitimate maximum for the breaker peak: initial capital + realized
-    /// + unrealised, with 1% headroom.
-    pub fn equity_invariant_bound(initial_capital: f64, realized_pnl: f64, unrealised_pnl: f64) -> f64 {
-        (initial_capital + realized_pnl + unrealised_pnl) * 1.01
-    }
-
     /// Peak-equity invariant (Task 6): the breaker's peak can never
-    /// legitimately exceed (initial capital + cumulative realized PnL +
-    /// current unrealised PnL) by more than 1%. On violation this NEVER trips
-    /// the breaker — a phantom peak must not halt trading — it freezes peak
-    /// updates pending review and returns `(suspect_peak, legitimate_bound)`
-    /// for the caller to alert on. Returns `None` when the peak is inside the
-    /// bound.
+    /// legitimately exceed the HIGHEST legitimate equity seen (initial capital,
+    /// or initial + realized + unrealised at any check this run) by more than
+    /// 1%. Comparing against CURRENT equity instead (the original rule) raised
+    /// a false alert on any ordinary dip of >1% below a real peak — e.g. the
+    /// 26 Nov 2026 boot, where a $1,043 open loss "invalidated" the 100,000
+    /// starting peak and froze peak tracking. On violation this NEVER trips the
+    /// breaker; it freezes peak updates pending review and returns
+    /// `(suspect_peak, legitimate_bound)` for the caller to alert on.
     pub fn check_equity_invariant(
         &mut self,
         initial_capital: f64,
         realized_pnl: f64,
         unrealised_pnl: f64,
     ) -> Option<(f64, f64)> {
-        let bound = Self::equity_invariant_bound(initial_capital, realized_pnl, unrealised_pnl);
+        let bound = self.legit_bound(initial_capital, realized_pnl, unrealised_pnl);
         let peak = self.circuit_breaker.peak_equity();
         if peak > bound {
             self.circuit_breaker.freeze_peak();
@@ -72,6 +72,14 @@ impl RiskManager {
         } else {
             None
         }
+    }
+
+    /// Update the legitimate-equity high-water mark and return its bound
+    /// (×1.01 headroom).
+    pub fn legit_bound(&mut self, initial_capital: f64, realized_pnl: f64, unrealised_pnl: f64) -> f64 {
+        let current = initial_capital + realized_pnl + unrealised_pnl;
+        self.legit_equity_high = self.legit_equity_high.max(initial_capital).max(current);
+        self.legit_equity_high * 1.01
     }
 }
 
@@ -354,6 +362,35 @@ mod tests {
         // bound = (100,000 + 4,800 + 1,000) × 1.01 = 106,878 — 104,000 is inside.
         let alert = rm.check_equity_invariant(100_000.0, 4_800.0, 1_000.0);
         assert!(alert.is_none(), "a legitimate peak must not raise the invariant");
+        assert!(!rm.circuit_breaker.is_peak_frozen());
+    }
+
+    /// 26 Nov 2026 false alarm: the peak is the real starting 100,000 and an
+    /// open position is $1,043 under water. That is an ordinary drawdown, not
+    /// a phantom peak — no alert, no freeze.
+    #[test]
+    fn ordinary_drawdown_below_a_real_peak_is_not_a_violation() {
+        let mut rm = RiskManager::new(
+            PositionGuard::new(80.0, 100.0, 10_000.0),
+            CircuitBreaker::new(10.0, 5.0),
+        );
+        rm.circuit_breaker.set_peak_equity(100_000.0);
+        assert!(rm.check_equity_invariant(100_000.0, 0.0, -1_043.07).is_none());
+        assert!(!rm.circuit_breaker.is_peak_frozen());
+    }
+
+    /// A real gain sets the high-water mark; giving some back later must not
+    /// turn the earlier (real) peak into a violation.
+    #[test]
+    fn peak_reached_earlier_stays_legitimate_after_giveback() {
+        let mut rm = RiskManager::new(
+            PositionGuard::new(80.0, 100.0, 10_000.0),
+            CircuitBreaker::new(10.0, 5.0),
+        );
+        assert!(rm.check_equity_invariant(100_000.0, 3_000.0, 2_000.0).is_none());
+        rm.circuit_breaker.set_peak_equity(105_000.0);
+        // Later: 3,000 given back.
+        assert!(rm.check_equity_invariant(100_000.0, 1_500.0, 500.0).is_none());
         assert!(!rm.circuit_breaker.is_peak_frozen());
     }
 
