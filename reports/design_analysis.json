@@ -1,41 +1,49 @@
 {
-  "method": "Gelman & Carlin (2014) design analysis at literature-anchored effect sizes; two-sided test, realised HAC SE from reports/mde_power.json",
-  "retracted": "achieved_power_for_observed_diff (retrospective power \u2014 one-to-one with p-value per Hoenig & Heisey 2001)",
+  "method": "Gelman & Carlin (2014) design analysis; two-sided z-test; SE of the per-bar mean difference = MDE_per_bar / (z_0.975 + z_0.80) from reports/mde_power.json (HAC)",
+  "correction_2026_11_26": "earlier version double-counted sqrt(n) and reported power 0.73/0.32; recomputed here (power ~0.05 at n = 4,314)",
   "anchors": {
     "A1_sp500_RL_1.7pp_CAGR": {
-      "source": "arXiv:2510.06466 attention-enhanced RL: PPO vs B&H ~1.7pp CAGR, S&P 500 2020-2025",
+      "source": "Xue & Ye (2025), arXiv:2510.06466: PPO vs buy-and-hold ~1.7 pp CAGR, S&P 500 2020-2025",
       "per_bar_effect": 1.940639269406393e-06,
       "ETHUSDT": {
-        "n_required_bars": 21950667,
+        "n": 4314,
+        "se_per_bar_mean_diff": 4.9411127299809107e-05,
+        "n_required_bars": 21950666,
         "n_required_years": 2506,
-        "power_at_this_n": 0.7323,
-        "type_S": 0.0,
-        "type_M_factor": 1.17
+        "power_at_this_n": 0.0502,
+        "type_S": 0.4542,
+        "type_M_factor": 59.5353
       },
       "BNBUSDT": {
-        "n_required_bars": 64940797,
+        "n": 4314,
+        "se_per_bar_mean_diff": 8.498841141705934e-05,
+        "n_required_bars": 64940796,
         "n_required_years": 7413,
-        "power_at_this_n": 0.323,
-        "type_S": 0.0008,
-        "type_M_factor": 1.74
+        "power_at_this_n": 0.0501,
+        "type_S": 0.4733,
+        "type_M_factor": 102.3887
       }
     },
     "A2_crypto_10pp_CAGR": {
-      "source": "order-of-magnitude anchor for published positive crypto-RL results (e.g. arXiv:2310.09462 CRN-PPO, positive ROI on ETH vs negative B&H); stated assumption",
+      "source": "order-of-magnitude anchor for published positive crypto-RL results; stated assumption",
       "per_bar_effect": 1.1415525114155251e-05,
       "ETHUSDT": {
-        "n_required_bars": 634375,
+        "n": 4314,
+        "se_per_bar_mean_diff": 4.9411127299809107e-05,
+        "n_required_bars": 634374,
         "n_required_years": 72,
-        "power_at_this_n": 1.0,
-        "type_S": 0.0,
-        "type_M_factor": 1.0
+        "power_at_this_n": 0.0561,
+        "type_S": 0.2534,
+        "type_M_factor": 10.1838
       },
       "BNBUSDT": {
-        "n_required_bars": 1876790,
+        "n": 4314,
+        "se_per_bar_mean_diff": 8.498841141705934e-05,
+        "n_required_bars": 1876789,
         "n_required_years": 214,
-        "power_at_this_n": 1.0,
-        "type_S": 0.0,
-        "type_M_factor": 1.0
+        "power_at_this_n": 0.0521,
+        "type_S": 0.3479,
+        "type_M_factor": 17.4445
       }
     }
   }

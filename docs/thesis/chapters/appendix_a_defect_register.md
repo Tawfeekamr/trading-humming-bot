@@ -1,6 +1,6 @@
 # Appendix A: Evaluation-Defect Register
 
-This register lists every evaluation defect found by the audit, plus four later findings. Rows 1–18 are the evaluation defects found by the audit of August 2026 (Section 3.7). Rows 19 and 20 are the operational findings of Section 3.8, and row 21 is a further instance of documentation drift. Row 22 records an ambiguity in the definition of a metric, found while checking the abstract against the saved exposure traces. Rows 19–22 affect no reported figure.
+This register lists every evaluation defect found by the audit, plus six later findings. Rows 1–18 are the evaluation defects found by the audit of August 2026 (Section 3.7). Rows 19 and 20 are the operational findings of Section 3.8, and row 21 is a further instance of documentation drift. Row 22 records an ambiguity in the definition of a metric, found while checking the abstract against the saved exposure traces. Rows 19–22 affect no reported figure. Rows 23 and 24 were found in November 2026 by an independent fact-check of this dissertation against the saved evidence; both figures are corrected in the text, and the saved files were regenerated.
 
 | # | Defect | Effect on the result | Changed a conclusion? | How it was caught |
 |---|---|---|---|---|
@@ -26,5 +26,7 @@ This register lists every evaluation defect found by the audit, plus four later 
 | 20 | Continuous-integration pipeline failing since August 2026 while deployments continued | Quality gate not working for about five weeks | No | Investigating a symptom |
 | 21 | Library versions in the reproduction guide contradicted the run manifest | Guide listed numpy 2.4.x / pandas 2.3.x; manifest records 2.5.2 / 3.0.5 (guide corrected) | No (documentation) | Re-running the reproduction guide |
 | 22 | "Time in market" counts bars with an active engine, not bars holding inventory | Draft abstract described it as "holding a position on 58% of bars"; corrected to "reported time in market", with both quantities labelled (Sections 3.6 and 4.1) | No (definition only) | Checking the abstract against the saved traces |
+| 23 | Design analysis computed by hand, multiplying the effect by √n twice | Power reported as 0.73 / 0.32 instead of about 0.05; "adequate at the crypto anchor" was wrong | Yes (Section 4.3) | Independent fact-check of the dissertation |
+| 24 | Portfolio-level gate cost taken from uncompounded totals | Reported as 67.1 / 20.8 pp instead of 59.1 / 16.0 pp | No (magnitude) | Independent fact-check of the dissertation |
 
 Row 21 is the third instance of documentation drift. The first was row 18, where an expected value in the reproduction guide became wrong after the compounding correction (row 10). The second was a description of a logging component as write-only, which became wrong once programs that read it were identified. The class recurs because every correction made after a piece of text was written can make that text wrong again. For this reason the reproduction guide is re-checked against the saved artefacts rather than trusted (Section 3.8).

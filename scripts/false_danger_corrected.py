@@ -32,6 +32,15 @@ from src.rl.walk_forward import DEFAULT_EMBARGO_BARS, walk_forward_slices  # noq
 HORIZON = 24
 
 
+def compounded_total(pair: str, strategy: str) -> float:
+    """Compounded total return over the six per-fold canonical return series."""
+    total = 1.0
+    for fold in range(6):
+        r = pd.read_csv(f"reports/returns/{pair}_{strategy}_fold{fold}.csv")["return"].to_numpy()
+        total *= float(np.prod(1 + r))
+    return total - 1.0
+
+
 def main() -> int:
     end = date(2026, 7, 5)
     start = end - timedelta(days=30 * 24)
@@ -91,10 +100,11 @@ def main() -> int:
         danger_blocks = [b["ret"] for b in blocks if b["entry_regime"] == 2]
         other_blocks = [b["ret"] for b in blocks if b["entry_regime"] != 2]
 
-        # 3. portfolio-level cost from the main run
-        wf = json.loads(Path(f"reports/rl_walk_forward_{pair}.json").read_text())
-        rf_ret = wf["metrics"]["rf"]["total_return"]
-        bh_ret = wf["metrics"]["ta"]["total_return"]
+        # 3. portfolio-level cost from the main run, COMPOUNDED over the
+        #    canonical per-fold return series (the walk-forward JSON's
+        #    metrics.*.total_return is the superseded arithmetic sum).
+        rf_ret = compounded_total(pair, "rf")
+        bh_ret = compounded_total(pair, "ta")
 
         out[pair] = {
             "n_bars": n,
@@ -121,7 +131,7 @@ def main() -> int:
                 "gated_strategy_return_pct": rf_ret * 100,
                 "buy_hold_return_pct": bh_ret * 100,
                 "gap_pp": (rf_ret - bh_ret) * 100,
-                "note": "RF-gated strategy minus buy-and-hold over identical span",
+                "note": "RF-gated strategy minus buy-and-hold over identical span; compounded over the six per-fold return series",
             },
         }
         print(f"\n=== {pair} ===")

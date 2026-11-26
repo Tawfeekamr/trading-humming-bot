@@ -21,10 +21,11 @@
       "mean_fwd_return_per_false_danger_signal_pct": 3.882692353980973
     },
     "portfolio_level_cost": {
-      "buy_hold_return_pct": 3.7763061633618475,
-      "gap_pp": -20.760251231264526,
-      "gated_strategy_return_pct": -16.983945067902678,
-      "note": "RF-gated strategy minus buy-and-hold over identical span"
+      "gated_strategy_return_pct": -20.25042847800519,
+      "buy_hold_return_pct": -4.26958091731321,
+      "gap_pp": -15.98084756069198,
+      "note": "RF-gated strategy minus buy-and-hold over identical span; compounded over the six per-fold return series",
+      "correction_2026_11_26": "was the superseded arithmetic sum (ETH -67.15, BNB -20.76); recomputed compounded"
     }
   },
   "ETHUSDT": {
@@ -49,10 +50,11 @@
       "mean_fwd_return_per_false_danger_signal_pct": 3.3385549474996443
     },
     "portfolio_level_cost": {
-      "buy_hold_return_pct": 44.827863154164994,
-      "gap_pp": -67.14780128615408,
-      "gated_strategy_return_pct": -22.31993813198908,
-      "note": "RF-gated strategy minus buy-and-hold over identical span"
+      "gated_strategy_return_pct": -21.168782568380628,
+      "buy_hold_return_pct": 37.96757301532636,
+      "gap_pp": -59.13635558370699,
+      "note": "RF-gated strategy minus buy-and-hold over identical span; compounded over the six per-fold return series",
+      "correction_2026_11_26": "was the superseded arithmetic sum (ETH -67.15, BNB -20.76); recomputed compounded"
     }
   }
 }

@@ -1,6 +1,6 @@
 # Methodology
 
-This chapter describes the method in its final, corrected form: the system (3.1), the two policies compared (3.2–3.3), the evaluation protocol and statistics (3.4–3.5), the diagnostics, defects and discovery modes found by the audit (3.6–3.8), and reproducibility and ethics (3.9–3.10). How the protocol came to be correct is treated as one of the dissertation's findings. The full register of twenty-two defects is in Appendix A.
+This chapter describes the method in its final, corrected form: the system (3.1), the two policies compared (3.2–3.3), the evaluation protocol and statistics (3.4–3.5), the diagnostics, defects and discovery modes found by the audit (3.6–3.8), and reproducibility and ethics (3.9–3.10). How the protocol came to be correct is treated as one of the dissertation's findings. The full register of twenty-four defects is in Appendix A.
 
 ## The System Under Study
 
@@ -73,7 +73,7 @@ Four rules govern every comparison.
 
 Rules 1 and 4 came from the audit: they replaced alignment by array length, which had paired bars up to 49 hours apart, and the definitions recorded as defects 10 and 11 (Section 3.7). PPO training windows are rounded to calendar months, so the first PPO window is 4,344 bars long against the random forest's 4,320. This 24-bar difference is disclosed: the first PPO window starts 24 bars before the pinned data frame, and the out-of-sample boundary was checked to hold.
 
-Walk-forward validation was chosen over combinatorial purged cross-validation (CPCV) for two reasons. It keeps each test window continuous in time, so serial dependence is estimated only where it really exists. It also avoids assuming that non-adjacent market periods are interchangeable. This dissertation regards that assumption as unsafe, and the project measured its consequences directly: when non-adjacent windows were wrongly pooled into one series (defect 11), headline drawdowns were inflated by factors of 2.3 to 5.5. The cost of walk-forward, fewer test paths and a smaller effective sample, is accepted knowingly. Gort et al. (2022) describe the alternative and report CPCV-trained agents outperforming walk-forward ones; applying CPCV is left to future work (Section 6.4).
+Walk-forward validation was chosen over combinatorial purged cross-validation (CPCV) for two reasons. It keeps each test window continuous in time, so serial dependence is estimated only where it really exists. It also avoids assuming that non-adjacent market periods are interchangeable. This dissertation regards that assumption as unsafe, and the project measured its consequences directly: when non-adjacent windows were wrongly pooled into one series (defect 11), headline drawdowns were inflated by factors of 2.3 to 5.5. The cost of walk-forward, fewer test paths and a smaller effective sample, is accepted knowingly. Gort et al. (2022) use a combinatorial alternative and report agents selected that way outperforming walk-forward and K-fold ones; applying CPCV is left to future work (Section 6.4).
 
 ## Statistical Treatment
 
@@ -179,7 +179,7 @@ The cost of the regime gate's false danger warnings was first calculated by summ
 
 - the mean forward return per false danger signal: +3.34% (ETH) and +3.88% (BNB);
 - the gap over non-overlapping 24-bar blocks: 0.96 and 0.72 percentage points per block;
-- the realised portfolio-level gap between the gated strategy and buy-and-hold: −59.1 and −16.0 percentage points, computed from the compounded totals in Tables 4.1 and 4.2 (the saved diagnostic file still records the superseded arithmetic values of −67.1 and −20.8).
+- the realised portfolio-level gap between the gated strategy and buy-and-hold: −59.1 and −16.0 percentage points, computed from the compounded totals in Tables 4.1 and 4.2 (earlier versions used uncompounded totals, −67.1 and −20.8; register row 24).
 
 The direction of the argument survived the correction; its magnitude did not.
 

@@ -34,7 +34,7 @@ The main lesson I take from the project is that how a model is measured matters 
 
 1. Redesign the reward before scaling up. Correcting the fee double-count was not enough (Section 4.6). The drawdown penalty should be bounded relative to achievable profit, or replaced with a drawdown-conditioned shaping term, so that staying flat cannot dominate. The flat-policy comparison should be a standing acceptance test during training.
 
-2. Evaluate with more seeds and longer horizons. Any future method claim needs seed distributions (at least five seeds across all folds) and windows long enough to bring the minimum detectable effect below the effect of interest, with a documented power analysis before the experiment is run. Combinatorial purged cross-validation (Gort et al., 2022) is a candidate design.
+2. Evaluate with more seeds and longer horizons. Any future method claim needs seed distributions (at least five seeds across all folds) and windows long enough to bring the minimum detectable effect below the effect of interest, with a documented power analysis before the experiment is run. Combinatorial cross-validation (López de Prado, 2018; Gort et al., 2022) is a candidate design.
 
 3. Make gating cost-sensitive. With a 38–47% false-DANGER rate, the gate needs asymmetric costs, or a confidence threshold calibrated against forgone return rather than accuracy, before it can add value in rising markets.
 
