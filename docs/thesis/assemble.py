@@ -166,7 +166,10 @@ def figure(png: str, caption: str) -> str:
         f'<w:r><w:t xml:space="preserve">: {caption}</w:t></w:r></w:p>'
     )
     # Text width = A4 minus Hull margins and binding gutter = 8,504 twips = 5.9 in.
-    return f"\n![]({path}){{width=5.9in}}\n\n```{{=openxml}}\n{cap}\n```\n"
+    # Alt text = the caption: accessible, and keeps the local file path (which
+    # contains the author's username) out of the document's hidden metadata.
+    alt = caption.replace("[", "(").replace("]", ")")
+    return f"\n![{alt}]({path}){{width=5.9in}}\n\n```{{=openxml}}\n{cap}\n```\n"
 
 
 def place_after_section(block: str, heading: str, insert: str) -> str:
@@ -431,6 +434,7 @@ BUILD.mkdir(exist_ok=True)
 def count_words(s: str) -> int:
     s = re.sub(r"```.*?```", " ", s, flags=re.S)        # raw field blocks
     s = re.sub(r":::.*?:::", " ", s, flags=re.S)         # notes / styled blocks
+    s = re.sub(r"!\[[^\]]*\]\([^)]*\)(\{[^}]*\})?", " ", s)  # images (alt text)
     return len(re.findall(r"[A-Za-z0-9][\w'’.\-–%$]*", s))
 
 chapters = md[md.find("\n# Introduction"):md.find("Heading back matter")]  # excl. refs + appendices
@@ -439,7 +443,7 @@ print(f"Words counted toward the 20,000 limit (abstract + six chapters, notes ex
 
 # ---------------------------------------------------------------- pandoc
 cmd = ["pandoc", str(BUILD / "dissertation.md"),
-       "-f", "markdown+tex_math_dollars+pipe_tables",
+       "-f", "markdown+tex_math_dollars+pipe_tables-implicit_figures",  # our own Word captions
        "--reference-doc", str(TEMPLATE),
        "-o", str(BUILD / "dissertation.docx")]
 subprocess.run(cmd, check=True)

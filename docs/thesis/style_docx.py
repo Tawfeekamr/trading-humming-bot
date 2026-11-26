@@ -124,5 +124,9 @@ def polish(docx: Path) -> None:
                 data = _restyle(data.decode("utf-8")).encode("utf-8")
             elif item.filename == "word/numbering.xml":
                 data = _chapter_label(data.decode("utf-8")).encode("utf-8")
+            elif item.filename == "word/document.xml":
+                # Image paths are local (/Users/<name>/...): keep only the file
+                # name so no username leaks into hidden metadata (Hull: ID only).
+                data = re.sub(rb'(descr|name)="/[^"]*/([^"/]+)"', rb'\1="\2"', data)
             zout.writestr(item, data)
     shutil.move(tmp, docx)
