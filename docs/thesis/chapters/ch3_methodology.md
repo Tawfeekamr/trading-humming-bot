@@ -8,7 +8,7 @@ The evaluation was carried out on, and its failure modes were discovered in, a t
 
 The first layer is a Python machine-learning layer. It trains one regime classifier per asset, and a sidecar process pushes each classifier's predictions into a cache inside the execution engine every 180 seconds over an internal HTTP endpoint.
 
-The second layer is a Rust execution engine. It runs two production strategy engines on four pairs (ETH, BNB, XRP and DOGE): a grid engine, which quotes geometrically spaced buy and sell levels around an anchor price, and a trend engine, which enters directionally and exits on a chandelier trailing stop. The engine trades in paper mode on a single AWS EC2 instance in Tokyo.
+The second layer is a Rust execution engine. It runs two production strategy engines, alongside a separate signal-copy engine that is outside this study: a grid engine on ETH, BNB, XRP and DOGE, which quotes geometrically spaced buy and sell levels around an anchor price, and a trend engine on BNB, XRP and DOGE (ETH excluded since July 2026), which enters directionally and exits on a chandelier trailing stop. The engine trades in paper mode on a single AWS EC2 instance in Tokyo.
 
 The third layer is the research stack evaluated in this dissertation. It is a Python Gymnasium environment that replays one-hour OHLCV bars and exposes simplified implementations of the same engine primitives to a reinforcement-learning agent. The primitives are simplified for training speed and are not tick-identical to the Rust engines. One of them, swing, was removed from the production engine in July 2026 but remains in the frozen evaluation environment; this gap between simulation and deployment is discussed in Section 5.4.
 
@@ -24,7 +24,7 @@ The agent is trained with Proximal Policy Optimization (PPO; Schulman et al., 20
 
 The action space has ten discrete actions, decoded by a single mapping shared by training and every later use of the policy. Actions 0–2 select the grid engine at size multipliers of 0.5, 1.0 or 1.5. Actions 3–5 select the trend engine at the same sizes, and actions 6–8 select swing. Action 9, `GO_FLAT`, closes any open position and carries no size. Switching engines closes the current position at the previous close and activates the new engine. Choosing the same engine at a different size changes only future deployments and costs nothing.
 
-The observation is a 25-dimensional vector. The first 17 entries are the market and time features shared with the supervised path: the 14 contract features described in Section 3.3 plus three time features. These are followed by a four-entry one-hot code for the current engine and by four account variables: unrealised profit and loss relative to initial equity, drawdown from peak, position notional relative to initial equity, and the normalised number of consecutive bars spent in the current engine.
+The observation is a 25-dimensional vector. The first 17 entries are the market and time features shared with the supervised path: the 14 contract features described in Section 3.3 plus three time features. These are followed by a four-entry one-hot code for the current engine and by four account variables: the change in equity (realised plus unrealised) relative to initial equity, drawdown from peak, position notional relative to initial equity, and the normalised number of consecutive bars spent in the current engine.
 
 An episode replays 4,300 hourly bars (about six months) from an initial equity of $10,000, and ends early if equity falls below half of its initial value. The only modelled friction is a fee of 0.1% per side on turnover, applied inside the environment's equity accounting. Slippage was not modelled: the evaluation harness has optional fee and slippage overlays, but both default to zero and neither was enabled.
 
@@ -46,21 +46,21 @@ The supervised policy is a random-forest regime classifier, one per asset, whose
 
 The training label is a trailing-window now-cast. At each bar $T$, the regime is classified over the 24 bars ending at and including $T$. The regime is danger if the maximum drawdown within the window reaches −3%; otherwise it is trending if the absolute return over the window reaches 2%; otherwise it is ranging. Danger takes precedence over trending. The label uses only past data, unlike a forward-looking variant in the same codebase, which by construction classifies on future bars.
 
-Both policies observe identical market state. The feature contract is the same 14-feature market block that the reinforcement-learning agent observes: returns, volatility ratio, normalised ATR, ADX, RSI, volume ratio, close-location value, MACD histogram, distance to VWAP, OBV rate of change, choppiness, fractal dimension and the Aroon oscillator. The features are defined once and imported by both paths.
+Both policies observe identical market state. The feature contract is the same 14-feature market block that the reinforcement-learning agent observes: returns, volatility ratio, normalised ATR, trend strength (the gap between the 20- and 50-bar moving averages), ADX, RSI, volume ratio, close-location value, MACD histogram, distance to VWAP, OBV rate of change, choppiness, fractal dimension and the Aroon oscillator. The features are defined once and imported by both paths.
 
 The classifier is a random forest of 200 fully grown trees, with a minimum of five samples per leaf, square-root feature subsampling, balanced subsample class weights and seed 42. It is trained on the first 85% of each training window and calibrated on the remaining 15%. The split is strictly temporal, and isotonic regression is fitted on the held-out later segment (Zadrozny & Elkan, 2002).
 
 In the walk-forward evaluation the baseline is retrained for each fold, giving twelve models across the two pairs. Each model carries a fixed provenance manifest that records its training window, data hash, feature-contract hash, seed and class distribution. For example, the ETH model for the first fold is trained on data from 15 July 2024 to 10 January 2025: 3,610 rows, of which 1,592 are ranging, 877 trending and 1,141 danger.
 
-The classifiers' out-of-sample accuracies are 0.80–0.87 per asset. These figures come from the development history: the evaluation script prints them but does not save them, and the saved model manifests record only sample counts. They are kept, with this caveat, because no conclusion depends on their exact values. The argument of Section 4.5 is that accuracy, whatever its value, did not translate into value from gating.
+The deployed classifiers' out-of-sample accuracies are 0.849 (ETH) and 0.870 (BNB), and 0.80–0.87 across the four live pairs; the accuracies of the twelve fold models were not recorded. These figures come from the development history: the evaluation script prints them but does not save them, and the saved model manifests record only sample counts. They are kept, with this caveat, because no conclusion depends on their exact values. The argument of Section 4.5 is that accuracy, whatever its value, did not translate into value from gating.
 
 ## The Evaluation Protocol
 
 The evaluation is a chronological walk-forward over pinned data, illustrated in Figure 3.2.
 
-For each pair, 17,304 hourly bars ending on 5 July 2026 are split into six folds. Each fold has a training window of 4,320 bars (about six months) and a test window of 720 bars (about one month), and successive folds are stepped by 2,160 bars (about three months). This gives six non-overlapping test windows per pair, separated by gaps of 1,440 bars, and 4,314 test bars in total (719 per fold after alignment).
+For each pair, 17,304 hourly bars ending on 5 July 2026 are loaded, and the six folds use the first 15,910 of them; the final 1,394 bars (9 May to 5 July 2026) are not used. Each fold has a training window of 4,320 bars (about six months) and a test window of 720 bars (about one month), and successive folds are stepped by 2,160 bars (about three months). This gives six non-overlapping test windows per pair, separated by gaps of 1,440 bars, and 4,314 test bars in total (719 per fold after alignment).
 
-Between each training window and its test window sits an embargo of 70 bars, sized to the longest feature lookback. The longest rolling window in the feature contract is 50 bars (SMA-50, VWAP-50 and OBV-50), and the exponentially weighted tail of the RSI falls below 1% after about 64 bars, so 70 bars bounds direct leakage. The embargo is a tolerance rather than an absolute guarantee: ADX and MACD are recursive indicators with infinite memory, and their warm-up can extend about 30 bars past the boundary. This limitation is discussed in Section 5.4.
+Between each training window and its test window sits an embargo of 70 bars, sized to the longest feature lookback. The longest direct lookback in the feature contract is 63 bars (the OBV feature: a 14-bar difference standardised over 50 bars), and the exponentially weighted tail of the RSI falls below 1% after about 64 bars, so 70 bars bounds direct leakage. The embargo is a tolerance rather than an absolute guarantee: ADX and MACD are recursive indicators with infinite memory, and their warm-up can extend about 30 bars past the boundary. This limitation is discussed in Section 5.4.
 
 <!-- FIGURE fig_3_2_walk_forward -->
 
@@ -71,7 +71,7 @@ Four rules govern every comparison.
 3. The data are pinned by end date and by content hash (Section 3.9).
 4. Metrics have fixed definitions. Total return is the compounded product $\prod(1+r_t)-1$ over the per-bar series. Maximum drawdown is measured on the multiplicative equity curve within each fold and summarised by its median across folds. It is never pooled across the 1,440-bar gaps between folds.
 
-Rules 1 and 4 came from the audit: they replaced alignment by array length, which had paired bars up to 49 hours apart, and the definitions recorded as defects 10 and 11 (Section 3.7). PPO training windows are rounded to calendar months, so the first PPO window is 4,344 bars long against the random forest's 4,320. This 24-bar difference is disclosed, and the out-of-sample boundary was checked to hold.
+Rules 1 and 4 came from the audit: they replaced alignment by array length, which had paired bars up to 49 hours apart, and the definitions recorded as defects 10 and 11 (Section 3.7). PPO training windows are rounded to calendar months, so the first PPO window is 4,344 bars long against the random forest's 4,320. This 24-bar difference is disclosed: the first PPO window starts 24 bars before the pinned data frame, and the out-of-sample boundary was checked to hold.
 
 Walk-forward validation was chosen over combinatorial purged cross-validation (CPCV) for two reasons. It keeps each test window continuous in time, so serial dependence is estimated only where it really exists. It also avoids assuming that non-adjacent market periods are interchangeable. This dissertation regards that assumption as unsafe, and the project measured its consequences directly: when non-adjacent windows were wrongly pooled into one series (defect 11), headline drawdowns were inflated by factors of 2.3 to 5.5. The cost of walk-forward, fewer test paths and a smaller effective sample, is accepted knowingly. Gort et al. (2022) describe the alternative and report CPCV-trained agents outperforming walk-forward ones; applying CPCV is left to future work (Section 6.4).
 
@@ -79,7 +79,7 @@ Walk-forward validation was chosen over combinatorial purged cross-validation (C
 
 ### The primary test
 
-The primary comparison is a paired mean-difference test on realised per-bar returns. It uses Newey–West heteroskedasticity- and autocorrelation-consistent (HAC) standard errors with lag 9, given by the standard rule $\lfloor 4(n/100)^{2/9} \rfloor$ at $n = 4{,}314$, and a Holm correction across the two pairs.
+The primary comparison is a paired mean-difference test on realised per-bar returns. It uses Newey–West heteroskedasticity- and autocorrelation-consistent (HAC) standard errors with lag 9, given by the standard rule $\lfloor 4(n/100)^{2/9} \rfloor$ at $n = 4{,}314$, and a Holm correction across the two pairs. Because the statistic is computed on the six folds joined end to end, its lags cross the gaps between folds; it is therefore reported as descriptive only, and no within-fold replacement was computed.
 
 This is not a Diebold–Mariano test. That statistic is defined on differences in forecast loss, whereas this test compares the realised returns of two trading policies on identical bars. The audit found that an earlier analysis had reported a "Diebold–Mariano" figure that matched no implemented test; that figure was withdrawn (Appendix A, row 4).
 
@@ -87,17 +87,17 @@ The results are +0.43 for ETH (p = 0.665) and −0.33 for BNB (p = 0.743), both 
 
 ### Drawdown intervals
 
-Drawdown differences are assessed with a stationary bootstrap (Politis & Romano, 1994) on the paired series, resampled by fold: the six per-fold drawdown values are resampled as units, so no resampled block crosses a gap between folds. The resulting 95% intervals for the per-fold maximum-drawdown difference (PPO minus random forest) are −0.070 [−0.121, −0.020] on ETH, which excludes zero, and −0.054 [−0.138, +0.022] on BNB.
+Drawdown differences are assessed with a fold-cluster bootstrap: the six per-fold drawdown differences are resampled with replacement as whole units, so nothing crosses a gap between folds. The resulting 95% intervals for the per-fold maximum-drawdown difference (PPO minus random forest) are −0.070 [−0.121, −0.020] on ETH, which excludes zero, and −0.054 [−0.138, +0.022] on BNB.
 
-The block length of 10 comes from a simple length-based rule, $\lceil 4(n/100)^{2/9} \rceil$. It is not the automatic selection of Politis and White (2004), which examines the series' autocorrelation and was not implemented. The intervals are therefore conditional on this choice.
+No block length is involved in this interval. A length-based block rule ($\lceil 4(n/100)^{2/9} \rceil = 10$) is used only for the secondary Sortino-ratio interval; it is not the automatic selection of Politis and White (2004), which examines the series' autocorrelation and was not implemented (register row 14).
 
 ### Power
 
 Power is treated prospectively only. The minimum detectable effect is the smallest cumulative return difference the design could detect at 80% power and α = 0.05, computed from the HAC variance and the sample size alone. It is 81.7 percentage points on ETH and 179.3 on BNB, against observed differences of 9.66 and −11.34 points.
 
-Power calculated at the observed effect is not reported, because it is a direct function of the p-value and adds no information beyond it (Hoenig & Heisey, 2001). The case that the study is underpowered rests instead on interval width. The fold-clustered drawdown intervals span roughly 0.10 and 0.16, against effects of about 0.05–0.13; an interval wider than the effect cannot resolve that effect.
+Power calculated at the observed effect is not reported, because it is a direct function of the p-value and adds no information beyond it (Hoenig & Heisey, 2001). The case that the study is underpowered rests instead on interval width. The fold-clustered drawdown intervals span roughly 0.10 and 0.16, against effects of about 0.05–0.07; with intervals this wide, the drawdown difference is resolved on only one of the two assets.
 
-A design analysis at effect sizes taken from the literature (Gelman & Carlin, 2014) completes the picture. Anchored on the 1.7% per year effect of a published positive result on the S&P 500 (Xue & Ye, 2025), the design has power of 0.73 (ETH) and 0.32 (BNB), a Type S (wrong-sign) error rate between approximately zero and 0.0008, and a Type M (exaggeration) factor of 1.17 and 1.74. In other words, a significant estimate at this scale would on average overstate the true effect by up to three-quarters. Detecting an effect of that size would need roughly 2,506 years (ETH) and 7,413 years (BNB) of hourly data; even at a generous 10% per year anchor (power ≈ 1, Type M ≈ 1) it needs 72 and 214 years. The method can resolve only very large claimed effects, not those typically reported.
+A design analysis at effect sizes taken from the literature (Gelman & Carlin, 2014) completes the picture. Anchored on the 1.7% per year effect of a published positive result on the S&P 500 (Xue & Ye, 2025), the design has power of about 0.05 on both pairs, a Type S (wrong-sign) error rate of 0.45–0.47, and a Type M (exaggeration) factor of roughly 60 to 100 (Table 4.6). In other words, a significant estimate at this scale would on average overstate the true effect by up to three-quarters. Detecting an effect of that size would need roughly 2,506 years (ETH) and 7,413 years (BNB) of hourly data; even at a generous 10% per year anchor (power ≈ 1, Type M ≈ 1) it needs 72 and 214 years. The method can resolve only very large claimed effects, not those typically reported.
 
 ## Diagnostics
 
@@ -109,7 +109,7 @@ This diagnostic scores a policy that is always flat, under the same reward and o
 
 ### Reward-component decomposition
 
-This diagnostic reports the accumulated size of each term in the reward, not only the total, which requires only instrumenting a sum that is already computed at every step. It comes from the reward-decomposition literature in explainable reinforcement learning (Lin et al., 2019, 2020) and from debugging practice, which advises checking whether an agent favours one component. Here it would have shown that the drawdown-penalty term (0.310 and 0.401) rivals the entire profit-and-loss term (−0.579 and −0.328). It would also have exposed the fee double-count described in Section 3.2, which went unnoticed through four rounds of self-audit.
+This diagnostic reports the accumulated size of each term in the reward, not only the total, which requires only instrumenting a sum that is already computed at every step. It comes from the reward-decomposition literature in explainable reinforcement learning (Lin et al., 2019, 2020) and from debugging practice, which advises checking whether an agent favours one component. Here it would have shown that the drawdown-penalty term (0.310 and 0.401) was about half the size of the profit-and-loss term on ETH (−0.579) and larger than it on BNB (−0.328). It would also have exposed the fee double-count described in Section 3.2, which went unnoticed through four rounds of self-audit.
 
 ### Capital-exposure matching
 
@@ -119,7 +119,7 @@ This diagnostic matches baselines on capital-weighted exposure, the mean of |pos
 - bars actually holding inventory are far fewer, 12.2% on ETH and 12.4% on BNB;
 - capital-weighted exposure averages 4.3% on ETH and 5.2% on BNB.
 
-The diagnostic comes from portfolio attribution (Brinson, Hood & Beebower, 1986; Cremers & Petajisto, 2009; Frazzini & Pedersen, 2014). Its closest structural relative is selective prediction, where the observation that abstaining improves metrics is foundational, and reporting coverage is the established remedy (Chow, 1970; Geifman & El-Yaniv, 2017; Geifman & El-Yaniv, 2019). Here it reversed a stated conclusion. PPO's apparent drawdown advantage, which had survived matching under a mixed-up definition of exposure, ranks at the 100th percentile, the worst position, against random entries matched on the same capital exposure, on both pairs.
+The diagnostic comes from portfolio attribution (Brinson, Hood & Beebower, 1986; Cremers & Petajisto, 2009; Frazzini & Pedersen, 2014). Its closest structural relative is selective prediction, where the observation that abstaining improves metrics is foundational, and reporting coverage is the established remedy (Chow, 1970; Geifman & El-Yaniv, 2017; Geifman & El-Yaniv, 2019). Here it reversed a stated conclusion. PPO's apparent drawdown advantage, which had survived matching under a mixed-up definition of exposure, ranks at the 100th percentile, the worst position, against random entries matched on the same capital exposure, on both pairs, on the pooled drawdown basis on which the matching was run.
 
 ### Fold-aware pooling
 
@@ -131,7 +131,7 @@ This diagnostic states the minimum detectable effect alongside any null result, 
 
 ### Seed-distribution reporting
 
-This diagnostic never reports a reinforcement-learning result from a single seed, following the reproducibility literature in deep reinforcement learning. Here it would have caught a headline resting on a seed at the unfavourable end of its distribution: within a single fold, the choice of seed changes return by 27 percentage points and drawdown by a factor of 45, and the paired statistic changes sign across seeds (Section 3.7).
+This diagnostic never reports a reinforcement-learning result from a single seed, following the reproducibility literature in deep reinforcement learning. Here it would have caught a headline resting on a seed at the unfavourable end of its distribution: within a single fold, the choice of seed changes return by 28 percentage points and drawdown by a factor of 45, and the paired statistic changes sign across seeds (Section 3.7).
 
 ## Evaluation Failure Modes and Their Effect on Inference
 
@@ -141,10 +141,10 @@ The protocol described above is what remained after an audit carried out between
 
 | # | Defect | Effect on the result | How it was caught |
 |---|---|---|---|
-| 5 | Additive (cumulative-sum) drawdown equity | Overstated drawdown (ETH buy-and-hold 0.353 → 0.511) | Self-audit |
+| 5 | Additive (cumulative-sum) drawdown equity | Misstated drawdown (ETH buy-and-hold 0.353 additive against 0.511 multiplicative) | Self-audit |
 | 7 | Conflated exposure definitions | ETH exposure-match verdict reversed | Self-audit |
 | 8 | Overlapping-window cost sum | 2,243 pp: impossible against a +38% window | Self-audit |
-| 9 | Reliance on a single seed | 27 pp within-fold swing between seeds hidden | Self-audit |
+| 9 | Reliance on a single seed | 28 pp within-fold swing between seeds hidden | Self-audit |
 | 10 | Arithmetic (uncompounded) total return | BNB buy-and-hold sign flip, +3.78% → −4.27% | Independent review |
 | 11 | Pooling across the 1,440-bar fold gaps | Drawdown inflated up to 5.5×; dependence estimates corrupted | Independent review |
 
@@ -159,7 +159,7 @@ A sum ignores compounding, and over long series with large swings the two method
 
 ### Pooling across non-adjacent folds
 
-The six test windows are separated by gaps of 1,440 bars, but the "pooled" statistics joined the six per-fold series into one, creating false adjacency at five boundaries. Partial drawdowns at the end of one fold and the start of the next merged into single drawdowns that no investor would have experienced. This inflated pooled maximum drawdown by 2.3 to 5.5 times: PPO's pooled drawdown was 0.165 on ETH against a per-fold median of 0.032, and 0.293 on BNB against 0.053. At the same time, HAC lags 1–9 linked bars that were months apart, and bootstrap blocks spanned the gaps, corrupting every estimate of serial dependence. The defect survived four rounds of self-audit, including the round that fixed the drawdown calculation right next to it, because the false premise that the folds were contiguous was inherited rather than computed.
+The six test windows are separated by gaps of 1,440 bars, but the "pooled" statistics joined the six per-fold series into one, creating false adjacency at five boundaries. Partial drawdowns at the end of one fold and the start of the next merged into single drawdowns that no investor would have experienced. This inflated pooled maximum drawdown by 2.3 to 5.5 times: PPO's pooled drawdown was 0.165 on ETH against a per-fold median of 0.032, and 0.293 on BNB against 0.053. At the same time, HAC lags 1–9 linked bars that were months apart, and bootstrap blocks spanned the gaps, corrupting every estimate of serial dependence. The defect survived five rounds of self-audit, including the round that fixed the drawdown calculation right next to it, because the false premise that the folds were contiguous was inherited rather than computed.
 
 ### Conflated exposure definitions
 
@@ -171,7 +171,7 @@ An earlier analysis reported a "Diebold–Mariano" result (DM = 1.48, p = 0.14) 
 
 ### Reliance on a single seed
 
-Every headline PPO figure originally came from one seed (42). A five-seed sweep on two folds shows that within a single fold, the seed alone changes cumulative return by up to 27 percentage points (BNB, fourth fold: −22.99% for seed 7 against +3.95% for seed 999) and maximum drawdown by a factor of 45 (0.007 to 0.312). The paired statistic also changes sign across seeds (BNB range −0.92 to +0.80). Seed variance dominates the difference between methods. The bias is epistemic rather than directional: a comparison based on one seed supports no claim about methods in either direction. Seed 42 was fixed in code before any result was observed and sits at the unfavourable end of its distribution on BNB, which rules out seed selection but does not make the single-seed result interpretable.
+Every headline PPO figure originally came from one seed (42). A five-seed sweep on two folds shows that within a single fold, the seed alone changes cumulative return by up to 28 percentage points (BNB, fourth fold: −22.99% for seed 7 against +4.69% for seed 123) and maximum drawdown by a factor of 45 (0.007 to 0.312). The paired statistic also changes sign across seeds (BNB range −0.92 to +0.80). Seed variance dominates the difference between methods. The bias is epistemic rather than directional: a comparison based on one seed supports no claim about methods in either direction. Seed 42 was fixed in code before any result was observed and sits at the unfavourable end of its distribution on BNB, which rules out seed selection but does not make the single-seed result interpretable.
 
 ### The overlapping-window opportunity cost
 
@@ -179,7 +179,7 @@ The cost of the regime gate's false danger warnings was first calculated by summ
 
 - the mean forward return per false danger signal: +3.34% (ETH) and +3.88% (BNB);
 - the gap over non-overlapping 24-bar blocks: 0.96 and 0.72 percentage points per block;
-- the realised portfolio-level gap between the gated strategy and buy-and-hold: −67.1 and −20.8 percentage points.
+- the realised portfolio-level gap between the gated strategy and buy-and-hold: −59.1 and −16.0 percentage points, computed from the compounded totals in Tables 4.1 and 4.2 (the saved diagnostic file still records the superseded arithmetic values of −67.1 and −20.8).
 
 The direction of the argument survived the correction; its magnitude did not.
 
@@ -190,16 +190,16 @@ The way the eighteen evaluation defects were found is itself a methodological fi
 1. Self-audit (nine defects). These were arithmetic or definitional errors in recorded numbers. A check of the recorded numbers finds errors in the recorded numbers.
 2. Independent review (six defects). These were inherited premises. Five were found by an external review of the evaluation, and one by an operational audit on 23 August 2026. The assumption that the folds were contiguous survived five rounds of self-audit precisely because it was a premise rather than a calculation.
 3. Observing system behaviour (two defects). These were cases of data that had never been recorded. Self-audit checks what is recorded; it cannot check what was never written down.
-4. Re-running the reproduction guide (one defect). This was documentation drift: a correct instruction had become wrong after a definition was corrected downstream. A second instance of the same kind was found later (Appendix A, row 21), when the guide's stated library versions turned out to differ from the run manifest that the same sentence cited. Drift is the only class that recurs after detection, because every correction made after a piece of text was written can make that text wrong again.
+4. Re-running the reproduction guide (one defect). This was documentation drift: a correct instruction had become wrong after a definition was corrected downstream. A further instance of the same kind was found later (Appendix A, row 21), when the guide's stated library versions turned out to differ from the run manifest that the same sentence cited. Drift is the only class that recurs after detection, because every correction made after a piece of text was written can make that text wrong again.
 
-Two further defects appeared in September 2026, after the evaluation was frozen. This dissertation treats them as a fifth mode: investigation driven by a symptom.
+Two further defects came to light in September 2026, after the evaluation was frozen. This dissertation treats them as a fifth mode: investigation driven by a symptom.
 
-- From 31 May to 18 September 2026 (110 days), the live system's WebSocket market-data client streamed from Binance's test network instead of the production feed, because of a configuration wiring error. The paper-trading record was therefore priced partly from test-network data, and no metric changed. The defect came to light only because a performance review noticed that connections were being reset about every three minutes, and investigated.
+- From 31 May to 18 September 2026 (110 days), the live system's WebSocket market-data client streamed from Binance's test network instead of the production feed, because of a configuration wiring error. The paper-trading record was therefore priced partly from test-network data, but no evaluation metric changed. The defect came to light only because a performance review noticed that connections were being reset about every three minutes, and investigated.
 - In the same period, the continuous-integration pipeline had been failing since August 2026 while deployments continued by other means. This quality gate was firing with nobody watching, and was found only when the pipeline's status was examined in September.
 
 These are rows 19 and 20 of the register (Appendix A).
 
-A fifth mode is justified by the kind of escape involved, which differs from all four earlier modes. In each of the eighteen evaluation defects, something in the record was wrong: a number, a premise, a missing record or an instruction. In both September findings the record was correct; the running system had drifted from its configuration without any recorded artefact becoming false. No audit of the evaluation record, however independent, could have found either one, because neither was in the evaluation record. Both were caught only because the defect eventually produced a visible symptom, a reset pattern or a failing pipeline, which was noticed during an investigation undertaken for another purpose.
+A fifth mode is justified by the kind of escape involved, which differs from all four earlier modes. In each of the eighteen evaluation defects, something in the record was wrong: a number, a premise, a missing record or an instruction. In both September findings the evaluation record was correct: the feed defect was a wiring error present since deployment, and the pipeline failure combined a dependency upgrade with a test left out of date by an earlier correction. No audit of the evaluation record, however independent, could have found either one, because neither was in the evaluation record. Both were caught only because the defect eventually produced a visible symptom, a reset pattern or a failing pipeline, which was noticed during an investigation undertaken for another purpose.
 
 The parallel with the central argument is direct: the feed defect was invisible because nothing compared the feed with reality, just as concealed abstention was invisible because nothing reported capital-weighted exposure. Neither finding affected any reported figure (Section 3.9). They extend the register from evaluation defects to operational defects, which is reasonable because the system under study is deployed, and they are reported separately from the eighteen evaluation defects.
 
@@ -209,14 +209,14 @@ Every reported evaluation result can be traced to artefacts saved in the project
 
 The raw evidence consists of 36 per-bar return series, one each for PPO, the fold-specific random forest and buy-and-hold, per fold and per pair, together with 24 per-bar exposure traces for the trained and untrained policies. The traces record the action, position value, inventory, turnover and grid-level crossings at every bar. The twelve fold-specific random-forest models carry provenance manifests (training window, data hash, feature-contract hash, seed and class distribution), and the PPO models carry equivalent records. A run manifest records the evaluated code version, the library versions (scikit-learn 1.6.1, numpy 2.5.2, pandas 3.0.5, stable-baselines3 2.9.0, torch 2.13.0) and the seeds (42 throughout).
 
-A reproduction guide (Appendix B) maps 16 headline claims to exact fields in these artefacts and gives short commands that recompute them from the raw series; all were re-run on 23 August 2026 and matched exactly.
+A reproduction guide (REPRODUCE.md in the code archive, summarised in Appendix B) maps 16 headline claims to exact fields in these artefacts and gives short commands that recompute them from the raw series; all were re-run on 23 August 2026 and matched exactly.
 
 All training and evaluation data are one-hour candles for ETHUSDT and BNBUSDT, 17,304 bars per pair, ending on 5 July 2026, with a SHA-256 hash recorded for each pair in the run manifest. The source is Binance's public data archive, the same data the exchange's REST interface serves. The test-network feed problem described in Section 3.8 affected only the live paper-trading feed, and no reported result used that feed. This independence was verified rather than assumed: on 19 September 2026 both recorded hashes were recomputed from the archive-derived cache over the pinned window and matched the manifest exactly (17,304 bars per pair). One qualification applies: the recomputation used the local cache derived from the archive, not a fresh download.
 
 Some things cannot be reproduced, and they are stated openly:
 
 - Provenance is not from a single snapshot. The run manifest, the PPO records and the random-forest manifests cite three different code versions; a comparison showed them to be identical in substance for training and evaluation.
-- The trained model files are not stored. They can be regenerated from the recorded seeds and windows, but not recovered.
+- The trained model files are not in the repository or the code archive. They exist only on the author's machine, with their hashes recorded, and can otherwise only be regenerated from the recorded seeds and windows.
 - Sensitivity to library versions has not been measured beyond one prediction check between scikit-learn 1.6.1 and 1.8.0.
 - The market-data source is outside the project's control.
 - The original training environment no longer exists.

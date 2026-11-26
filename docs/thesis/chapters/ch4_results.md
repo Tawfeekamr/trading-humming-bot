@@ -29,7 +29,7 @@ The gap between the untrained and trained exposure is 44.89 percentage points on
 
 The explicit component is visible in the action distribution. The trained agent selected FLAT on 41.9% of ETH bars and 45.8% of BNB bars, against 0.2% and 0.0% for the untrained network, so this behaviour was learned rather than present at initialisation.
 
-The concealed component works through a change in which active actions the agent prefers (Figure 4.3). Immediate-entry primitives (trend and swing) fell from 48.73% of the untrained network's selections to 2.87% of the trained agent's, a seventeen-fold drop. The share of the grid primitive stayed roughly the same (55.19% trained against 51.45% untrained on ETH). This matters because the primitives fill very differently. Trend and swing acquire a position on 93.9–97.2% of the bars where they are selected. Grid acquires one on only 10.23% (ETH) and 9.76% (BNB), because a price level must be crossed before it buys. In effect, the agent chose actions that count as activity but, nine times out of ten, deploy nothing.
+The concealed component works through a change in which active actions the agent prefers (Figure 4.3). Immediate-entry primitives (trend and swing) fell from 48.32% of the untrained network's selections to 2.87% of the trained agent's, a seventeen-fold drop. The share of the grid primitive stayed roughly the same (55.19% trained against 51.45% untrained on ETH). This matters because the primitives fill very differently. Trend and swing acquire a position on 93.3–97.2% of the bars where they are selected. Grid acquires one on only 10.23% (ETH) and 9.76% (BNB), because a price level must be crossed before it buys. In effect, the agent chose actions that count as activity but hold no capital on about four bars in five (78.9% of active bars on ETH, 77.2% on BNB).
 
 <!-- FIGURE fig_4_3_action_mix -->
 
@@ -39,13 +39,13 @@ This dissertation calls the second pattern concealed abstention: selecting nomin
 
 ### Why the agent abstained
 
-The reward decomposition shows why abstention paid. With the drawdown penalty weighted at λ = 0.5, the penalty term contributed 0.310 (ETH) and 0.401 (BNB) to total reward, against profit-and-loss terms of −0.579 and −0.328. The penalty was as large as the entire profit-and-loss signal.
+The reward decomposition shows why abstention paid. With the drawdown penalty weighted at λ = 0.5, the penalty term subtracted 0.310 (ETH) and 0.401 (BNB) from total reward, against profit-and-loss terms of −0.579 and −0.328. The penalty was about half the size of the profit-and-loss term on ETH and larger than it on BNB.
 
 This happened despite an incentive designed to prevent it. The reward's first term is measured relative to buy-and-hold (Section 3.2), so a flat bar in a rising market is penalised by exactly the passive gain it gives up. The withdrawal therefore cannot be blamed on a missing incentive to participate; the drawdown penalty and the double-counted fees (Section 3.2) outweighed it.
 
 ### The do-nothing policy scores higher under the agent's own reward
 
-The decisive test is to score a permanently flat policy with the same reward function the agent was trained on. Across five seeds, folds 1 and 4, and both assets, the flat policy scored higher than the trained agent in 19 of 20 cells (Figure 4.4). The single exception is BNB fold 4 with seed 999, where the trained agent scored 0.0944 against 0.0801 for the flat policy, a margin of 0.0143. Seed 999 also produced the best BNB return in the seed sweep (+3.95%, Section 4.3). Training beat doing nothing only at its best draw, and then only narrowly.
+The decisive test is to score a permanently flat policy with the same reward function the agent was trained on. Across five seeds, folds 1 and 4, and both assets, the flat policy scored higher than the trained agent in 19 of 20 cells (Figure 4.4). The single exception is BNB fold 4 with seed 999, where the trained agent scored 0.0944 against 0.0801 for the flat policy, a margin of 0.0143. Seed 999 also had the lowest drawdown and the highest Sharpe ratio in that fold (Section 4.3). Training beat doing nothing only at one of its best draws, and then only narrowly.
 
 <!-- FIGURE fig_4_5_flat_vs_trained -->
 
@@ -104,7 +104,7 @@ Neither difference is significant.
 
 ### Drawdown differences
 
-Drawdown differences were tested with a fold-clustered bootstrap (Politis and Romano, 1994): the six per-fold drawdown values are resampled as units, so no resampled block crosses a gap between folds.
+Drawdown differences were tested with a fold-cluster bootstrap: the six per-fold drawdown differences are resampled with replacement as whole units, so nothing crosses a gap between folds.
 
 Table 4.4: Per-fold maximum-drawdown difference (PPO − RF), fold-clustered bootstrap
 
@@ -114,17 +114,17 @@ Table 4.4: Per-fold maximum-drawdown difference (PPO − RF), fold-clustered boo
 | 95% confidence interval | [−0.121, −0.020] | [−0.138, +0.022] |
 | Excludes zero | Yes | No |
 
-On ETH, PPO's per-fold drawdowns are consistently below the baseline's; on BNB they cannot be distinguished. The ETH result must be read with its mechanism. It is consistent with PPO's much lower deployment (4.3% against 21.1%), not with timing skill: if it were skill, PPO would not rank worst against random entries matched on the same exposure (Section 4.2), which it does on both assets. The finding is that a lower-exposure policy drew down less per fold, not that PPO reduces drawdown.
+On ETH, PPO's per-fold drawdowns are below the baseline's in five of six folds, and the mean difference excludes zero; on BNB they cannot be distinguished. The ETH result must be read with its mechanism. It is consistent with PPO's much lower deployment (4.3% against 21.1%), not with timing skill: if it were skill, PPO would not rank worst against random entries matched on the same exposure (Section 4.2), which it does on both assets. The finding is that a lower-exposure policy drew down less per fold, not that PPO reduces drawdown.
 
 The split between the two assets also illustrates a point about scale. With two assets and an effective sample of six folds each, a result that is significant on one asset but not the other supports no general conclusion. It shows sensitivity to the choice of asset, which single-asset studies cannot reveal, and is why both assets are always reported together.
 
 ### Statistical power
 
-The design is underpowered by an order of magnitude, so the null result cannot be read as evidence of parity. Using the same variance estimator, the minimum detectable effect at 80% power and α = 0.05 is 81.7 percentage points of cumulative return on ETH and 179.3 on BNB. The observed differences were +9.7 and −11.3 points. Figure 4.6 shows how far inside the undetectable range they lie.
+The design is underpowered by an order of magnitude, so the null result cannot be read as evidence of parity. Using the same variance estimator, the minimum detectable effect at 80% power and α = 0.05 is 81.7 percentage points of cumulative return on ETH and 179.3 on BNB. The observed differences, on the same constant-per-bar basis, were +9.7 and −11.3 points (in compounded total return, Tables 4.1 and 4.2, they are +8.4 and −5.6 points). Figure 4.6 shows how far inside the undetectable range they lie.
 
 <!-- FIGURE fig_4_6_detectable_effect -->
 
-The minimum detectable effect is a prospective design quantity, computed from the variance and the sample size alone. Observed (retrospective) power is not reported, because it is a direct function of the p-value and adds no information (Hoenig and Heisey, 2001). The clearest evidence of underpowering is instead the width of the confidence intervals in Table 4.4: about 0.10 on ETH and 0.16 on BNB, against effects of order 0.05–0.13. An interval wider than the effect cannot resolve that effect.
+The minimum detectable effect is a prospective design quantity, computed from the variance and the sample size alone. Observed (retrospective) power is not reported, because it is a direct function of the p-value and adds no information (Hoenig and Heisey, 2001). The clearest evidence of underpowering is instead the width of the confidence intervals in Table 4.4: about 0.10 on ETH and 0.16 on BNB, against effects of 0.05–0.07. With intervals this wide relative to the effects, the drawdown difference is resolved on only one of the two assets, and the return difference (Table 4.3) on neither.
 
 To put the required sample in context, Table 4.5 anchors the effect size on published positive results rather than on this study's own estimate.
 
@@ -143,18 +143,18 @@ Table 4.6: Type S and Type M error rates at n = 4,314
 
 | Anchor | Pair | Power | Type S (wrong sign, if significant) | Type M (exaggeration, if significant) |
 | :--- | :--- | :---: | :---: | :---: |
-| 1.7 pp/yr | ETH | 0.73 | ~0.000 | 1.17× |
-| 1.7 pp/yr | BNB | 0.32 | 0.0008 | 1.74× |
-| 10 pp/yr | ETH | ~1.0 | ~0 | ~1.0× |
-| 10 pp/yr | BNB | ~1.0 | ~0 | ~1.0× |
+| 1.7 pp/yr | ETH | 0.050 | 0.45 | about 60× |
+| 1.7 pp/yr | BNB | 0.050 | 0.47 | about 100× |
+| 10 pp/yr | ETH | 0.056 | 0.25 | about 10× |
+| 10 pp/yr | BNB | 0.052 | 0.35 | about 17× |
 
-At the S&P-anchored effect, a study of this size that did reach significance on BNB would overstate the effect by about 1.7 times on average. The design is therefore not only insensitive; when it does detect something, the estimate is inflated. At the larger crypto anchor the design is adequate, which marks its limit: it can resolve very large claimed effects, but not the sizes typically reported.
+At both anchors the power is barely above the 5% false-positive rate, so a significant result would be close to a coin toss. If one did occur, it would have a 25–47% chance of pointing the wrong way and would exaggerate the true effect roughly 10 to 100 times. The design is therefore not only insensitive; even at the larger crypto anchor, any significant result it produced would be unreliable. (These values are computed from the same per-bar standard error that gives the minimum detectable effect above, and are consistent with Table 4.5.)
 
 ### Seed variance
 
-Variation between random seeds is larger than the difference between methods. Across five PPO seeds on folds 1 and 4 of both assets, cumulative return varied by up to 27 percentage points within a single fold (BNB fold 4: −22.99% for seed 7 against +3.95% for seed 999), and maximum drawdown by a factor of 45 (0.007 against 0.312). On BNB the paired statistic changes sign across seeds. The single-seed comparison in Section 4.2 is one draw from this distribution and supports no method-level claim in either direction. The seed sweep covers folds 1 and 4 only, so its figures are not directly comparable with the six-fold tables.
+Variation between random seeds is larger than the difference between methods. Across five PPO seeds on folds 1 and 4 of both assets, cumulative return varied by up to 28 percentage points within a single fold (BNB fold 4: −22.99% for seed 7 against +4.69% for seed 123), and maximum drawdown by a factor of 45 (0.007 against 0.312). The paired statistic changes sign across seeds on both assets (BNB −0.92 to +0.80; ETH −0.03 to +1.98). The single-seed comparison in Section 4.2 is one draw from this distribution and supports no method-level claim in either direction. The seed sweep covers folds 1 and 4 only, so its figures are not directly comparable with the six-fold tables.
 
-Seed 42, used for all headline figures, sits at the unfavourable end of this distribution. Its BNB maximum drawdown over folds 1 and 4 combined is 0.2625, against a five-seed mean of 0.102. It is at or near the unfavourable end in three of its four cells and is the worst draw in BNB fold 1. The headline figures are therefore pessimistic towards the reinforcement-learning agent rather than flattering to it, and no BNB-specific magnitude should be read as typical of the method.
+Seed 42, used for all headline figures, sits at the unfavourable end of this distribution. Its BNB per-fold drawdowns are 0.190 in fold 1, the worst of the five seeds (five-seed mean 0.098), and 0.105 in fold 4, close to that fold's mean of 0.106. It is at or near the unfavourable end in both BNB cells and in the middle of the distribution on ETH. The headline figures are therefore pessimistic towards the reinforcement-learning agent rather than flattering to it, and no BNB-specific magnitude should be read as typical of the method.
 
 ## Protocol Corrections
 
@@ -162,11 +162,11 @@ The results in this chapter are the product of a corrected protocol. A series of
 
 ## Regime-Signal Economics
 
-The supervised classifier's accuracy did not translate into economic value. Its out-of-sample accuracy is 0.80–0.87, subject to the provenance caveat in Section 3.3. Yet on bars predicted as DANGER, the market rose 47% (ETH) and 38% (BNB) of the time. The mean forward 24-bar return on DANGER bars was −0.79% and −0.68%, an edge far too small to pay for the missed gains on false positives. Meanwhile, 36.9% (ETH) and 17.9% (BNB) of bars not flagged as DANGER went on to suffer forward drawdowns of 3% or more.
+The supervised classifier's accuracy did not translate into economic value. The deployed classifiers' out-of-sample accuracy is 0.849 (ETH) and 0.870 (BNB), subject to the provenance caveat in Section 3.3. Yet on bars predicted as DANGER, the market rose 47% (ETH) and 38% (BNB) of the time. The mean forward 24-bar return on DANGER bars was −0.79% and −0.68%, an edge far too small to pay for the missed gains on false positives. Meanwhile, 36.9% (ETH) and 17.9% (BNB) of bars not flagged as DANGER went on to suffer forward drawdowns of 3% or more.
 
-These figures fit together. The overall mean on DANGER bars is negative because the correct warnings pull it down, but each false warning gave up a large gain: +3.34% (ETH) and +3.88% (BNB) mean forward return (Section 3.7, register row 8). That asymmetry, a small edge when right and a large missed gain when wrong, is how high classification accuracy fails to produce value.
+These figures fit together. The overall mean on DANGER bars is negative because the correct warnings pull it down, but false warnings gave up a large gain on average: +3.34% (ETH) and +3.88% (BNB) mean forward return (Section 3.7, register row 8). That asymmetry, a small edge when right and a large missed gain when wrong, is how high classification accuracy fails to produce value.
 
-The same pattern holds at coarser scales. Non-overlapping 24-bar blocks entered on a DANGER signal returned −0.57% (ETH) and −0.49% (BNB), against +0.39% and +0.23% for blocks without the flag. At portfolio level, the gated strategy underperformed buy-and-hold by 67.1 percentage points on ETH and 20.8 on BNB over the same window. That is the real cost of the gate.
+The same pattern holds at coarser scales. Non-overlapping 24-bar blocks entered on a DANGER signal returned −0.57% (ETH) and −0.49% (BNB), against +0.39% and +0.23% for blocks without the flag. At portfolio level, the gated strategy underperformed buy-and-hold by 59.1 percentage points on ETH and 16.0 on BNB over the same window (compounded returns, Tables 4.1 and 4.2). That is the real cost of the gate.
 
 ## Removing the Fee Double-Count
 
@@ -183,7 +183,7 @@ Table 4.7: Effect of counting fees once instead of twice (seed 42, six folds per
 | Median per-fold maximum drawdown | 0.032 | 0.062 | 0.053 | 0.052 |
 | Folds where doing nothing scored higher | – | 6 of 6 | – | 6 of 6 |
 
-Counting fees once roughly doubled the capital the agent deployed, and it chose trend and swing actions more often. But it still deployed less than a tenth of its capital, far below the untrained network (49%) and the Random Forest baseline (21% on ETH, 61% on BNB). It still chose to do nothing on about 40% of bars. Under the corrected reward, the do-nothing policy scored higher than the trained agent in all six folds on both assets. The extra trading also lost money: total return fell to −43.2% on ETH and −38.5% on BNB.
+Counting fees once doubled the capital the agent deployed on ETH (4.3% to 8.5%) and raised it by about 60% on BNB (5.2% to 8.4%), and the agent chose trend and swing actions more often. But it still deployed less than a tenth of its capital, far below the untrained network (49%) and the Random Forest baseline (21% on ETH, 61% on BNB). It still chose to do nothing on about 40% of bars. Under the corrected reward, the do-nothing policy scored higher than the trained agent in all six folds on both assets. The extra trading also lost money: total return fell to −43.2% on ETH and −38.5% on BNB.
 
 The fee double-count is therefore not the main cause of the abstention. Removing it changed the amount of abstention, but not the result. The rest of the reward, a return measured against buy-and-hold together with the drawdown penalty, still makes staying out of the market the best choice in this environment. This is a single-seed result, so it shows the direction of the effect rather than its exact size.
 

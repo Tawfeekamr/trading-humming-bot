@@ -60,6 +60,8 @@ Holm, S. (1979) 'A Simple Sequentially Rejective Multiple Test Procedure', *Scan
 
 Jiang, Z., Xu, D. and Liang, J. (2017) 'A Deep Reinforcement Learning Framework for the Financial Portfolio Management Problem', arXiv:1706.10059.
 
+Juozapaitis, Z., Koul, A., Fern, A., Erwig, M. and Doshi-Velez, F. (2019) 'Explainable Reinforcement Learning via Reward Decomposition', *IJCAI/ECAI 2019 Workshop on Explainable Artificial Intelligence*. Available at: https://par.nsf.gov/servlets/purl/10159391 (Accessed: 26 November 2026).
+
 Karwowski, J., Hayman, O., Bai, X., Kiendlhofer, K., Griffin, C. and Skalse, J. (2024) 'Goodhart's Law in Reinforcement Learning', *International Conference on Learning Representations (ICLR 2024)*.
 
 Kochliaridis, V., Kouloumpris, E. and Vlahavas, I. (2023) 'Combining Deep Reinforcement Learning with Technical Analysis and Trend Monitoring on Cryptocurrency Markets', *Neural Computing and Applications*, 35(29), pp. 21445–21462.

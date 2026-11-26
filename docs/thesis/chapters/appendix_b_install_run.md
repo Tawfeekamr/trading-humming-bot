@@ -7,8 +7,8 @@ This appendix explains how to check the results, re-run the evaluation, run the 
 | Task | Software needed |
 |---|---|
 | Check the results (B.2) | Python 3 with pandas and numpy |
-| Re-run the evaluation (B.3) | Python with scikit-learn 1.6.1, numpy 2.5.2, pandas 3.0.5, PyTorch 2.13 and stable-baselines3 2.9 (listed in `requirements-rl.txt` and the run manifest) |
-| Run the tests (B.4) | Python 3.12 with `requirements.txt`; the Rust toolchain (edition 2021) with Cargo |
+| Re-run the evaluation (B.3) | Python with scikit-learn 1.6.1, numpy 2.5.2, pandas 3.0.5, PyTorch 2.13 and stable-baselines3 2.9 (the exact versions are in the run manifest; `requirements.txt` and `requirements-rl.txt` give the packages) |
+| Run the tests (B.4) | Python 3.12 with `requirements.txt` and `requirements-rl.txt`; the Rust toolchain (edition 2021) with Cargo |
 | Run the live system (B.5) | Docker with Docker Compose; exchange and Telegram keys for paper trading |
 
 **B.2 Check the headline results (about five minutes)**
@@ -43,7 +43,7 @@ The reproduction guide (`REPRODUCE.md`) has similar short checks for the per-fol
 **B.3 Re-run the walk-forward evaluation**
 
 ```bash
-pip install -r requirements-rl.txt
+pip install -r requirements.txt -r requirements-rl.txt
 python -m src.rl.walk_forward --pairs ETHUSDT BNBUSDT \
   --data-end 2026-07-05 --timesteps 1000000 --report-dir reports
 ```
@@ -53,8 +53,8 @@ The data end date must be given; it fixes the data window. If the trained models
 **B.4 Run the tests**
 
 ```bash
-pip install -r requirements.txt
-pytest tests/ -v                       # Python tests
+pip install -r requirements.txt -r requirements-rl.txt
+pytest tests/ -v                       # Python tests (the RL tests are skipped without requirements-rl.txt)
 
 cd trading-engine-core
 cargo test --no-fail-fast              # Rust tests
@@ -65,7 +65,7 @@ cargo run --bin validate_config -- ../config/strategy.yaml
 
 1. Create `.env` from `.env.example` (exchange and Telegram keys) and `.env.docker` from `.env.docker.example` (signal-listener settings), and fill in your own values. Do not commit these files. (`.env.rust` holds no secrets; it only tells the engine which variable names contain the keys.)
 2. Check the strategy settings in `config/strategy.yaml` (B.4 shows how to validate them).
-3. Start the three containers:
+3. Start the three containers. The compose file pulls the prebuilt images from the project's container registry; to run the archived code instead, build the images first from `Dockerfile.rust` and `Dockerfile.hybrid`.
 
 ```bash
 docker compose -f docker-compose.rust.yml up -d
@@ -78,5 +78,5 @@ The system trades in paper mode only. No real orders are sent.
 **B.6 Known limits of reproduction**
 
 - PPO model weights are not bit-for-bit identical across machines, because of small numerical differences in PyTorch on different hardware. The saved return series, and all statistics computed from them, are exact.
-- The trained model files are not included in the archive. They can be regenerated with B.3, which uses the recorded seed and data window for each model.
+- The trained model files are not included in the archive. The walk-forward models can be regenerated with B.3, which uses the recorded seed and data window for each model; the 20 seed-sweep models need a separate run of the seed-sweep script.
 - The saved results were produced from slightly different versions of the code. The differences affect only evaluation and reporting code, not training or the environment.
