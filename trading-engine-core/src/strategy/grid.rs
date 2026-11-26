@@ -95,6 +95,10 @@ pub struct GridStrategy {
     /// top of the next `on_tick` (which runs immediately after, in the same
     /// engine cycle). `None` when no flat-close is pending.
     force_flat_close: Option<OrderRequest>,
+    /// True from the moment a force-flat close is handed to the engine until
+    /// the inventory is flat again. Stops a second full-inventory sell while
+    /// the first is still unfilled (the stash alone is empty by then).
+    force_flat_in_flight: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -103,6 +107,16 @@ struct GridOrder {
 }
 
 impl GridStrategy {
+    /// Hand the stashed force-flat close to the engine (once) and mark it in
+    /// flight until the inventory is flat again.
+    fn take_force_flat_close(&mut self) -> Option<OrderRequest> {
+        let close = self.force_flat_close.take();
+        if close.is_some() {
+            self.force_flat_in_flight = true;
+        }
+        close
+    }
+
     pub fn new(pair: &str, config: &GridConfig, tick_size: f64, step_size: f64, telegram: TelegramBot) -> Self {
         Self::new_with_state_dir(pair, config, tick_size, step_size, "data", telegram)
     }
@@ -148,6 +162,7 @@ impl GridStrategy {
             last_quote_balance: 0.0,
             entry_attribution: None,
             force_flat_close: None,
+            force_flat_in_flight: false,
         };
         me.load_state();
         me
@@ -547,7 +562,7 @@ impl Strategy for GridStrategy {
         // C2: drain a pending force_flat Market sell BEFORE the Paused-state early
         // return — otherwise the inventory-close order would never reach the
         // engine. force_flat() stashed this after flipping state to Paused.
-        if let Some(close_req) = self.force_flat_close.take() {
+        if let Some(close_req) = self.take_force_flat_close() {
             return Ok(vec![close_req]);
         }
 
@@ -837,6 +852,7 @@ impl Strategy for GridStrategy {
                     Some(fill.quantity), realized, Some("grid_sell"), None, &grid_ctx);
                 if self.inventory_qty <= 1e-12 {
                     self.entry_attribution = None;
+                    self.force_flat_in_flight = false; // flat: a later close is allowed
                 }
             }
         }
@@ -944,7 +960,14 @@ impl Strategy for GridStrategy {
         //    called every tick while flat=true; without this guard, a slow paper
         //    fill would let the next tick stash a SECOND sell for inventory the
         //    first hasn't cleared yet → duplicate reduce-only sells.
-        if self.inventory_qty > 1e-12 && self.diag_price > 0.0 && self.force_flat_close.is_none() {
+        if self.inventory_qty <= 1e-12 {
+            self.force_flat_in_flight = false; // nothing left in flight
+        }
+        if self.inventory_qty > 1e-12
+            && self.diag_price > 0.0
+            && self.force_flat_close.is_none()
+            && !self.force_flat_in_flight
+        {
             let cid = format!("grid_{}_sell_flat", self.pair);
             self.force_flat_close = Some(OrderRequest {
                 symbol: self.pair.replace("-", ""),
@@ -1362,6 +1385,40 @@ mod tests {
 
         // (4): state flipped to Paused.
         assert_eq!(grid.state, GridState::Paused);
+    }
+
+    /// Aug 2026 audit, latent duplicate-sell: on_tick drains the stashed close
+    /// in the same cycle, so the stash is empty again while the market sell is
+    /// still unfilled (paper fill cooldown). force_flat runs every tick while
+    /// flat, so the next tick used to stash a SECOND full-inventory sell.
+    #[tokio::test]
+    async fn force_flat_never_sends_a_second_close_while_first_is_unfilled() {
+        let mut grid = make_grid();
+        grid.inventory_qty = 2.0;
+        grid.inventory_cost = 200.0;
+        grid.diag_price = 105.0;
+        grid.state = GridState::Active;
+
+        grid.force_flat();
+        assert!(grid.take_force_flat_close().is_some(), "first close is sent");
+
+        // Next ticks, sell not yet filled: no further close may be emitted.
+        for _ in 0..3 {
+            grid.force_flat();
+            assert!(grid.take_force_flat_close().is_none(), "duplicate close must not be sent");
+        }
+
+        // The close fills -> inventory flat -> nothing left to sell.
+        grid.on_fill(&gf("owner:0#grid_BTC-USDT_sell_flat", OrderSide::Sell, 105.0, 2.0)).await.unwrap();
+        assert!(grid.inventory_qty.abs() < 1e-9);
+        grid.force_flat();
+        assert!(grid.take_force_flat_close().is_none(), "flat book sends nothing");
+
+        // New inventory later (after reactivation) can be flattened again.
+        grid.inventory_qty = 1.0;
+        grid.inventory_cost = 100.0;
+        grid.force_flat();
+        assert!(grid.take_force_flat_close().is_some(), "a new position can be closed");
     }
 
     /// If inventory is zero, force_flat skips stashing a close (nothing to sell)
