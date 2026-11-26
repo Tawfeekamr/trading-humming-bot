@@ -14,11 +14,11 @@ Bailey, D.H., Borwein, J.M., López de Prado, M. and Zhu, Q.J. (2017) 'The Proba
 
 Breiman, L. (2001) 'Random Forests', *Machine Learning*, 45(1), pp. 5–32.
 
-Brinson, G.P., Hood, L.R. and Beebower, G.L. (1986) 'Determinants of Portfolio Performance', *Financial Analysts Journal*, 42(4), pp. 4–10.
+Brinson, G.P., Hood, L.R. and Beebower, G.L. (1986) 'Determinants of Portfolio Performance', *Financial Analysts Journal*, 42(4), pp. 39–44.
 
 Chow, C.K. (1970) 'On Optimum Recognition Error and Reject Tradeoff', *IEEE Transactions on Information Theory*, 16(1), pp. 41–46.
 
-Cremers, M. and Petajisto, A. (2009) 'How Active Is Your Fund Manager? A New Measure That Predicts Performance', *Journal of Finance*, 64(5), pp. 2333–2365.
+Cremers, M. and Petajisto, A. (2009) 'How Active Is Your Fund Manager? A New Measure That Predicts Performance', *Review of Financial Studies*, 22(9), pp. 3329–3365. doi:10.1093/rfs/hhp057.
 
 Deng, Y., Bao, F., Kong, Y., Ren, Z. and Dai, Q. (2017) 'Deep Direct Reinforcement Learning for Financial Signal Representation and Trading', *IEEE Transactions on Neural Networks and Learning Systems*, 28(3), pp. 653–664.
 
@@ -44,7 +44,7 @@ Gort, B.J.D., Liu, X.-Y., Sun, X., Gao, J., Chen, S. and Wang, C.D. (2022) 'Deep
 
 Guo, C., Pleiss, G., Sun, Y. and Weinberger, K.Q. (2017) 'On Calibration of Modern Neural Networks', *Proceedings of the 34th International Conference on Machine Learning (ICML 2017)*, PMLR 70, pp. 1321–1330.
 
-Hafsi and Vittori (2024) 'Optimal Execution with Reinforcement Learning', arXiv:2411.06389.
+Hafsi, Y. and Vittori, E. (2024) 'Optimal Execution with Reinforcement Learning', arXiv:2411.06389.
 
 Hambly, B., Xu, R. and Yang, H. (2023) 'Recent Advances in Reinforcement Learning in Finance', *Mathematical Finance*, 33(3), pp. 437–503.
 
@@ -62,15 +62,15 @@ Jiang, Z., Xu, D. and Liang, J. (2017) 'A Deep Reinforcement Learning Framework 
 
 Karwowski, J., Hayman, O., Bai, X., Kiendlhofer, K., Griffin, C. and Skalse, J. (2024) 'Goodhart's Law in Reinforcement Learning', *International Conference on Learning Representations (ICLR 2024)*.
 
-Kochliaridis, V., Kouloumpris, E. and Vlahavas, I. (2023) 'Combining Deep Reinforcement Learning with Technical Analysis and Trend Monitoring on Cryptocurrency Markets', *Neural Computing and Applications*, 35, pp. 21445–21462.
+Kochliaridis, V., Kouloumpris, E. and Vlahavas, I. (2023) 'Combining Deep Reinforcement Learning with Technical Analysis and Trend Monitoring on Cryptocurrency Markets', *Neural Computing and Applications*, 35(29), pp. 21445–21462.
 
 Krakovna, V., Uesato, J., Mikulik, V., Rahtz, M., Everitt, T., Kumar, R., Kenton, Z., Leike, J. and Legg, S. (2020) 'Specification Gaming: The Flip Side of AI Ingenuity', *DeepMind Blog*, 21 April. Available at: https://deepmind.google/discover/blog/specification-gaming-the-flip-side-of-ai-ingenuity/ (Accessed: 26 November 2026).
 
 Kumar, A., Zhou, A., Tucker, G. and Levine, S. (2020) 'Conservative Q-Learning for Offline Reinforcement Learning', *Advances in Neural Information Processing Systems 33 (NeurIPS 2020)*, pp. 1179–1191.
 
-Lin, Z., Yang, D., Zhao, L., Qin, T., Yang, G. and Liu, T.-Y. (2020) 'RD2: Reward Decomposition with Representation Disentanglement', *Advances in Neural Information Processing Systems 33 (NeurIPS 2020)*, pp. 11298–11308.
+Lin, Z., Yang, D., Zhao, L., Qin, T., Yang, G. and Liu, T.-Y. (2020) 'RD²: Reward Decomposition with Representation Decomposition', *Advances in Neural Information Processing Systems 33 (NeurIPS 2020)*, pp. 11298–11308.
 
-Lin, Z., Zhao, L., Yang, D., Qin, T., Yang, G. and Liu, T.-Y. (2019) 'Distributional Reward Decomposition for Reinforcement Learning', *Advances in Neural Information Processing Systems 32 (NeurIPS 2019)*.
+Lin, Z., Zhao, L., Yang, D., Qin, T., Liu, T.-Y. and Yang, G. (2019) 'Distributional Reward Decomposition for Reinforcement Learning', *Advances in Neural Information Processing Systems 32 (NeurIPS 2019)*.
 
 Liu, B. et al. (2023) 'Lazy Agents: A New Perspective on Solving Sparse Reward Problem in Multi-agent Reinforcement Learning', *Proceedings of the 40th International Conference on Machine Learning (ICML 2023)*, PMLR 202.
 

@@ -1398,9 +1398,9 @@ live routing must not be enabled on this codebase.
 - Agarwal, R., Schwarzer, M., Castro, P.S., Courville, A.C. and Bellemare, M.G. (2021) 'Deep Reinforcement Learning at the Edge of the Statistical Precipice', *Advances in Neural Information Processing Systems 34 (NeurIPS 2021)*.
 - Amirzadeh, R., Thiruvady, D., Nazari, A. and Ee, M.S. (2023) 'A Framework for Empowering Reinforcement Learning Agents with Causal Analysis: Enhancing Automated Cryptocurrency Trading', arXiv:2310.09462.
 - Bailey, D.H. and López de Prado, M. (2014) 'The Deflated Sharpe Ratio', *Journal of Portfolio Management*, 40(5), pp. 94–107.
-- Brinson, G.P., Hood, L.R. and Beebower, G.L. (1986) 'Determinants of Portfolio Performance', *Financial Analysts Journal*, 42(4), pp. 4–10.
+- Brinson, G.P., Hood, L.R. and Beebower, G.L. (1986) 'Determinants of Portfolio Performance', *Financial Analysts Journal*, 42(4), pp. 39–44.
 - Chow, C.K. (1970) 'On Optimum Recognition Error and Reject Tradeoff', *IEEE Transactions on Information Theory*, 16(1), pp. 41–46.
-- Cremers, M. and Petajisto, A. (2009) 'How Active Is Your Fund Manager? A New Measure That Predicts Performance', *Journal of Finance*, 64(5), pp. 2333–2365.
+- Cremers, M. and Petajisto, A. (2009) 'How Active Is Your Fund Manager? A New Measure That Predicts Performance', *Review of Financial Studies*, 22(9), pp. 3329–3365.
 - Diebold, F.X. and Mariano, R.S. (1995) 'Comparing Predictive Accuracy', *Journal of Business & Economic Statistics*, 13(3), pp. 253–263.
 - Felizardo, L.K. et al. (2022) 'Outperforming Algorithmic Trading Reinforcement Learning Systems: A Supervised Approach to the Cryptocurrency Market', *Expert Systems with Applications*, 202, Art. 117259.
 - Frazzini, A. and Pedersen, L.H. (2014) 'Betting Against Beta', *Journal of Financial Economics*, 111(1), pp. 1–25.
@@ -1410,12 +1410,12 @@ live routing must not be enabled on this codebase.
 - Geifman, Y. and El-Yaniv, R. (2017) 'Selective Classification for Deep Neural Networks', *Advances in Neural Information Processing Systems 30 (NeurIPS 2017)*.
 - Geifman, Y. and El-Yaniv, R. (2019) 'SelectiveNet: A Deep Neural Network with an Integrated Reject Option', *Proceedings of the 36th International Conference on Machine Learning (ICML 2019)*, PMLR 97, pp. 2151–2159.
 - Gort, B.J.D., Liu, X.-Y., Sun, X., Gao, J., Chen, S. and Wang, C.D. (2022) 'Deep Reinforcement Learning for Cryptocurrency Trading: Practical Approach to Address Backtest Overfitting', arXiv:2209.05559.
-- Hafsi and Vittori (2024) 'Optimal Execution with Reinforcement Learning', arXiv:2411.06389.
+- Hafsi, Y. and Vittori, E. (2024) 'Optimal Execution with Reinforcement Learning', arXiv:2411.06389.
 - Hoenig, J.M. and Heisey, D.M. (2001) 'The Abuse of Power: The Pervasive Fallacy of Power Calculations for Data Analysis', *The American Statistician*, 55(1), pp. 19–24.
 - Holm, S. (1979) 'A Simple Sequentially Rejective Multiple Test Procedure', *Scandinavian Journal of Statistics*, 6(2), pp. 65–70.
-- Kochliaridis, V., Kouloumpris, E. and Vlahavas, I. (2023) 'Combining Deep Reinforcement Learning with Technical Analysis and Trend Monitoring on Cryptocurrency Markets', *Neural Computing and Applications*, 35, pp. 21445–21462.
-- Lin, Z., Zhao, L., Yang, D., Qin, T., Yang, G. and Liu, T.-Y. (2019) 'Distributional Reward Decomposition for Reinforcement Learning', *Advances in Neural Information Processing Systems 32 (NeurIPS 2019)*.
-- Lin, Z., Yang, D., Zhao, L., Qin, T., Yang, G. and Liu, T.-Y. (2020) 'RD2: Reward Decomposition with Representation Disentanglement', *Advances in Neural Information Processing Systems 33 (NeurIPS 2020)*, pp. 11298–11308.
+- Kochliaridis, V., Kouloumpris, E. and Vlahavas, I. (2023) 'Combining Deep Reinforcement Learning with Technical Analysis and Trend Monitoring on Cryptocurrency Markets', *Neural Computing and Applications*, 35(29), pp. 21445–21462.
+- Lin, Z., Zhao, L., Yang, D., Qin, T., Liu, T.-Y. and Yang, G. (2019) 'Distributional Reward Decomposition for Reinforcement Learning', *Advances in Neural Information Processing Systems 32 (NeurIPS 2019)*.
+- Lin, Z., Yang, D., Zhao, L., Qin, T., Yang, G. and Liu, T.-Y. (2020) 'RD²: Reward Decomposition with Representation Decomposition', *Advances in Neural Information Processing Systems 33 (NeurIPS 2020)*, pp. 11298–11308.
 - Liu, B. et al. (2023) 'Lazy Agents: A New Perspective on Solving Sparse Reward Problem in Multi-agent Reinforcement Learning', *Proceedings of the 40th International Conference on Machine Learning (ICML 2023)*, PMLR 202.
 - Ma, Y. (2025) 'Myopic Optimality: Why Reinforcement Learning Portfolio Management Strategies Lose Money', arXiv:2509.12764.
 - Marot, A. et al. (2021) 'Learning to Run a Power Network Challenge: A Retrospective Analysis', arXiv:2103.03104.
