@@ -281,8 +281,17 @@ impl UnifiedTradeJournal {
         else {
             return false;
         };
-        let lo = (t - Duration::seconds(60)).to_rfc3339();
-        let hi = (t + Duration::seconds(60)).to_rfc3339();
+        // Signal trades: before 1 Oct 2026 two managers (Rust and Python) could
+        // close the same trade minutes to hours apart, so the Python journal's
+        // close and the Rust live row are matched within 24 h. Other engines
+        // keep the tight 60 s window.
+        let window = if engine.starts_with("signal") {
+            Duration::hours(24)
+        } else {
+            Duration::seconds(60)
+        };
+        let lo = (t - window).to_rfc3339();
+        let hi = (t + window).to_rfc3339();
         conn.query_row(
             "SELECT 1 FROM trades
              WHERE engine = ?1 AND pair = ?2 AND is_backfilled = 0
@@ -304,7 +313,15 @@ impl UnifiedTradeJournal {
         let sources: &[(&str, &str, &str, &str, &str, &str, &str)] = &[
             ("grid",   "grid_journal.db",            "grid_trades",   "realized_pnl", "pair",   "exit_reason", ""),
             ("trend",  "trend_journal.db",           "trend_trades",  "pnl",          "pair",   "exit_reason", ""),
-            ("signal", "signal_journal.db",          "signal_trades", "realized_pnl", "symbol", "exit_reason", "WHERE action LIKE 'CLOSE_%'"),
+            // Signal journals: copy COMPLETED trades only. CLOSE_tp1 / CLOSE_tp2 rows
+            // hold one partial slice, while the final CLOSE_* row already holds the
+            // trade's cumulative P&L; copying both double-counted (Nov 2026 audit:
+            // summing trades.db gave $2,976 against a true $2,281).
+            ("signal", "signal_journal.db", "signal_trades", "realized_pnl", "symbol", "exit_reason",
+             "WHERE action LIKE 'CLOSE_%' AND action NOT IN ('CLOSE_tp1', 'CLOSE_tp2')"),
+            // The paper futures engine was never in trades.db at all.
+            ("signal_futures", "signal_journal_futures.db", "signal_trades", "realized_pnl", "symbol", "exit_reason",
+             "WHERE action LIKE 'CLOSE_%' AND action NOT IN ('CLOSE_tp1', 'CLOSE_tp2')"),
         ];
         let mut total = 0usize;
         let conn = self.conn.lock().unwrap();
@@ -675,15 +692,16 @@ mod tests {
         assert_eq!(count(&j, "signal", "ADA-USDT"), 1);
     }
 
-    /// The dedup window is bounded: a live log from 5 minutes ago is a DIFFERENT
-    /// (earlier) trade, so a new journal close must still be backfilled.
+    /// The dedup window is bounded: for signal it is 24 h (two managers could
+    /// close the same trade hours apart before 1 Oct 2026), so a live log from
+    /// 25 h ago is a DIFFERENT (earlier) trade and a new close must be backfilled.
     #[test]
     fn backfill_inserts_when_live_log_is_outside_window() {
         let tmp = tempfile::tempdir().unwrap();
         let j = UnifiedTradeJournal::new_at(tmp.path().join("trades.db")).unwrap();
 
-        // An OLD live log (5 min ago) — distinct from the new close.
-        let old_ts = (Utc::now() - Duration::minutes(5)).to_rfc3339();
+        // An OLD live log (25 h ago) — distinct from the new close.
+        let old_ts = (Utc::now() - Duration::hours(25)).to_rfc3339();
         {
             let conn = j.conn.lock().unwrap();
             conn.execute(
@@ -699,6 +717,98 @@ mod tests {
 
         // Two distinct trades: the old live log + the recovered new close.
         assert_eq!(count(&j, "signal", "ADA-USDT"), 2);
+    }
+
+    /// Journal with explicit actions, for the partial-vs-final backfill rules.
+    fn make_journal_with_actions(path: &std::path::Path, rows: &[(&str, &str, f64)]) {
+        let c = Connection::open(path).unwrap();
+        c.execute_batch(
+            "CREATE TABLE IF NOT EXISTS signal_trades (
+                id INTEGER PRIMARY KEY, timestamp TEXT, symbol TEXT, action TEXT,
+                realized_pnl REAL, exit_reason TEXT)",
+        )
+        .unwrap();
+        let ts = (Utc::now() - Duration::days(3)).to_rfc3339();
+        for (sym, action, pnl) in rows {
+            c.execute(
+                "INSERT INTO signal_trades (timestamp, symbol, action, realized_pnl, exit_reason)
+                 VALUES (?1, ?2, ?3, ?4, 'x')",
+                rusqlite::params![ts, sym, action, pnl],
+            )
+            .unwrap();
+        }
+    }
+
+    fn sum_pnl(j: &UnifiedTradeJournal, engine: &str) -> f64 {
+        let conn = j.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT COALESCE(SUM(pnl), 0) FROM trades WHERE engine=?1",
+            rusqlite::params![engine],
+            |r| r.get::<_, f64>(0),
+        )
+        .unwrap()
+    }
+
+    /// Take-profit partial rows hold one slice; the final row holds the running
+    /// total. Only the final row may be copied, or the trade is counted twice.
+    #[test]
+    fn backfill_copies_only_final_signal_rows() {
+        let tmp = tempfile::tempdir().unwrap();
+        let j = UnifiedTradeJournal::new_at(tmp.path().join("trades.db")).unwrap();
+        make_journal_with_actions(
+            &tmp.path().join("signal_journal.db"),
+            &[
+                ("SOL-USDT", "OPEN", 0.0),
+                ("SOL-USDT", "CLOSE_tp1", 30.0),
+                ("SOL-USDT", "CLOSE_tp2", 40.0),
+                ("SOL-USDT", "CLOSE_stop_loss", 75.0), // cumulative
+            ],
+        );
+
+        j.backfill_from_engine_journals().unwrap();
+
+        assert_eq!(count(&j, "signal", "SOL-USDT"), 1);
+        assert!((sum_pnl(&j, "signal") - 75.0).abs() < 1e-9);
+    }
+
+    /// The paper futures journal is copied in as its own engine.
+    #[test]
+    fn backfill_includes_futures_journal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let j = UnifiedTradeJournal::new_at(tmp.path().join("trades.db")).unwrap();
+        make_journal_with_actions(
+            &tmp.path().join("signal_journal_futures.db"),
+            &[("NEAR-USDT", "CLOSE_tp1", 12.0), ("NEAR-USDT", "CLOSE_tp3", 50.0)],
+        );
+
+        j.backfill_from_engine_journals().unwrap();
+
+        assert_eq!(count(&j, "signal_futures", "NEAR-USDT"), 1);
+        assert!((sum_pnl(&j, "signal_futures") - 50.0).abs() < 1e-9);
+        assert_eq!(count(&j, "signal", "NEAR-USDT"), 0);
+    }
+
+    /// A signal close live-logged a few hours before the journal close is the
+    /// same trade (two managers before 1 Oct) and must not be copied again.
+    #[test]
+    fn backfill_signal_dedupe_spans_hours() {
+        let tmp = tempfile::tempdir().unwrap();
+        let j = UnifiedTradeJournal::new_at(tmp.path().join("trades.db")).unwrap();
+        let earlier = (Utc::now() - Duration::hours(3)).to_rfc3339();
+        {
+            let conn = j.conn.lock().unwrap();
+            conn.execute(
+                "INSERT INTO trades (timestamp, engine, pair, pnl, exit_reason, is_backfilled)
+                 VALUES (?1, 'signal', 'ADA-USDT', -84.7, 'stop_loss', 0)",
+                rusqlite::params![earlier],
+            )
+            .unwrap();
+        }
+        make_signal_journal(tmp.path(), &[(Utc::now().to_rfc3339(), "ADA-USDT".into(), -82.8)]);
+
+        j.backfill_from_engine_journals().unwrap();
+
+        assert_eq!(count(&j, "signal", "ADA-USDT"), 1);
     }
 
     #[test]
