@@ -3,13 +3,13 @@ import { useTrades } from '../lib/trades'
 import { money } from '../lib/format'
 import { HummingbotLogo } from './HummingbotLogo'
 
-export type View = 'desk' | 'pnl' | 'mlrl' | 'hypotheses'
+export type View = 'desk' | 'pnl' | 'mlrl' | 'hypotheses' | 'findings'
 
 const START_EQUITY = 100000 // paper account seed
 
 export function Masthead({ view, setView }: { view: View; setView: (v: View) => void }) {
   const [clock, setClock] = useState('--:--:--')
-  const { trades: _raw } = useTrades()
+  const { trades: _raw, live } = useTrades()
   const trades = _raw.filter(t => t.engine !== 'mr' && t.engine !== 'swing')
 
   // Equity = seed + all-time realized; day = realized on today's UTC date.
@@ -33,6 +33,7 @@ export function Masthead({ view, setView }: { view: View; setView: (v: View) => 
     ['pnl', 'P&L'],
     ['mlrl', 'ML/RL'],
     ['hypotheses', 'HYPOTHESES'],
+    ['findings', 'FINDINGS'],
   ]
 
   return (
@@ -50,7 +51,7 @@ export function Masthead({ view, setView }: { view: View; setView: (v: View) => 
       </nav>
       <div className="mast-meta">
         <div className="meta"><span className="k">UTC</span><span className="v">{clock}</span></div>
-        <div className="meta live"><span className="dot" /><span className="v">LIVE</span></div>
+        <div className={`meta ${live ? 'live' : ''}`}><span className="dot" /><span className="v">{live ? 'LIVE' : 'SAMPLE DATA'}</span></div>
         <div className="meta"><span className="k">EQUITY</span><span className="v">{money(START_EQUITY + net)}</span></div>
         <div className="meta"><span className="k">DAY</span><span className={`v ${dayPnl >= 0 ? 'pnl-up' : 'pnl-dn'}`}>{money(dayPnl)}</span></div>
       </div>

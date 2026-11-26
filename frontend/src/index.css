@@ -349,3 +349,37 @@ table.trades .t{color:var(--stone-2);text-align:right}
 
 @media (prefers-reduced-motion:reduce){.dot,.ticker .track{animation:none!important}}
 @media (max-width:1000px){.workspace{grid-template-columns:1fr}.grid{grid-template-columns:1fr;grid-template-rows:auto}.focus-body,.pnl-grid,.tiles,.rl-reasons,.drivers-grid,.stepper,.hypo-grid{grid-template-columns:1fr}}
+
+/* Hypotheses: "not supported" verdict */
+.hypo-card.no{border-left:3px solid var(--ox)}
+.h-badge.no{color:var(--ox);background:var(--ox-tint);border:1px solid rgba(194,82,63,.3)}
+.muted-note{font-size:12px;color:var(--stone);line-height:1.6;margin-top:10px}
+
+/* Findings walk-through */
+.fx-steps{max-width:980px}
+.fx-step{gap:10px}
+.fx-head{display:flex;align-items:center;gap:12px}
+.fx-n{font-size:12px;color:var(--signal);font-weight:600}
+.fx-tag{font-size:10px;font-weight:600;letter-spacing:.2em;text-transform:uppercase;color:var(--stone)}
+.fx-ref{margin-left:auto;font-family:var(--mono);font-size:10.5px;color:var(--stone-2)}
+.fx-h{font-family:var(--display);font-weight:700;font-size:18px;line-height:1.3}
+.fx-body{font-size:13.5px;line-height:1.7;color:rgba(236,233,226,.82);max-width:820px}
+.fx-body b{color:var(--paper)}
+.fx-stats{display:flex;flex-wrap:wrap;gap:12px;margin-top:4px}
+.fx-stat{display:flex;flex-direction:column;gap:2px;padding:10px 14px;border:1px solid var(--line);border-radius:4px;background:rgba(236,233,226,.02);min-width:150px}
+.fx-sv{font-size:20px;font-weight:600;color:var(--paper)}
+.fx-sl{font-size:11px;color:var(--stone)}
+.fx-chart{margin-top:6px;padding:14px 16px;border:1px solid var(--line);border-radius:4px;background:rgba(236,233,226,.02)}
+.fx-title{font-size:11px;color:var(--stone);margin-bottom:10px}
+.fx-row{display:grid;grid-template-columns:200px 1fr 56px;align-items:center;gap:12px;margin:7px 0}
+.fx-lbl{font-size:12px;color:rgba(236,233,226,.82)}
+.fx-track{height:12px;background:rgba(236,233,226,.04);border-radius:2px;overflow:hidden}
+.fx-fill{display:block;height:100%;background:var(--signal);border-radius:0 4px 4px 0}
+.fx-fill.outline{background:transparent;border:1.5px dashed var(--signal);border-radius:2px}
+.fx-val{font-size:12px;color:var(--paper);text-align:right}
+.fx-note{font-size:11px;color:var(--stone);margin-top:10px}
+.fx-table{min-width:0}
+.fx-table td:last-child{color:var(--paper);font-size:11.5px;text-align:center;padding-left:10px}
+.fx-list{margin:4px 0 0 18px;font-size:13px;line-height:1.9;color:rgba(236,233,226,.82)}
+.fx-list b{color:var(--paper)}
+@media (max-width:640px){.fx-row{grid-template-columns:120px 1fr 48px}}

@@ -1,43 +1,45 @@
-import { REGIME } from '../lib/mock'
+import { useStrategies } from '../lib/strategies'
 
-// Deterministic "why" feature snapshot per pair for the tooltip. The real
-// values will come from the regime-pusher payload (or be recomputed from
-// klines client-side) in a later pass — the shape is what matters here.
-const WHY: Record<string, { ret: number; dd: number; adx: number }> = {
-  'ETH-USDT': { ret: 0.4, dd: 1.2, adx: 18 },
-  'BNB-USDT': { ret: -0.2, dd: 1.4, adx: 15 },
-  'XRP-USDT': { ret: 1.1, dd: 1.0, adx: 20 },
-  'DOGE-USDT': { ret: 2.4, dd: 0.3, adx: 31 },
-}
+// Live regime badge, read from the grid engine's status on /api/v1/strategies.
+// When the ML model is what pauses the grid, the bot's reason names the regime
+// ("ML regime=Trending (conf=0.88>=0.75)"); an active grid means its ranging
+// gate passed. Nothing is shown when the bot is not connected.
+
+const ML = /ML regime=(\w+)\s*\(conf=([\d.]+)/
 
 export function RegimeChip({ pair }: { pair: string }) {
-  const r = REGIME[pair]
-  if (!r) return null
-  const trending = r.label === 'trending'
-  const w = WHY[pair] ?? { ret: 0.5, dd: 1.0, adx: 18 }
-  const foot = trending ? 'up' : r.label === 'danger' ? 'dn' : 'rang'
-  const rows: [string, string, string][] = [
-    ['24h return', `${w.ret >= 0 ? '+' : ''}${w.ret.toFixed(1)}%`, trending ? '≥ 2% trend line' : '< 2% trend line'],
-    ['Max drawdown', `−${w.dd.toFixed(1)}%`, '> −3% danger floor'],
-    ['ADX', String(w.adx), trending ? 'strong directional' : 'no strong trend'],
-    ['Confidence', r.confidence.toFixed(2), 'trailing 24h now-cast'],
-  ]
+  const { rows, live } = useStrategies()
+  if (!live) return null
+  const grid = rows.find(r => r.name === 'grid' && r.pair === pair)
+  if (!grid) return null
+
+  const m = ML.exec(grid.details)
+  let label: string
+  let conf: string | null = null
+  if (m) {
+    label = m[1].toLowerCase()
+    conf = Number(m[2]).toFixed(2)
+  } else if (grid.state.toUpperCase() === 'ACTIVE') {
+    label = 'ranging'
+  } else {
+    label = 'grid paused'
+  }
+  const cls = label === 'trending' || label === 'danger' ? label : 'ranging'
+  const reason = grid.details.split('|')[0].trim()
+
   return (
-    <span className={`chip r-${r.label}`}>
+    <span className={`chip r-${cls}`}>
       <span className="b" />
-      {r.label[0].toUpperCase() + r.label.slice(1)}
+      {label[0].toUpperCase() + label.slice(1)}
       <span className="tip">
-        <div className="t-eyebrow">Why {r.label}</div>
+        <div className="t-eyebrow">Live grid gate · {pair}</div>
         <table className="tip-t">
           <tbody>
-            {rows.map(([k, v, d]) => (
-              <tr key={k}><td className="tk-k">{k}</td><td className="num">{v}</td><td className="tk-d">{d}</td></tr>
-            ))}
+            <tr><td className="tk-k">Grid state</td><td className="num">{grid.state}</td><td className="tk-d">from the bot</td></tr>
+            {conf && <tr><td className="tk-k">ML confidence</td><td className="num">{conf}</td><td className="tk-d">calibrated RF</td></tr>}
           </tbody>
         </table>
-        <div className={`t-foot ${foot}`}>
-          <span>→ {r.label}</span><span className="num">{r.confidence.toFixed(2)}</span>
-        </div>
+        <div className="t-foot rang"><span>{reason}</span></div>
       </span>
     </span>
   )

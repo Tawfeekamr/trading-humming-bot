@@ -4,6 +4,7 @@ import { Desk } from './components/Desk'
 import { Pnl } from './components/Pnl'
 import { MlRl } from './components/MlRl'
 import { Hypotheses } from './components/Hypotheses'
+import { Findings } from './components/Findings'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { TradeHistoryModal } from './components/TradeHistoryModal'
 import { FocusOverlay } from './components/FocusOverlay'
@@ -13,7 +14,10 @@ import { FocusOverlay } from './components/FocusOverlay'
 const INTERVAL = '15m'
 
 export default function App() {
-  const [view, setView] = useState<View>('desk')
+  // Open a tab straight from the address, e.g. http://localhost:5173/#findings
+  const VIEWS: View[] = ['desk', 'pnl', 'mlrl', 'hypotheses', 'findings']
+  const fromHash = window.location.hash.slice(1) as View
+  const [view, setView] = useState<View>(VIEWS.includes(fromHash) ? fromHash : 'desk')
   const [showHistory, setShowHistory] = useState(false)
   const [appFocusPair, setAppFocusPair] = useState<string | null>(null)
 
@@ -33,6 +37,9 @@ export default function App() {
       </div>
       <div className={`view ${view === 'hypotheses' ? 'active' : ''}`}>
         <ErrorBoundary label="Hypotheses"><Hypotheses /></ErrorBoundary>
+      </div>
+      <div className={`view ${view === 'findings' ? 'active' : ''}`}>
+        <ErrorBoundary label="Findings"><Findings /></ErrorBoundary>
       </div>
 
       {/* Full Trade History & Audit Log Modal */}
