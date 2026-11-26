@@ -22,8 +22,55 @@ from .signal_validator import SignalValidator
 from .signal_risk import SignalRiskGuard, LiquidationBufferError
 from .signal_position import SignalPositionManager, SignalPosition
 from .signal_journal import SignalJournal, SignalTrade
+from .unified_trades import estimate_fees, write_trade
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# Default tolerance for a DeepSeek-tuned entry beyond the signal's entry zone.
+MAX_TUNED_ENTRY_PCT = 3.0
+
+
+def entry_chase_reason(side: str, price: float, entry_low: Optional[float],
+                       entry_high: Optional[float], take_profits: list,
+                       max_pct: float = MAX_TUNED_ENTRY_PCT) -> Optional[str]:
+    """Why an entry at `price` would be chasing the move, or None if it is fine.
+
+    Nov 2026 audit: tuned entries bypassed the zone gate and relied on the LLM to
+    flag "price already past TP1". 9 of 32 spot entries filled >3% beyond the
+    zone, and in 6 the first take-profit was at or past the entry, so the
+    "take-profit" booked a loss (UNI: 21% above the zone, -$161). This is the
+    deterministic backstop: never enter at/past TP1, never more than `max_pct`
+    beyond the zone edge.
+    """
+    if not price or price <= 0:
+        return None
+    tp1 = take_profits[0] if take_profits else None
+    if side == "short":
+        if tp1 and price <= tp1:
+            return f"price {price} already at/below TP1 {tp1}"
+        if entry_low and price < entry_low * (1 - max_pct / 100):
+            return f"{(1 - price / entry_low) * 100:.1f}% below the entry zone (max {max_pct}%)"
+        return None
+    if tp1 and price >= tp1:
+        return f"price {price} already at/above TP1 {tp1}"
+    if entry_high and price > entry_high * (1 + max_pct / 100):
+        return f"{(price / entry_high - 1) * 100:.1f}% above the entry zone (max {max_pct}%)"
+    return None
+
+
+def exit_label(reason: str, pos, futures_mode: bool = False) -> str:
+    """Name the exit by what actually happened.
+
+    After TP1 the stop moves to the entry price (break-even); on spot, after TP2
+    it moves up to TP1. A stop hit after a take-profit is therefore not a loss-
+    cutting stop-loss; 23 profitable exits were mislabelled 'stop_loss'.
+    """
+    if reason != "stop_loss" or not getattr(pos, "tp1_hit", False):
+        return reason
+    if getattr(pos, "tp2_hit", False) and not futures_mode:
+        return "trailing_stop"
+    return "breakeven_stop"
 
 # Offload decision-state capture (kline fetch + ML compute) so it never blocks the
 # signal tick (position monitoring / message processing). Single worker serializes
@@ -90,6 +137,12 @@ class SignalEngine:
         # Futures-mode parallel branch: spot path stays byte-for-byte unchanged.
         self._futures_mode = futures_mode
         self._futures_connector = futures_connector
+        # Unified trades table: one row per completed trade (Nov 2026 audit).
+        self._unified_engine = "signal_futures" if futures_mode else "signal"
+        self._unified_db = Path(config.get("unified_db_path", "data/trades.db"))
+        # Paper futures sim charges no fees; spot fills pay the Rust paper taker fee.
+        self._fee_bps = 0.0 if futures_mode else float(config.get("taker_fee_bps", 5))
+        self._max_tuned_entry_pct = float(config.get("max_tuned_entry_pct", MAX_TUNED_ENTRY_PCT))
         self._leverage = leverage
         # Headless mode: when False, no ChannelListener is created and the engine
         # is driven by an external coordinator via process_one/manage.
@@ -459,6 +512,17 @@ class SignalEngine:
                 self._log_audit_trade(signal, channel_name, "skipped_below_zone", current_price, "below_entry_zone")
                 return
 
+        if signal.entry_tuned:
+            chase = entry_chase_reason("long", current_price, entry_low, entry_high,
+                                       signal.take_profits, self._max_tuned_entry_pct)
+            if chase:
+                logger.info(f"Signal skipped — tuned entry chases the move: {signal.pair} {chase}")
+                self._notify_dedupe(f"chase:{signal.pair}",
+                                    f"🚫 Signal skipped (tuned entry chases the move): {signal.pair} — {chase}\n"
+                                    + _signal_detail(signal, channel_name))
+                self._log_audit_trade(signal, channel_name, "skipped_chase", current_price, chase)
+                return
+
         fill_price = current_price
         equity = self._get_equity(connector)
         logger.info(f"Signal execution: pair={signal.pair} entry_zone={entry_low}-{entry_high} "
@@ -567,6 +631,15 @@ class SignalEngine:
             logger.warning(f"Futures signal skipped — max positions ({self._position_mgr.max_positions}) reached")
             self._notify_dedupe("max_positions", "🚫 Futures skip (max positions reached)")
             self._log_audit_trade(signal, channel_name, "skipped_max_positions", entry, "max_positions")
+            return
+        live = self._get_current_price(None, sym)
+        chase = entry_chase_reason(side, live, signal.entry_low, signal.entry_high,
+                                   signal.take_profits, self._max_tuned_entry_pct)
+        if chase:
+            logger.info(f"Futures signal skipped — entry chases the move: {sym} {chase}")
+            self._notify_dedupe(f"chase:{sym}", f"🚫 Futures skip (entry chases the move): {sym} — {chase}\n"
+                                + _signal_detail(signal, channel_name))
+            self._log_audit_trade(signal, channel_name, "skipped_chase", live, chase)
             return
         try:
             usdt_notional = self._risk.get_budget_for_trade(
@@ -1014,10 +1087,13 @@ class SignalEngine:
             logger.warning(f"Failed to refresh pairs: {e}")
 
     def _record_close(self, pos: SignalPosition, price: float, reason: str, pnl: Optional[float]):
-        """Record a closed position in the journal."""
+        """Record a close in the journal; a COMPLETED trade also goes to trades.db."""
         if pnl is not None:
             self._risk.record_trade_closed(pnl)
+        reason = exit_label(reason, pos, self._futures_mode)
         self._log_position_trade(pos, price, reason)
+        if getattr(pos, "is_closed", False):
+            self._write_unified_trade(pos, price, reason)
         self._notify(
             f"[{'AUDIT' if self._audit_mode else 'LIVE'}] Closed: {pos.symbol} "
             f"({reason}) @ ${price:,.2f}, PnL: ${pnl or 0:.2f}"
@@ -1070,6 +1146,27 @@ class SignalEngine:
             parse_reasoning="",
             is_audit=1 if self._audit_mode else 0,
         ))
+
+    def _write_unified_trade(self, pos: SignalPosition, price: float, reason: str):
+        """One unified row per completed trade, cumulative over all partial exits."""
+        if self._audit_mode:
+            return
+        side = getattr(pos, "side", "long")
+        gross = float(pos.realized_pnl)
+        fees = estimate_fees(side, pos.entry_price, pos.amount, gross, self._fee_bps)
+        risk = abs(pos.entry_price - pos.stop_loss) * pos.amount if pos.stop_loss else 0.0
+        write_trade(
+            engine=self._unified_engine, pair=pos.symbol, side=side,
+            entry_price=pos.entry_price, exit_price=price, quantity=pos.amount,
+            gross_pnl=gross, fees=fees, exit_reason=reason, duration_mins=pos.hold_minutes,
+            sl_price=pos.stop_loss, tp_price=pos.take_profits[0] if pos.take_profits else None,
+            r_multiple=((gross - fees) / risk) if risk > 0 else None,
+            context={"channel": pos.channel_name, "take_profits": pos.take_profits,
+                     "tp_hits": [bool(pos.tp1_hit), bool(pos.tp2_hit), bool(pos.tp3_hit)],
+                     "pnl_gross": gross, "fee_estimate_bps": self._fee_bps,
+                     "quantity_is": "full position size; pnl is cumulative over partial exits"},
+            db_path=self._unified_db,
+        )
 
     def _notify(self, message: str):
         """Send Telegram notification."""

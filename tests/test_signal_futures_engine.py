@@ -57,6 +57,7 @@ def test_futures_long_uses_buy(monkeypatch, tmp_path):
     sig = ParsedSignal(action=SignalAction.OPEN_LONG, pair="BTC-USDT", entry_low=100.0,
         entry_high=100.0, stop_loss=80.0, take_profits=[130.0],
         confidence=SignalConfidence.HIGH, quality_score=8)
+    eng._get_current_price = lambda c, s: 100.0  # inside the entry zone
     eng._execute_entry(sig, "chan", eng._futures_connector)
     assert any(c[0] == "open" and c[2] == "long" for c in conn.calls)
 
@@ -313,3 +314,12 @@ def test_futures_tp2_partial_close_is_journaled(monkeypatch, tmp_path):
         monkeypatch, tmp_path, price=3200.0, side="long", tp1_hit=True)
     assert any(c[3] == "tp2" for c in partial_calls), f"got {partial_calls}"
     assert any(r[0] == "tp2" for r in recorded), f"got {recorded}"
+
+
+def test_futures_entry_past_tp1_is_skipped(monkeypatch, tmp_path):
+    # Short signal with TP1 2900; live price 2850 is already past TP1.
+    eng, conn, sent = _futures_engine(monkeypatch, tmp_path)
+    eng._get_current_price = lambda c, s: 2850.0
+    eng._execute_entry(_short(), "chan", eng._futures_connector)
+    assert not any(c[0] == "open" for c in conn.calls)
+    assert any("chases the move" in m for m in sent)

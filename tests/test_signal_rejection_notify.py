@@ -222,18 +222,36 @@ class TestEntryTuning:
         assert any("Score: 8/10" in m for m in sent), sent
 
     def test_tuned_signal_bypasses_zone_gate_and_enters(self, engine):
-        # entry tuned to 0.20; live price 0.21 is ABOVE the entry — without the
-        # entry_tuned bypass this would skip as "above zone". Tuned → enters.
+        # entry tuned to 0.20; live price 0.205 is ABOVE the entry — without the
+        # entry_tuned bypass this would skip as "above zone". Tuned → enters
+        # (2.5% above is inside the 3% chase tolerance).
         eng, sent = engine
         sig = _valid_signal()
         sig.entry_low = 0.20
         sig.entry_high = 0.20
         sig.entry_tuned = True
-        eng._get_current_price = lambda conn, pair: 0.21
+        sig.take_profits = [0.24, 0.28]  # targets above the tuned entry
+        eng._get_current_price = lambda conn, pair: 0.205
         buys = []
         eng._buy_fn = lambda **kw: (buys.append(kw), "oid-ok")[1]
         eng._execute_entry(sig, "testchan", None)
         assert len(buys) == 1, "tuned signal must bypass the zone gate and enter"
+
+    def test_tuned_signal_chasing_the_move_is_skipped(self, engine):
+        # Nov 2026 audit: tuned entries filled up to 21% above the zone. A tuned
+        # entry 5% above the zone is now skipped by the deterministic chase guard.
+        eng, sent = engine
+        sig = _valid_signal()
+        sig.entry_low = 0.20
+        sig.entry_high = 0.20
+        sig.entry_tuned = True
+        sig.take_profits = [0.24, 0.28]
+        eng._get_current_price = lambda conn, pair: 0.21
+        buys = []
+        eng._buy_fn = lambda **kw: (buys.append(kw), "oid-ok")[1]
+        eng._execute_entry(sig, "testchan", None)
+        assert buys == []
+        assert any("chases the move" in m for m in sent)
 
     def test_non_tuned_above_zone_still_skips(self, engine):
         # Same setup but NOT tuned → zone gate fires (regression guard).
