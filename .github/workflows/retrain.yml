@@ -1,21 +1,35 @@
 name: Monthly ML Retraining
 
+# Retrains the per-pair regime classifiers once a month and promotes a new model
+# only if it is at least as accurate as the live one on the most recent 30 days,
+# which the candidate never saw (scripts/retrain_regime_gate.py).
+#
+# Fixed Nov 2026: this workflow called src.ml.train_pipeline, a module that no
+# longer exists, so every monthly run since August failed and the live models
+# never refreshed. It also committed with [skip ci], so even a successful run
+# would never have reached the server (the server only updates on a deploy).
+
 on:
   schedule:
     - cron: '0 0 1 * *'  # 1st of each month at 00:00 UTC
   workflow_dispatch:
 
+permissions:
+  contents: write
+  actions: write   # to start the deploy workflow after a promotion
+
+concurrency:
+  group: retrain
+  cancel-in-progress: false
+
 env:
   PYTHON_VERSION: "3.12"
+  HOLDOUT_DAYS: "30"
 
 jobs:
   retrain:
-    name: Retrain ${{ matrix.pair }}
+    name: Retrain regime models
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        pair: [ETHUSDT, BNBUSDT, DOGEUSDT, XRPUSDT]
-
     steps:
       - uses: actions/checkout@v4
 
@@ -27,55 +41,38 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Train new model for ${{ matrix.pair }}
+      - name: Train candidates and promote only if better on unseen data
         run: |
-          python -m src.ml.train_pipeline \
-            --pair ${{ matrix.pair }} \
-            --output models/regime_${{ matrix.pair }}.pkl.new
+          set -euo pipefail
+          TRAIN_END=$(date -u -d "${HOLDOUT_DAYS} days ago" +%F)
+          mkdir -p candidates
+          for PAIR in ETHUSDT BNBUSDT DOGEUSDT XRPUSDT; do
+            SLUG="${PAIR%USDT}-USDT"
+            echo "::group::${PAIR}"
+            python -m src.ml.train_regime --pair "$PAIR" --train-end "$TRAIN_END" \
+              --output "candidates/regime_${SLUG}_clean.pkl"
+            python scripts/retrain_regime_gate.py --pair "$PAIR" \
+              --candidate "candidates/regime_${SLUG}_clean.pkl" \
+              --current "models/regime_${SLUG}_clean.pkl" \
+              --holdout-days "$HOLDOUT_DAYS"
+            echo "::endgroup::"
+          done
 
-      - name: Compare and deploy if improved
-        run: |
-          python -c "
-          import pickle, os, sys
-          pair = '${{ matrix.pair }}'
-          new_path = f'models/regime_{pair}.pkl.new'
-          cur_path = f'models/regime_{pair}.pkl'
-
-          if not os.path.exists(new_path):
-              print(f'No new model for {pair}')
-              sys.exit(0)
-
-          with open(new_path, 'rb') as f:
-              new_data = pickle.load(f)
-
-          new_acc = new_data.get('validation_accuracy', 0.0)
-
-          cur_acc = 0.0
-          if os.path.exists(cur_path):
-              with open(cur_path, 'rb') as f:
-                  cur_data = pickle.load(f)
-              cur_acc = cur_data.get('validation_accuracy', 0.0)
-
-          improvement = new_acc - cur_acc
-          print(f'{pair}: current={cur_acc:.4f} new={new_acc:.4f} delta={improvement:+.4f}')
-
-          if improvement > 0.01:
-              os.replace(new_path, cur_path)
-              print(f'DEPLOYED: {pair} model updated (accuracy +{improvement:.4f})')
-          else:
-              os.remove(new_path)
-              print(f'SKIPPED: {pair} not improved enough')
-              sys.exit(0)
-          "
-
-      - name: Commit improved models [skip ci]
+      - name: Commit promoted models (triggers the normal test-and-deploy pipeline)
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add models/*.pkl
+          git add models/regime_*_clean.pkl models/regime_*_clean.pkl.metadata.json
           if git diff --cached --quiet; then
-            echo "No model changes to commit"
+            echo "No model was promoted this month"
           else
-            git commit -m "retrain: update models [skip ci]"
+            git commit -m "retrain: promote regime models that beat the live ones on the last ${HOLDOUT_DAYS} days"
+            git pull --rebase origin main
             git push
+            # A push made with GITHUB_TOKEN does not trigger other workflows;
+            # workflow_dispatch is the documented exception, so start the
+            # deploy (tests run first and gate it) explicitly.
+            gh workflow run deploy.yml --ref main
           fi
+        env:
+          GH_TOKEN: ${{ github.token }}
