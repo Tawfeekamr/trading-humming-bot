@@ -40,6 +40,8 @@ models/rl/*.log
 models/rl/_wf_*
 # seed-sweep robustness artifacts (results live in the docs; zips regenerable)
 models/rl/_seed_*
+# Single-fee ablation models (rebuilt by scripts/ablation_single_fee*.py; results are in reports/)
+models/rl/ablation_single_fee/
 logs/
 reports/
 tb/
