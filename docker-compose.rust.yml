@@ -67,6 +67,8 @@ services:
     # `python -m src.run_signal_listener`); `command:` would only override CMD
     # and the listener would still run.
     entrypoint: ["python", "-m", "src.ml.regime_pusher"]
+    # Telegram credentials for drift alerts (same file the signal listener uses).
+    env_file: .env.docker
     depends_on:
       rust-bot:
         condition: service_healthy

@@ -114,3 +114,36 @@ def test_compute_regime_with_real_eth_clean_model():
         pytest.skip(f"real model load/predict failed (likely sklearn version drift): {exc}")
     assert regime in {0, 1, 2}
     assert 0.0 <= confidence <= 1.0
+
+
+# --- Drift alerts (thesis §5.4.1 item 2: the alert path was never called) ---
+
+def _report(reasons_by_pair):
+    return {pair: {"pair": pair, "reasons": list(r), "live_distribution": {0: 1.0},
+                   "confidence_24h": 0.5} for pair, r in reasons_by_pair.items()}
+
+
+def test_drift_alert_sent_once_per_new_reason_set():
+    sent, last = [], {}
+    regime_pusher.send_drift_alerts(_report({"ETH-USDT": ["low_confidence"]}), last, sent.append)
+    regime_pusher.send_drift_alerts(_report({"ETH-USDT": ["low_confidence"]}), last, sent.append)
+    assert len(sent) == 1, "an unchanged condition must not re-alert every hour"
+    assert "ETH-USDT" in sent[0] and "low_confidence" in sent[0]
+
+
+def test_drift_alert_resent_when_reasons_change_and_quiet_when_clear():
+    sent, last = [], {}
+    regime_pusher.send_drift_alerts(_report({"BNB-USDT": ["low_confidence"]}), last, sent.append)
+    regime_pusher.send_drift_alerts(
+        _report({"BNB-USDT": ["low_confidence", "danger_frequency_spike"]}), last, sent.append)
+    regime_pusher.send_drift_alerts(_report({"BNB-USDT": []}), last, sent.append)
+    assert len(sent) == 3, "new reason -> alert; recovery -> one all-clear"
+    assert "cleared" in sent[2].lower()
+    regime_pusher.send_drift_alerts(_report({"BNB-USDT": []}), last, sent.append)
+    assert len(sent) == 3, "no repeat all-clear"
+
+
+def test_drift_check_is_due_hourly():
+    assert regime_pusher.drift_check_due(now=10_000.0, last=None, every_sec=3600)
+    assert not regime_pusher.drift_check_due(now=10_000.0, last=9_000.0, every_sec=3600)
+    assert regime_pusher.drift_check_due(now=13_000.0, last=9_000.0, every_sec=3600)

@@ -358,6 +358,58 @@ def push_regime(session: requests.Session, base_url: str, updates: list[dict]) -
         return False
 
 
+
+# --- Drift alerts -----------------------------------------------------------
+# Predictions were observed but the drift report was never evaluated from the
+# push loop, so no drift alert could ever fire (thesis §5.4.1 item 2). The loop
+# now checks hourly and alerts only when a pair's set of reasons changes.
+
+DRIFT_REPORT_EVERY_SEC = int(os.environ.get("DRIFT_REPORT_EVERY_SEC", "3600"))
+
+
+def drift_check_due(now: float, last: float | None, every_sec: int = DRIFT_REPORT_EVERY_SEC) -> bool:
+    return last is None or now - last >= every_sec
+
+
+def send_drift_alerts(report: dict[str, dict], last_reasons: dict[str, tuple], notify) -> int:
+    """Notify once per change in a pair's drift reasons. Returns messages sent."""
+    sent = 0
+    for pair, item in sorted(report.items()):
+        reasons = tuple(item.get("reasons") or ())
+        previous = last_reasons.get(pair, ())
+        if reasons == previous:
+            continue
+        last_reasons[pair] = reasons
+        if reasons:
+            live = item.get("live_distribution", {})
+            conf = item.get("confidence_24h")
+            msg = (f"⚠️ Regime drift {pair}: {', '.join(reasons)} | "
+                   f"live mix {live} | 24h confidence "
+                   f"{'n/a' if conf is None else f'{conf:.2f}'}")
+        else:
+            msg = f"✅ Regime drift cleared for {pair}"
+        notify(msg)
+        sent += 1
+    return sent
+
+
+def telegram_notifier(session: requests.Session):
+    """Return a notify(msg) function: Telegram if configured, else log only."""
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
+
+    def notify(msg: str) -> None:
+        log.warning("drift_alert %s", msg)
+        if not (token and chat_id):
+            return
+        try:
+            session.post(f"https://api.telegram.org/bot{token}/sendMessage",
+                         data={"chat_id": chat_id, "text": msg}, timeout=10)
+        except requests.RequestException:
+            log.exception("drift alert: Telegram send failed")
+
+    return notify
+
 def main() -> int:
     base_url = os.environ.get("RUST_ENGINE_URL", "http://rust-bot:3030").rstrip("/")
     pairs = [p.strip() for p in os.environ.get(
@@ -373,6 +425,9 @@ def main() -> int:
         return 1
 
     session = requests.Session()
+    notify = telegram_notifier(session)
+    last_drift_check: float | None = None
+    last_drift_reasons: dict[str, tuple] = {}
     log.info("Entering push loop")
     while True:
         try:
@@ -380,6 +435,13 @@ def main() -> int:
             push_regime(session, base_url, updates)
         except Exception:  # never let the loop die
             log.exception("Cycle failed (continuing after sleep)")
+        try:
+            now = time.time()
+            if drift_check_due(now, last_drift_check):
+                last_drift_check = now
+                send_drift_alerts(collect_drift_report(models), last_drift_reasons, notify)
+        except Exception:  # drift reporting must never stop the pushes
+            log.exception("Drift check failed (continuing)")
         time.sleep(interval)
 
 
