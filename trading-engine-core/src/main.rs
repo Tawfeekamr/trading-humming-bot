@@ -93,7 +93,10 @@ async fn async_main() -> Result<()> {
 
     let bar_cache = trading_engine_core::bar_cache::BarCache::new();
     let status_cache = trading_engine_core::strategy::status_cache::StrategyStatusCache::new();
-    let regime_cache = trading_engine_core::strategy::regime_cache::RegimeCache::new("data/regime_cache.json", 180_000); // 3min TTL = 3×60s poll
+    let regime_cache = trading_engine_core::strategy::regime_cache::RegimeCache::new(
+        "data/regime_cache.json",
+        trading_engine_core::strategy::regime_cache::REGIME_CACHE_TTL_MS,
+    ); // 3 push intervals: one late push must not blank the regime
     // Routing cache: Python PPO router POSTs {active_engine, size_mult, flat} once
     // per closed 1h bar (config/strategy.yaml `routing.bar_seconds: 3600`).
     // TTL = 3 × bar_seconds = 10_800_000ms (3h margin) so a single missed push

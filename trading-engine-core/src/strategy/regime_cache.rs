@@ -42,6 +42,17 @@ pub struct RegimeUpdate {
     pub feature_contract_hash: Option<String>,
 }
 
+/// How often the regime pusher posts fresh labels (``REGIME_INTERVAL_SEC``).
+pub const REGIME_PUSH_INTERVAL_MS: i64 = 180_000;
+
+/// How long a pushed regime label stays valid: three push intervals, so one
+/// late or missed push does not blank the regime. It used to equal the push
+/// interval, so every cycle ended with a gap in which the label read as absent
+/// and the grid gate fell back to technical analysis (seen live: "Grid
+/// ACTIVATED ... regime=None" then "DEACTIVATED: ML regime=Trending" every
+/// three minutes). Same 3x rule as the routing cache.
+pub const REGIME_CACHE_TTL_MS: i64 = 3 * REGIME_PUSH_INTERVAL_MS;
+
 #[derive(Clone)]
 pub struct RegimeCache {
     /// In-memory regime map + last-loaded file mtime, guarded by a single lock
@@ -194,6 +205,12 @@ impl RegimeCache {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn ttl_leaves_margin_for_a_late_push() {
+        assert!(super::REGIME_CACHE_TTL_MS >= 2 * super::REGIME_PUSH_INTERVAL_MS,
+                "TTL must outlive at least one late push");
+    }
+
     use super::*;
 
     #[tokio::test]
