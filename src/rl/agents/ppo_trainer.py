@@ -153,6 +153,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Discount factor (default: 0.99).",
     )
     parser.add_argument(
+        "--single-fee",
+        action="store_true",
+        dest="single_fee",
+        help="Ablation: drop the explicit fee term from the reward, so fees "
+        "are counted once (through net equity) instead of twice.",
+    )
+    parser.add_argument(
         "--train-end",
         default=None,
         help="End date for training data (YYYY-MM-DD). Default: today.",
@@ -206,7 +213,7 @@ def main(argv: list[str] | None = None) -> int:
     # --- 2. Build env ----------------------------------------------------
     # TradingEnv does not take a seed in __init__; seed is applied to env.reset
     # via SB3's seeding (set_random_seed below + SB3's internal env seeding).
-    config = EnvConfig(lambda_dd=args.lambda_dd)
+    config = EnvConfig(lambda_dd=args.lambda_dd, reward_fee_term=not args.single_fee)
     env = TradingEnv(df, config=config)
 
     # Seed torch + python + numpy globally. SB3's make_vec_env would propagate
@@ -262,6 +269,7 @@ def main(argv: list[str] | None = None) -> int:
             "batch_size": args.batch_size,
             "gamma": args.gamma,
             "lambda_dd": args.lambda_dd,
+            "reward_fee_term": not args.single_fee,
         },
         "seed": int(args.seed),
         "trained_at": timestamp,

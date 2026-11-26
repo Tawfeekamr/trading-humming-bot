@@ -75,6 +75,11 @@ class EnvConfig:
     initial_capital: float = 10_000.0
     fee_rate: float = 0.001  # 0.1% per side (maker).
     lambda_dd: float = 0.5  # drawdown-step penalty weight.
+    # Explicit fee term in the reward. Equity is already net of fees, so with
+    # this on (the default, and the frozen evaluation) fees are counted twice.
+    # The single-fee ablation sets it to False: fees then reach the reward
+    # only once, through the net equity return.
+    reward_fee_term: bool = True
     window_length: int = 4_300  # ~6 months of 1h bars per episode.
     max_position_pct: float = 0.6666  # max notional / equity for trend/swing.
 
@@ -351,9 +356,10 @@ class TradingEnv(gym.Env):
         equity_return = (self.equity - equity_start) / max(equity_start, 1e-8)
         bench_return = (bar_close - prev_close) / max(prev_close, 1e-8)
         turnover_norm = turnover / max(equity_start, 1e-8)
+        fee_term = cfg.fee_rate * turnover_norm if cfg.reward_fee_term else 0.0
         reward = (
             (equity_return - bench_return)
-            - cfg.fee_rate * turnover_norm
+            - fee_term
             - cfg.lambda_dd * dd_step
         )
 
