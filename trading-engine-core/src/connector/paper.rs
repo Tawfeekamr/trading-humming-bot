@@ -235,6 +235,38 @@ impl PaperTradeEngine {
                     market_price * (1.0 + adverse * self.slippage_bps / 1e4)
                 };
                 let fee_bps = if is_maker { self.maker_fee_bps } else { self.taker_fee_bps };
+
+                // A BUY may never spend more quote than is held, fee included —
+                // the mirror of the naked-sell rule above. Without it, grid buys
+                // kept filling into a falling market with no cash check (Nov 2026:
+                // paper USDT −566k, total equity −95k). No cash → reject and drop
+                // (it can never fill); partial cash → clamp to the affordable qty.
+                let fill_qty = if order.side == OrderSide::Buy {
+                    let quote_bal = *self.balances.get(quote).unwrap_or(&0.0);
+                    let unit_cost = fill_price * (1.0 + fee_bps / 1e4);
+                    if quote_bal <= 1e-9 || unit_cost <= 0.0 {
+                        warn!(
+                            "UNFUNDED BUY rejected: buy {} {} needs {:.2} {}, held {:.2} — filling nothing \
+                             (order {}, client_order_id={:?}, reduce_only={})",
+                            fill_qty, base, fill_qty * unit_cost, quote, quote_bal,
+                            order.id, order.client_order_id, order.reduce_only
+                        );
+                        continue; // drop: a buy with no cash can never fill
+                    }
+                    if fill_qty * unit_cost > quote_bal + 1e-9 {
+                        let affordable = quote_bal / unit_cost;
+                        warn!(
+                            "buy clamped to available cash: requested {} {}, affordable {} with {:.2} {} \
+                             (order {}, client_order_id={:?})",
+                            fill_qty, base, affordable, quote_bal, quote, order.id, order.client_order_id
+                        );
+                        affordable
+                    } else {
+                        fill_qty
+                    }
+                } else {
+                    fill_qty
+                };
                 let fee = fill_price * fill_qty * (fee_bps / 1e4);
 
                 match order.side {
@@ -797,6 +829,50 @@ mod tests {
         assert!((usdt - 25_284.7).abs() < 1e-6, "USDT credited for clamped qty only, got {}", usdt);
     }
 
+    #[test]
+    fn buy_beyond_cash_is_clamped_to_affordable() {
+        // Nov 2026 incident: grid buys kept filling with no cash check, driving
+        // paper USDT to −566k and total equity negative. A BUY may never spend
+        // more quote than is held (fee included).
+        let mut bal = HashMap::new();
+        bal.insert("USDT".to_string(), 1_000.0);
+        let mut e = PaperTradeEngine::new(bal);
+        e.set_realism(0.0, 10.0, 10.0); // 10 bps taker fee, no slippage
+        e.place_order(&market_buy(0.1)).unwrap(); // wants 5,000 USDT @ 50,000
+        let fills = e.try_fill_at_price("BTCUSDT", 50_000.0);
+        assert_eq!(fills.len(), 1, "an affordable part still fills");
+        // 1,000 / (50,000 × 1.001) = 0.019980...
+        assert!((fills[0].quantity - 1_000.0 / (50_000.0 * 1.001)).abs() < 1e-12,
+                "clamped to affordable qty, got {}", fills[0].quantity);
+        let usdt = e.balances().get("USDT").copied().unwrap_or(0.0);
+        assert!(usdt.abs() < 1e-6 && usdt >= -1e-9, "USDT must not go negative, got {}", usdt);
+    }
+
+    #[test]
+    fn buy_with_no_cash_is_rejected() {
+        let mut bal = HashMap::new();
+        bal.insert("USDT".to_string(), 0.0);
+        bal.insert("BTC".to_string(), 0.0);
+        let mut e = PaperTradeEngine::new(bal);
+        e.place_order(&market_buy(0.1)).unwrap();
+        let fills = e.try_fill_at_price("BTCUSDT", 50_000.0);
+        assert!(fills.is_empty(), "a buy with no cash must not fill");
+        assert_eq!(e.open_order_count(), 0, "unfundable buy is dropped, not left resting");
+        assert_eq!(e.balances().get("USDT").copied().unwrap_or(0.0), 0.0);
+        assert_eq!(e.balances().get("BTC").copied().unwrap_or(0.0), 0.0);
+    }
+
+    #[test]
+    fn negative_cash_book_cannot_buy_more() {
+        // The live book was already at −566k USDT: no further buy may fill.
+        let mut bal = HashMap::new();
+        bal.insert("USDT".to_string(), -566_141.0);
+        let mut e = PaperTradeEngine::new(bal);
+        e.place_order(&market_buy(0.01)).unwrap();
+        assert!(e.try_fill_at_price("BTCUSDT", 50_000.0).is_empty());
+        assert_eq!(e.balances().get("USDT").copied().unwrap(), -566_141.0);
+    }
+
     fn market_buy(qty: f64) -> OrderRequest {
         OrderRequest {
             symbol: "BTCUSDT".to_string(),
@@ -914,14 +990,20 @@ mod tests {
 
     #[test]
     fn tiered_fees_maker_vs_taker() {
-        let mut e = engine();
+        // Funded for the full 1 BTC @ 50,000 (+fee): buys are cash-checked.
+        let funded = || {
+            let mut bal = HashMap::new();
+            bal.insert("USDT".to_string(), 100_000.0);
+            PaperTradeEngine::new(bal)
+        };
+        let mut e = funded();
         e.set_realism(0.0, 5.0, 2.0); // taker 5bps, maker 2bps
         e.place_order(&market_buy(1.0)).unwrap();
         let taker_fee = e.try_fill_at_price("BTCUSDT", 50_000.0)[0].fee;
         // 50000 * 1.0 * 5/10000 = 25.0
         assert!((taker_fee - 25.0).abs() < 1e-6, "taker fee {}", taker_fee);
 
-        let mut e2 = engine();
+        let mut e2 = funded();
         e2.set_realism(0.0, 5.0, 2.0);
         e2.place_order(&OrderRequest {
             symbol: "BTCUSDT".to_string(),

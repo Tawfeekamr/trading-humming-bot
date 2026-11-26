@@ -29,6 +29,14 @@ fn sell(symbol: &str, price: f64, qty: f64) -> OrderRequest {
     }
 }
 
+/// Fund the quote a buy spends — a buy may never exceed held cash (unfunded
+/// buys are rejected, mirroring the naked-sell rule), so fixtures hold USDT.
+fn funded() -> HashMap<String, f64> {
+    let mut b = HashMap::new();
+    b.insert("USDT".to_string(), 10_000.0);
+    b
+}
+
 /// A BNB buy (limit $608) must NOT fill when the XRP orderbook price ($1.15)
 /// is checked. Before the fix, `try_fill_at_price` evaluated every open order
 /// against the passed-in price, so the BNB buy filled instantly ($1.15 <= $608),
@@ -59,7 +67,7 @@ fn test_fills_are_symbol_isolated() {
 /// leaves it open.
 #[test]
 fn test_buy_fills_only_when_own_price_crosses() {
-    let mut engine = PaperTradeEngine::new(HashMap::new());
+    let mut engine = PaperTradeEngine::new(funded());
     engine.place_order(&buy("BNB-USDT", 608.0, 8.62)).unwrap();
 
     // XRP price must not fill the BNB buy.
@@ -76,7 +84,7 @@ fn test_buy_fills_only_when_own_price_crosses() {
 /// Symbol formats "BNB-USDT" and "BNBUSDT" are treated as the same pair.
 #[test]
 fn test_symbol_normalization() {
-    let mut engine = PaperTradeEngine::new(HashMap::new());
+    let mut engine = PaperTradeEngine::new(funded());
     engine.place_order(&buy("BNB-USDT", 608.0, 8.62)).unwrap();
 
     // Order placed as "BNB-USDT", queried with raw "BNBUSDT".
