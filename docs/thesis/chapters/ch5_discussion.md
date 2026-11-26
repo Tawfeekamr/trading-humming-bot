@@ -74,7 +74,7 @@ Within that scope, the contributions are three.
 
 6. Single penalty weight. Withdrawal is documented at λ = 0.5 only. No sensitivity sweep over the drawdown-penalty weight was run, so no threshold separating withdrawal from deployment has been established.
 
-7. Unusually punitive reward. The frozen reward counts transaction costs twice, in addition to the λ = 0.5 drawdown penalty (Section 3.2). Counting fees once did not remove the abstention (Section 4.6), but that test used a single seed, and the drawdown penalty and the buy-and-hold benchmark were never varied. The finding therefore supports the claim that this reward produces abstention and that the flat-policy comparison detects it. It does not support the claim that RL generally converges to abstention in trading, or that drawdown penalties as such cause it.
+7. Unusually punitive reward. The frozen reward counts transaction costs twice, in addition to the λ = 0.5 drawdown penalty (Section 3.2). Counting fees once did not remove the abstention across five seeds (Section 4.6), but the drawdown penalty and the buy-and-hold benchmark were never varied. The finding therefore supports the claim that this reward produces abstention and that the flat-policy comparison detects it. It does not support the claim that RL generally converges to abstention in trading, or that drawdown penalties as such cause it.
 
 8. No slippage. The only simulated friction is the 0.1%-per-side fee; spread and market impact were not modelled, so every fill executes at the bar price. Together with limitation 7, this means the agent learned under a cost signal that was too punitive on fees and too optimistic on execution, and neither direction is individually representative of live trading.
 

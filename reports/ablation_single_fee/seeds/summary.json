@@ -1,0 +1,21 @@
+{
+  "design": "fees counted once; seeds 42, 7, 123, 2024, 999; folds 1 and 4; both pairs (20 cells)",
+  "do_nothing_beats_trained_cells": 20,
+  "cells": 20,
+  "exposure_pct_by_pair": {
+    "BNBUSDT": {
+      "mean": 7.4,
+      "min": 3.84,
+      "max": 14.62
+    },
+    "ETHUSDT": {
+      "mean": 12.45,
+      "min": 3.93,
+      "max": 22.32
+    }
+  },
+  "flat_share_pct_by_pair": {
+    "BNBUSDT": 44.9,
+    "ETHUSDT": 25.1
+  }
+}

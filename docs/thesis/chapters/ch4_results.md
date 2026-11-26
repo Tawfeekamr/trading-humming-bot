@@ -185,7 +185,19 @@ Table 4.7: Effect of counting fees once instead of twice (seed 42, six folds per
 
 Counting fees once doubled the capital the agent deployed on ETH (4.3% to 8.5%) and raised it by about 60% on BNB (5.2% to 8.4%), and the agent chose trend and swing actions more often. But it still deployed less than a tenth of its capital, far below the untrained network (49%) and the Random Forest baseline (21% on ETH, 61% on BNB). It still chose to do nothing on about 40% of bars. Under the corrected reward, the do-nothing policy scored higher than the trained agent in all six folds on both assets. The extra trading also lost money: total return fell to −43.2% on ETH and −38.5% on BNB.
 
-The fee double-count is therefore not the main cause of the abstention. Removing it changed the amount of abstention, but not the result. The rest of the reward, a return measured against buy-and-hold together with the drawdown penalty, still makes staying out of the market the best choice in this environment. This is a single-seed result, so it shows the direction of the effect rather than its exact size.
+The fee double-count is therefore not the main cause of the abstention. Removing it changed the amount of abstention, but not the result. The rest of the reward, a return measured against buy-and-hold together with the drawdown penalty, still makes staying out of the market the best choice in this environment.
+
+To check that this is not a property of seed 42, the fees-once models were also trained with seeds 7, 123, 2024 and 999 on folds 1 and 4, the same seed-fold design as Section 4.4. Table 4.8 gives the result.
+
+Table 4.8: Fees counted once, five seeds on folds 1 and 4 (20 seed-fold-asset cells)
+
+| Measure | ETH | BNB |
+|---|---:|---:|
+| Capital-weighted exposure, mean (range) | 12.5% (3.9–22.3%) | 7.4% (3.8–14.6%) |
+| Share of bars on FLAT | 25.1% | 44.9% |
+| Cells where doing nothing scored higher | 10 of 10 | 10 of 10 |
+
+Doing nothing scored higher than the trained agent in all 20 cells, compared with 19 of 20 when fees were counted twice (Section 4.4). Exposure varied with the seed, reaching 22% in two ETH cells, but the agent never deployed more than about a fifth of its capital, and on average far less than the untrained network (49%). The seeds therefore confirm the direction of the seed-42 result. The exact amount of exposure depends on the seed, so the six-fold figures in Table 4.7 should be read as one draw rather than a precise estimate.
 
 ## A Survey of Open-Source RL-for-Trading Repositories
 

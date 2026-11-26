@@ -1,0 +1,57 @@
+[ETHUSDT] fold 1 seed 42: exposure 14.51%, flat beats trained: True
+[ETHUSDT] fold 4 seed 42: exposure 6.38%, flat beats trained: True
+  train: /Users/amro/WebstormProjects/trading-humming-bot/.mlvenv/bin/python -m src.rl.agents.ppo_trainer --pair ETHUSDT --train-end 2025-01-10 --months 6 --timesteps 1000000 --seed 7 --single-fee --output models/rl/ablation_single_fee/seed7/_wf_ETHUSDT_slice0.zip
+[ETHUSDT] fold 1 seed 7: exposure 22.32%, flat beats trained: True
+  train: /Users/amro/WebstormProjects/trading-humming-bot/.mlvenv/bin/python -m src.rl.agents.ppo_trainer --pair ETHUSDT --train-end 2025-10-07 --months 6 --timesteps 1000000 --seed 7 --single-fee --output models/rl/ablation_single_fee/seed7/_wf_ETHUSDT_slice3.zip
+[ETHUSDT] fold 4 seed 7: exposure 12.61%, flat beats trained: True
+  train: /Users/amro/WebstormProjects/trading-humming-bot/.mlvenv/bin/python -m src.rl.agents.ppo_trainer --pair ETHUSDT --train-end 2025-01-10 --months 6 --timesteps 1000000 --seed 123 --single-fee --output models/rl/ablation_single_fee/seed123/_wf_ETHUSDT_slice0.zip
+[ETHUSDT] fold 1 seed 123: exposure 12.1%, flat beats trained: True
+  train: /Users/amro/WebstormProjects/trading-humming-bot/.mlvenv/bin/python -m src.rl.agents.ppo_trainer --pair ETHUSDT --train-end 2025-10-07 --months 6 --timesteps 1000000 --seed 123 --single-fee --output models/rl/ablation_single_fee/seed123/_wf_ETHUSDT_slice3.zip
+[ETHUSDT] fold 4 seed 123: exposure 3.93%, flat beats trained: True
+  train: /Users/amro/WebstormProjects/trading-humming-bot/.mlvenv/bin/python -m src.rl.agents.ppo_trainer --pair ETHUSDT --train-end 2025-01-10 --months 6 --timesteps 1000000 --seed 2024 --single-fee --output models/rl/ablation_single_fee/seed2024/_wf_ETHUSDT_slice0.zip
+[ETHUSDT] fold 1 seed 2024: exposure 6.71%, flat beats trained: True
+  train: /Users/amro/WebstormProjects/trading-humming-bot/.mlvenv/bin/python -m src.rl.agents.ppo_trainer --pair ETHUSDT --train-end 2025-10-07 --months 6 --timesteps 1000000 --seed 2024 --single-fee --output models/rl/ablation_single_fee/seed2024/_wf_ETHUSDT_slice3.zip
+[ETHUSDT] fold 4 seed 2024: exposure 11.61%, flat beats trained: True
+  train: /Users/amro/WebstormProjects/trading-humming-bot/.mlvenv/bin/python -m src.rl.agents.ppo_trainer --pair ETHUSDT --train-end 2025-01-10 --months 6 --timesteps 1000000 --seed 999 --single-fee --output models/rl/ablation_single_fee/seed999/_wf_ETHUSDT_slice0.zip
+[ETHUSDT] fold 1 seed 999: exposure 12.3%, flat beats trained: True
+  train: /Users/amro/WebstormProjects/trading-humming-bot/.mlvenv/bin/python -m src.rl.agents.ppo_trainer --pair ETHUSDT --train-end 2025-10-07 --months 6 --timesteps 1000000 --seed 999 --single-fee --output models/rl/ablation_single_fee/seed999/_wf_ETHUSDT_slice3.zip
+[ETHUSDT] fold 4 seed 999: exposure 22.06%, flat beats trained: True
+[BNBUSDT] fold 1 seed 42: exposure 14.62%, flat beats trained: True
+[BNBUSDT] fold 4 seed 42: exposure 5.11%, flat beats trained: True
+  train: /Users/amro/WebstormProjects/trading-humming-bot/.mlvenv/bin/python -m src.rl.agents.ppo_trainer --pair BNBUSDT --train-end 2025-01-10 --months 6 --timesteps 1000000 --seed 7 --single-fee --output models/rl/ablation_single_fee/seed7/_wf_BNBUSDT_slice0.zip
+[BNBUSDT] fold 1 seed 7: exposure 8.23%, flat beats trained: True
+  train: /Users/amro/WebstormProjects/trading-humming-bot/.mlvenv/bin/python -m src.rl.agents.ppo_trainer --pair BNBUSDT --train-end 2025-10-07 --months 6 --timesteps 1000000 --seed 7 --single-fee --output models/rl/ablation_single_fee/seed7/_wf_BNBUSDT_slice3.zip
+[BNBUSDT] fold 4 seed 7: exposure 11.83%, flat beats trained: True
+  train: /Users/amro/WebstormProjects/trading-humming-bot/.mlvenv/bin/python -m src.rl.agents.ppo_trainer --pair BNBUSDT --train-end 2025-01-10 --months 6 --timesteps 1000000 --seed 123 --single-fee --output models/rl/ablation_single_fee/seed123/_wf_BNBUSDT_slice0.zip
+[BNBUSDT] fold 1 seed 123: exposure 4.9%, flat beats trained: True
+  train: /Users/amro/WebstormProjects/trading-humming-bot/.mlvenv/bin/python -m src.rl.agents.ppo_trainer --pair BNBUSDT --train-end 2025-10-07 --months 6 --timesteps 1000000 --seed 123 --single-fee --output models/rl/ablation_single_fee/seed123/_wf_BNBUSDT_slice3.zip
+[BNBUSDT] fold 4 seed 123: exposure 9.36%, flat beats trained: True
+  train: /Users/amro/WebstormProjects/trading-humming-bot/.mlvenv/bin/python -m src.rl.agents.ppo_trainer --pair BNBUSDT --train-end 2025-01-10 --months 6 --timesteps 1000000 --seed 2024 --single-fee --output models/rl/ablation_single_fee/seed2024/_wf_BNBUSDT_slice0.zip
+[BNBUSDT] fold 1 seed 2024: exposure 5.67%, flat beats trained: True
+  train: /Users/amro/WebstormProjects/trading-humming-bot/.mlvenv/bin/python -m src.rl.agents.ppo_trainer --pair BNBUSDT --train-end 2025-10-07 --months 6 --timesteps 1000000 --seed 2024 --single-fee --output models/rl/ablation_single_fee/seed2024/_wf_BNBUSDT_slice3.zip
+[BNBUSDT] fold 4 seed 2024: exposure 6.42%, flat beats trained: True
+  train: /Users/amro/WebstormProjects/trading-humming-bot/.mlvenv/bin/python -m src.rl.agents.ppo_trainer --pair BNBUSDT --train-end 2025-01-10 --months 6 --timesteps 1000000 --seed 999 --single-fee --output models/rl/ablation_single_fee/seed999/_wf_BNBUSDT_slice0.zip
+[BNBUSDT] fold 1 seed 999: exposure 4.02%, flat beats trained: True
+  train: /Users/amro/WebstormProjects/trading-humming-bot/.mlvenv/bin/python -m src.rl.agents.ppo_trainer --pair BNBUSDT --train-end 2025-10-07 --months 6 --timesteps 1000000 --seed 999 --single-fee --output models/rl/ablation_single_fee/seed999/_wf_BNBUSDT_slice3.zip
+[BNBUSDT] fold 4 seed 999: exposure 3.84%, flat beats trained: True
+{
+  "design": "fees counted once; seeds 42, 7, 123, 2024, 999; folds 1 and 4; both pairs (20 cells)",
+  "do_nothing_beats_trained_cells": 20,
+  "cells": 20,
+  "exposure_pct_by_pair": {
+    "BNBUSDT": {
+      "mean": 7.4,
+      "min": 3.84,
+      "max": 14.62
+    },
+    "ETHUSDT": {
+      "mean": 12.45,
+      "min": 3.93,
+      "max": 22.32
+    }
+  },
+  "flat_share_pct_by_pair": {
+    "BNBUSDT": 44.9,
+    "ETHUSDT": 25.1
+  }
+}
