@@ -1,0 +1,30 @@
+flowchart TB
+  subgraph L1["LAYER 1 · MACHINE LEARNING (Python)"]
+    direction LR
+    CLS["<b>Regime classifiers</b><br/><small>Random Forest per asset<br/>isotonic calibration</small>"] --> PUSH["<b>Regime pusher</b><br/><small>sidecar container</small>"]
+  end
+
+  subgraph L2["LAYER 2 · EXECUTION ENGINE (Rust, trading-engine-core)"]
+    direction LR
+    CACHE["<b>Regime cache</b><br/><small>label + confidence</small>"] -- gates entries --> GRID["<b>Grid engine</b><br/><small>geometric levels</small>"]
+    CACHE -- gates entries --> TREND["<b>Trend engine</b><br/><small>chandelier stop</small>"]
+    GRID --> RISK["<b>Risk layer</b><br/><small>circuit breaker · price-sanity<br/>filter · per-strategy capital</small>"]
+    TREND --> RISK
+    RISK --> FILLS["<b>Paper fills</b><br/><small>Binance feed · AWS EC2 Tokyo<br/>Telegram control</small>"]
+  end
+
+  subgraph L3["LAYER 3 · RESEARCH STACK (Python, evaluated in this dissertation)"]
+    direction LR
+    ARCH["<b>Binance archive</b><br/><small>1-h OHLCV to 5 Jul 2026<br/>SHA-256 pinned</small>"] --> ENV["<b>Gymnasium env</b><br/><small>replays 1-h bars<br/>flat · grid · trend · swing</small>"]
+    ENV --> PPO["<b>PPO router</b><br/><small>10 actions<br/>25-dim state</small>"]
+    PPO --> WF["<b>Walk-forward test</b><br/><small>vs Random Forest,<br/>buy-and-hold, do-nothing</small>"]
+  end
+
+  L1 -- "POST /api/v1/regime · every 180 s" --> L2
+  L2 ~~~ L3
+
+  classDef node fill:#ffffff,stroke:#d2d2d2,stroke-width:1px,color:#191919
+  class CLS,PUSH,CACHE,GRID,TREND,RISK,FILLS,ARCH,ENV,PPO,WF node
+  style L1 fill:#eef5fd,stroke:none,color:#666666
+  style L2 fill:#fdf1ea,stroke:none,color:#666666
+  style L3 fill:#e8f8f4,stroke:none,color:#666666
