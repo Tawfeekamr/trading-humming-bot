@@ -67,8 +67,6 @@ services:
     # `python -m src.run_signal_listener`); `command:` would only override CMD
     # and the listener would still run.
     entrypoint: ["python", "-m", "src.ml.regime_pusher"]
-    # Telegram credentials for drift alerts (same file the signal listener uses).
-    env_file: .env.docker
     depends_on:
       rust-bot:
         condition: service_healthy
@@ -77,6 +75,10 @@ services:
       - REGIME_PAIRS=ETH-USDT,BNB-USDT,DOGE-USDT,XRP-USDT
       - REGIME_INTERVAL_SEC=180
       - MODEL_DIR=/app/models
+      # Drift alerts only: just the two Telegram values, interpolated from the
+      # root .env like the engine's (not the signal listener's whole env file).
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
     volumes:
       - ./models:/app/models:ro
     logging:
