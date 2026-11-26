@@ -56,3 +56,17 @@ distorts the totals.
 3. Reject a tuned entry if the first take-profit is at or below it (or recompute the targets).
 4. Label exits by what happened: `trailing_stop` / `breakeven_stop` after a take-profit.
 5. Always fill `duration_mins` and `fees`.
+
+## 5. Fixes applied (26 Nov 2026, commits ef12c05, 41d9c57, 7642dbb)
+
+| Problem | Fix |
+|---|---|
+| 1. Signal trades missing from trades.db | Each completed signal trade (spot as `signal`, futures as `signal_futures`) is written once to trades.db when it closes, with net P&L, fees and duration. Past journal trades are copied in on start-up, including the futures journal. |
+| 2. Event rows double-counted | Start-up copy takes only each trade's final row (not the take-profit slices). The journal's own summary does the same. |
+| 4. Entries chased the price | An entry is skipped if the price is already at or past TP1, or more than 3% beyond the entry range (tuned spot entries and all futures entries). |
+| 5. Misleading exit labels | A stop hit after a take-profit is now `breakeven_stop` (or `trailing_stop` after TP2 on spot). Older rows keep their old label. |
+| 6. Missing duration and fees | Filled on every new signal row. |
+
+**Checked on the server after deploy:** summing every row of trades.db now gives
+**+$2,281.41**, the same as the true total in section 1 (spot signal 754.16 + 622.36 =
+1,376.52; futures 253.07; grid 728.08; trend −76.26). No errors in the logs.
