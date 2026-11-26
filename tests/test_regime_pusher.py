@@ -147,3 +147,21 @@ def test_drift_check_is_due_hourly():
     assert regime_pusher.drift_check_due(now=10_000.0, last=None, every_sec=3600)
     assert not regime_pusher.drift_check_due(now=10_000.0, last=9_000.0, every_sec=3600)
     assert regime_pusher.drift_check_due(now=13_000.0, last=9_000.0, every_sec=3600)
+
+
+def test_drift_alert_waits_for_enough_observations():
+    # Right after a restart the 24h window holds one prediction, so the live
+    # mix reads 100% one class: that is not drift and must not alert.
+    sent, last = [], {}
+    thin = _report({"ETH-USDT": ["class_distribution_shift"]})
+    thin["ETH-USDT"]["observations"] = 1
+    regime_pusher.send_drift_alerts(thin, last, sent.append)
+    assert sent == [], "too few observations to judge drift"
+    full = _report({"ETH-USDT": ["class_distribution_shift"]})
+    full["ETH-USDT"]["observations"] = regime_pusher.DRIFT_MIN_OBSERVATIONS
+    regime_pusher.send_drift_alerts(full, last, sent.append)
+    assert len(sent) == 1
+
+
+def test_first_drift_check_waits_one_interval_after_start():
+    assert not regime_pusher.drift_check_due(now=1_000.0, last=1_000.0, every_sec=3600)

@@ -112,6 +112,7 @@ class RegimeDriftMonitor:
                 "live_distribution": live,
                 "confidence_24h": confidence_24h,
                 "age_ms": age_ms,
+                "observations": total,
                 "reasons": reasons,
             }
             report[pair] = item
@@ -365,6 +366,10 @@ def push_regime(session: requests.Session, base_url: str, updates: list[dict]) -
 # now checks hourly and alerts only when a pair's set of reasons changes.
 
 DRIFT_REPORT_EVERY_SEC = int(os.environ.get("DRIFT_REPORT_EVERY_SEC", "3600"))
+# At least an hour of predictions (20 pushes at 180 s) before drift is judged:
+# right after a restart the window holds one prediction and reads as a 100%
+# single-class mix, which is not drift (seen on the first deploy).
+DRIFT_MIN_OBSERVATIONS = int(os.environ.get("DRIFT_MIN_OBSERVATIONS", "20"))
 
 
 def drift_check_due(now: float, last: float | None, every_sec: int = DRIFT_REPORT_EVERY_SEC) -> bool:
@@ -375,6 +380,8 @@ def send_drift_alerts(report: dict[str, dict], last_reasons: dict[str, tuple], n
     """Notify once per change in a pair's drift reasons. Returns messages sent."""
     sent = 0
     for pair, item in sorted(report.items()):
+        if item.get("observations", DRIFT_MIN_OBSERVATIONS) < DRIFT_MIN_OBSERVATIONS:
+            continue  # too little data to judge drift yet
         reasons = tuple(item.get("reasons") or ())
         previous = last_reasons.get(pair, ())
         if reasons == previous:
@@ -426,7 +433,7 @@ def main() -> int:
 
     session = requests.Session()
     notify = telegram_notifier(session)
-    last_drift_check: float | None = None
+    last_drift_check: float | None = time.time()  # first check one interval after start
     last_drift_reasons: dict[str, tuple] = {}
     log.info("Entering push loop")
     while True:
