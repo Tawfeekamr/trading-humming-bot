@@ -115,6 +115,90 @@ def _chapter_label(numbering_xml: str) -> str:
     return re.sub(r"<w:abstractNum\b.*?</w:abstractNum>", fix, numbering_xml, flags=re.S)
 
 
+_TEXT = re.compile(r"<w:t(?: [^>]*)?>([^<]*)</w:t>")
+# Approximate width of one character of 11 pt Calibri, in twentieths of a point.
+_CHAR_TW = 110
+
+
+def _column_widths(table: str, total: int) -> list[int] | None:
+    """Column widths that follow the text, instead of pandoc's equal split.
+
+    Each column gets at least its longest word (so no word breaks mid-way,
+    e.g. "Supervis-ed"), and the rest of the width is shared in proportion
+    to how much text the column holds.
+    """
+    rows = re.findall(r"<w:tr\b.*?</w:tr>", table, flags=re.S)
+    cells = [re.findall(r"<w:tc\b.*?</w:tc>", r, flags=re.S) for r in rows]
+    if not cells:
+        return None
+    ncol = max(len(c) for c in cells)
+    if ncol < 2 or any(len(c) != ncol for c in cells):
+        return None  # merged cells: leave as built
+    longest_word = [1] * ncol
+    amount = [0.0] * ncol
+    for row in cells:
+        for j, cell in enumerate(row):
+            text = " ".join(_TEXT.findall(cell))
+            words = text.split()
+            if words:
+                longest_word[j] = max(longest_word[j], max(len(w) for w in words))
+            amount[j] += len(text)
+    floor = [(w + 2) * _CHAR_TW for w in longest_word]
+    if sum(floor) >= total:
+        return [round(f * total / sum(floor)) for f in floor]
+    # Share the spare width by text amount (square root, so one wordy column
+    # does not starve the others).
+    weight = [max(a, 1.0) ** 0.5 for a in amount]
+    spare = total - sum(floor)
+    widths = [f + spare * w / sum(weight) for f, w in zip(floor, weight)]
+    # A column never needs to be wider than its longest cell on one line.
+    longest_cell = [0] * ncol
+    for row in cells:
+        for j, cell in enumerate(row):
+            longest_cell[j] = max(longest_cell[j], len(" ".join(_TEXT.findall(cell))))
+    cap = [max(floor[j], (longest_cell[j] + 3) * _CHAR_TW) for j in range(ncol)]
+    for _ in range(ncol):
+        over = [j for j in range(ncol) if widths[j] > cap[j]]
+        if not over:
+            break
+        freed = sum(widths[j] - cap[j] for j in over)
+        for j in over:
+            widths[j] = cap[j]
+        free = [j for j in range(ncol) if widths[j] < cap[j]]
+        if not free:
+            break
+        fw = sum(weight[j] for j in free)
+        for j in free:
+            widths[j] += freed * weight[j] / fw
+    return [round(w) for w in widths]
+
+
+def _fit_tables(xml: str) -> str:
+    """Size table columns to their content and leave a gap after each table."""
+    def fix(m: re.Match) -> str:
+        table = m.group(0)
+        grid = re.search(r"<w:tblGrid>(.*?)</w:tblGrid>", table, flags=re.S)
+        if not grid:
+            return table
+        total = sum(int(w) for w in re.findall(r'<w:gridCol w:w="(\d+)"', grid.group(1)))
+        widths = _column_widths(table, total)
+        if not widths:
+            return table
+        new_grid = "<w:tblGrid>" + "".join(f'<w:gridCol w:w="{w}" />' for w in widths) + "</w:tblGrid>"
+        table = table[:grid.start()] + new_grid + table[grid.end():]
+        if sum(widths) < total:
+            # A small table stays compact (centred by the Table style)
+            # instead of being stretched to the full text width.
+            table = re.sub(r'<w:tblW w:type="pct" w:w="\d+" ?/>',
+                           f'<w:tblW w:type="dxa" w:w="{sum(widths)}" />', table, count=1)
+        return table
+    xml = re.sub(r"<w:tbl>.*?</w:tbl>", fix, xml, flags=re.S)
+    # Body text must not touch the bottom rule of a table.
+    xml = re.sub(r'(</w:tbl>\s*<w:p(?: [^>]*)?><w:pPr><w:pStyle w:val="(?:BodyText|FirstParagraph|Compact)" ?/>)(?!<w:spacing)',
+                 r'\1<w:spacing w:before="240" />', xml)
+    return xml
+
+
 def polish(docx: Path) -> None:
     tmp = docx.with_suffix(".tmp.docx")
     with zipfile.ZipFile(docx) as zin, zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zout:
@@ -128,5 +212,6 @@ def polish(docx: Path) -> None:
                 # Image paths are local (/Users/<name>/...): keep only the file
                 # name so no username leaks into hidden metadata (Hull: ID only).
                 data = re.sub(rb'(descr|name)="/[^"]*/([^"/]+)"', rb'\1="\2"', data)
+                data = _fit_tables(data.decode("utf-8")).encode("utf-8")
             zout.writestr(item, data)
     shutil.move(tmp, docx)
