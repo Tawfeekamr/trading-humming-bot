@@ -328,8 +328,8 @@ add(note("Hull brief: identify yourself by student ID only. Do not put your name
          "in the document or in the PDF file name."))
 
 add(front_heading("Acknowledgements"))
-add(note("TO WRITE (author): 2–3 short sentences. Do not name yourself. "
-         "Check with your supervisor whether naming them is fine (it can identify you)."))
+if (CLEAN_DIR / "acknowledgements.md").exists():
+    add((CLEAN_DIR / "acknowledgements.md").read_text(encoding="utf-8"))
 
 add(front_heading("Abstract"))
 add(abstract)
@@ -424,7 +424,13 @@ for title, fname in [("Appendix B: Installation and Running Instructions", "appe
         body = re.sub(r"\A\s*# [^\n]*\n", "", f.read_text(encoding="utf-8"))
         add(demote_headings_to_bold(clean(body)))
 add(back_heading("Appendix D: Ethics Approval"))
-add(note("Insert the faculty ethics form PDF (submitted for the 6 Aug 2026 deadline)."))
+_d = CLEAN_DIR / "appendix_d_ethics.md"
+if _d.exists():
+    _body = re.sub(r"\A\s*# [^\n]*\n", "", _d.read_text(encoding="utf-8"))
+    # Full-page form images; alt text describes the page (no local paths).
+    _body = re.sub(r"<!--\s*IMAGE\s+(\S+)\s*\|\s*(.+?)\s*-->",
+                   lambda m: f"![{m.group(2)}]({FIGURES / m.group(1)}){{width=5.6in}}", _body)
+    add(_body)
 
 md = "\n".join(parts)
 BUILD.mkdir(exist_ok=True)
