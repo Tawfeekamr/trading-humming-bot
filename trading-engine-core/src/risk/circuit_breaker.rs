@@ -72,6 +72,12 @@ impl CircuitBreaker {
     /// drawdown threshold is breached. Suspended while the peak is frozen: a
     /// suspect peak must not halt trading through the drawdown back door.
     pub fn check(&mut self, current_equity: f64) -> bool {
+        // A bankrupt book halts unconditionally — no frozen or missing peak
+        // may hide it (Nov 2026: paper equity reached −95k untripped).
+        if current_equity <= 0.0 {
+            self.trip();
+            return true;
+        }
         if self.peak_equity <= 0.0 || self.peak_frozen { return false; }
         let drawdown_pct = (self.peak_equity - current_equity) / self.peak_equity * 100.0;
         if drawdown_pct >= self.max_drawdown_pct {
@@ -85,6 +91,10 @@ impl CircuitBreaker {
     /// Check daily-loss-from-start-of-day. Latches the halt and returns true if
     /// the daily-loss threshold is breached.
     pub fn check_daily(&mut self, current_equity: f64) -> bool {
+        if current_equity <= 0.0 {
+            self.trip();
+            return true;
+        }
         if self.start_of_day_equity <= 0.0 { return false; }
         let loss_pct = (self.start_of_day_equity - current_equity) / self.start_of_day_equity * 100.0;
         if loss_pct >= self.daily_loss_limit_pct {
@@ -180,6 +190,35 @@ mod tests {
         c.set_peak_equity(100_000.0);
         c.set_start_of_day_equity(100_000.0);
         c
+    }
+
+    /// Nov 2026 incident: the paper book reached −95k equity with a −96k
+    /// start-of-day baseline. `check_daily` skipped (SOD <= 0) and `check`
+    /// was blind if the peak was frozen — so a bankrupt book traded on.
+    /// Non-positive equity must always halt, whatever the baselines say.
+    #[test]
+    fn non_positive_equity_always_halts_daily_check() {
+        let mut c = CircuitBreaker::new(10.0, 5.0);
+        c.set_start_of_day_equity(-96_475.0);
+        assert!(c.check_daily(-94_925.0), "negative equity must trip even with a negative SOD");
+        assert!(c.is_halted());
+    }
+
+    #[test]
+    fn non_positive_equity_halts_even_with_frozen_peak() {
+        let mut c = cb();
+        c.freeze_peak();
+        assert!(c.check(0.0), "zero equity must trip even while the peak is frozen");
+        assert!(c.is_halted());
+    }
+
+    #[test]
+    fn positive_equity_with_invalid_sod_still_skips_daily() {
+        // Unchanged behaviour: no valid baseline and solvent book -> no daily verdict.
+        let mut c = CircuitBreaker::new(10.0, 5.0);
+        c.set_start_of_day_equity(0.0);
+        assert!(!c.check_daily(50_000.0));
+        assert!(!c.is_halted());
     }
 
     /// Task 6: when the peak-equity invariant fires, peak updates freeze and
