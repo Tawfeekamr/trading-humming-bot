@@ -713,6 +713,13 @@ impl Strategy for GridStrategy {
         let buys_capped = self.buys_capped(center);
         for (i, level) in layout.buy_levels.iter().enumerate() {
             if buys_capped { break; }
+            // Never place a buy at/above the live price. The levels are centred
+            // on the bar-window Bollinger mean, which lags a falling market; on
+            // 26 Nov 2026 BNB was $551 but the centre ~$620, so five "buy" limits
+            // at $566-$609 filled instantly ~$1,043 above market value.
+            if level.price >= mid_price {
+                continue;
+            }
             let level_key = format!("buy_{}", i);
             if let Some(&last_fill) = self.level_cooldowns.get(&level_key) {
                 if ctx.timestamp.saturating_sub(last_fill) < cooldown_ms {
@@ -758,6 +765,10 @@ impl Strategy for GridStrategy {
 
         // Place sell limit orders — skip levels on cooldown
         for (i, level) in layout.sell_levels.iter().enumerate() {
+            // Mirror: never place a sell at/below the live price.
+            if level.price <= mid_price {
+                continue;
+            }
             let level_key = format!("sell_{}", i);
             if let Some(&last_fill) = self.level_cooldowns.get(&level_key) {
                 if ctx.timestamp.saturating_sub(last_fill) < cooldown_ms {
@@ -1247,6 +1258,47 @@ mod tests {
 
         // buy_1 should NOT be on cooldown
         assert!(!grid.level_cooldowns.contains_key("buy_1"), "buy_1 should not be blocked by buy_0 fill");
+    }
+
+    /// 26 Nov 2026: BNB at $551 but the grid centre (Bollinger mean of the bar
+    /// window) ~$620, so buy limits at $566-$609 sat ABOVE the market and
+    /// filled instantly at a loss. Buys must never be placed at/above the live
+    /// price, nor sells at/below it.
+    #[tokio::test]
+    async fn grid_never_places_buys_above_or_sells_below_the_live_price() {
+        use crate::connector::types::OrderBook;
+        use crate::models::bar::Bar;
+        let mut grid = make_grid();
+        // Sideways bars around $620 (±1.2%) so the grid activates.
+        let bars: Vec<Bar> = (0..60).map(|i| {
+            let c = if i % 2 == 0 { 622.0 } else { 618.0 };
+            Bar { timestamp: 1_700_000_000_000 + i * 3_600_000, open: 620.0,
+                  high: c + 7.0, low: c - 7.0, close: c, volume: 1.0 }
+        }).collect();
+        let mid = 551.0; // market has fallen well below the bar mean
+        let ctx = TickContext {
+            order_book: OrderBook { symbol: "BTC-USDT".into(), bids: vec![(mid - 0.01, 10.0)],
+                                    asks: vec![(mid + 0.01, 10.0)], timestamp: 1 },
+            recent_bars: bars, balances: HashMap::new(), open_orders: vec![],
+            regime: None, regime_confidence: 0.0, regime_model_version: None,
+            regime_artifact_sha256: None, regime_feature_contract_hash: None,
+            regime_age_ms: None, router_mode: None, router_action: None,
+            router_engine: None, router_size_mult: None, timestamp: 1_800_000_000_000,
+            capital: None, replay: false,
+        };
+        grid.granted_capital = 20_000.0;
+        let orders = grid.on_tick(&ctx).await.unwrap();
+        assert_eq!(grid.state, GridState::Active, "test setup: grid should activate ({})", grid.pause_reason);
+        let layout = grid.grid_layout.clone().expect("layout computed");
+        assert!(layout.buy_levels.iter().any(|l| l.price >= mid),
+            "test setup: the stale centre must put some buy levels above the market");
+        for o in &orders {
+            let p = o.price.unwrap();
+            match o.side {
+                OrderSide::Buy => assert!(p < mid, "buy placed at {} >= market {}", p, mid),
+                OrderSide::Sell => assert!(p > mid, "sell placed at {} <= market {}", p, mid),
+            }
+        }
     }
 
     #[test]
