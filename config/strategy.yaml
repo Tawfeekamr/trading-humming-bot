@@ -173,8 +173,9 @@ trend:
   max_position_pct: 15.0        # Was 40 — 40% let a single ETH position hit ~$8.4k and a
                                 # 10% crash gap cost -$855. 15% caps notional at ~$3.75k
                                 # so a worst-case 10% gap <= ~$375 loss per trade.
-  max_positions: 2
-  max_total_positions: 2        # Claude: 3×2%=6% > 5% daily limit — reduced to 2
+  max_positions: 2              # Max concurrent trend positions across all pairs
+                                # (an entry order waiting to fill counts). Enforced
+                                # since Nov 2026; before that no code read this key.
   exit_signal_threshold: 2      # Close position when signal score drops below this
   entry_score_threshold: 4      # Was 5 — lowered to allow entries with moderate signals
   trailing_stop_atr_mult: 2.0   # Chandelier Exit multiplier. WAS 2.5 (dead field,
@@ -182,8 +183,8 @@ trend:
                                 # atr_trailing_mult serde default. Tightened to 2.0.
   rr_ratio: 2.0                # Legacy compatibility; hybrid exits use fixed 1R / 1.5R targets
   sl_buffer_pct: 0.2
-  max_drawdown_pct: 10.0
-  daily_loss_limit_pct: 5.0
+  # Drawdown and daily-loss limits are portfolio-wide: see `risk:` above
+  # (circuit breaker). The trend-level copies were never read and are removed.
   timeframe: "1h"
   # Hybrid exits: TP1=1R closes 33% of current quantity; TP2=1.5R closes 50%.
   # Chandelier trailing manages the remaining runner; there is no fixed TP3.

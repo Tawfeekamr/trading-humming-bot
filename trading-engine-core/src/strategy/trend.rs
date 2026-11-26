@@ -135,6 +135,7 @@ struct TrendNoTradeCounters {
     adx: u64,
     score: u64,
     capital: u64,
+    positions: u64,
 }
 
 pub struct TrendStrategy {
@@ -195,6 +196,10 @@ pub struct TrendStrategy {
     /// force-closed open positions on every engine switch.
     force_close_pending: bool,
     no_trade: TrendNoTradeCounters,
+    /// Shared across all pairs' trend instances: which pairs currently hold a
+    /// trend slot (open position or entry order pending). Enforces
+    /// `config.max_positions`. None = no cross-pair limit.
+    position_registry: Option<Arc<std::sync::Mutex<std::collections::HashSet<String>>>>,
 }
 
 impl TrendStrategy {
@@ -202,36 +207,9 @@ impl TrendStrategy {
         let capital = config.capital;
         let mut me = Self {
             pair: pair.to_string(),
-            config: TrendConfig {
-                ema_fast: config.ema_fast,
-                ema_slow: config.ema_slow,
-                ema_trend: config.ema_trend,
-                rsi_period: config.rsi_period,
-                rsi_min: config.rsi_min,
-                rsi_max: config.rsi_max,
-                min_signal_score: config.min_signal_score,
-                confirmation_ticks: config.confirmation_ticks,
-                risk_reward_ratio: config.risk_reward_ratio,
-                capital: config.capital,
-                risk_per_trade_pct: config.risk_per_trade_pct,
-                max_position_pct: config.max_position_pct,
-                trailing_stop_atr_mult: config.trailing_stop_atr_mult,
-                exit_signal_threshold: config.exit_signal_threshold,
-                sl_buffer_pct: config.sl_buffer_pct,
-                adx_gate_threshold: config.adx_gate_threshold,
-                adx_exit_threshold: config.adx_exit_threshold,
-                choppiness_threshold: config.choppiness_threshold,
-                volume_ratio_threshold: config.volume_ratio_threshold,
-                entry_score_threshold: config.entry_score_threshold,
-                rsi_long_max: config.rsi_long_max,
-                rsi_short_min: config.rsi_short_min,
-                trade_shorts: config.trade_shorts,
-                perp_mark_source: config.perp_mark_source.clone(),
-                funding_accrual: config.funding_accrual,
-                regime_gate: config.regime_gate,
-                min_regime_confidence: config.min_regime_confidence,
-                enabled_pairs: config.enabled_pairs.clone(),
-            },
+            // Clone the whole config: the old field-by-field copy silently
+            // dropped any key not listed (how max_positions went unread).
+            config: config.clone(),
             ema_fast: Ema::new(config.ema_fast),
             ema_slow: Ema::new(config.ema_slow),
             adx: Adx::new(14),
@@ -254,6 +232,7 @@ impl TrendStrategy {
             entries_suppressed: false,
             force_close_pending: false,
             no_trade: TrendNoTradeCounters::default(),
+            position_registry: None,
         };
         me.load_position();
         me
@@ -261,6 +240,47 @@ impl TrendStrategy {
 
     /// Attach a perp price source so open shorts are marked against the
     /// perpetual instead of the spot mid. Longs are unaffected.
+    /// Share one position registry across every pair's trend instance so
+    /// `config.max_positions` caps concurrent trend positions fleet-wide.
+    pub fn with_position_registry(
+        mut self,
+        registry: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
+    ) -> Self {
+        self.position_registry = Some(registry);
+        self
+    }
+
+    /// A pair holds a slot while it has a position or an entry order pending.
+    fn holds_position_slot(&self) -> bool {
+        self.position.is_some() || self.pending_entry.is_some()
+    }
+
+    fn sync_position_slot(&self) {
+        if let Some(reg) = &self.position_registry {
+            let mut set = reg.lock().unwrap_or_else(|e| e.into_inner());
+            if self.holds_position_slot() {
+                set.insert(self.pair.clone());
+            } else {
+                set.remove(&self.pair);
+            }
+        }
+    }
+
+    /// True when other pairs already hold `max_positions` slots.
+    fn position_slots_full(&self) -> bool {
+        let max = self.config.max_positions;
+        if max == 0 {
+            return false;
+        }
+        match &self.position_registry {
+            Some(reg) => {
+                let set = reg.lock().unwrap_or_else(|e| e.into_inner());
+                set.iter().filter(|p| **p != self.pair).count() >= max
+            }
+            None => false,
+        }
+    }
+
     pub fn with_perp(mut self, perp: Arc<dyn PerpPriceSource>) -> Self {
         self.perp = Some(perp);
         self
@@ -637,6 +657,7 @@ impl Strategy for TrendStrategy {
             self.update_indicators(bar);
         }
         self.last_bar_count = ctx.recent_bars.len();
+        self.sync_position_slot();
 
         if !self.indicators_ready() {
             self.no_trade.warmup += 1;
@@ -997,6 +1018,12 @@ impl Strategy for TrendStrategy {
                     self.volume_sma.volume_ratio(),
                     scores.macd, self.rsi.value()
                 );
+            } else if self.position_slots_full() {
+                self.no_trade.positions += 1;
+                debug!(
+                    "[{}] Entry skipped: max_positions={} reached across pairs",
+                    self.pair, self.config.max_positions
+                );
             } else {
                 let side = entry_side_for(self.direction(current_price));
                 let stop_loss = self.calculate_stop_loss(current_price, side);
@@ -1051,6 +1078,7 @@ impl Strategy for TrendStrategy {
                 }
             }
         }
+        self.sync_position_slot();
         Ok(orders)
     }
 
@@ -1157,9 +1185,9 @@ impl Strategy for TrendStrategy {
             let reason = self.activation_block_reason(ref_price, None, 0.0).unwrap_or_else(|| "Ready".to_string());
             let skips = &self.no_trade;
             let skip_summary = format!(
-                "skips w:{} q:{} r:{} p:{} m:{} d:{} a:{} s:{} c:{}",
+                "skips w:{} q:{} r:{} p:{} m:{} d:{} a:{} s:{} c:{} n:{}",
                 skips.warmup, skips.no_quote, skips.replay, skips.suppressed, skips.regime,
-                skips.direction, skips.adx, skips.score, skips.capital
+                skips.direction, skips.adx, skips.score, skips.capital, skips.positions
             );
             (
                 "WAITING".to_string(),
@@ -1590,6 +1618,56 @@ mod tests {
 
     // ── helpers for the on_tick flow tests above ──
 
+    fn registry_with(pairs: &[&str]) -> std::sync::Arc<std::sync::Mutex<std::collections::HashSet<String>>> {
+        std::sync::Arc::new(std::sync::Mutex::new(pairs.iter().map(|p| p.to_string()).collect()))
+    }
+
+    #[test]
+    fn max_positions_blocks_a_new_pair_when_other_pairs_fill_the_slots() {
+        let mut cfg = base_test_config();
+        cfg.max_positions = 2;
+        let reg = registry_with(&["BNB-USDT", "XRP-USDT"]);
+        let doge = TrendStrategy::new("DOGE-USDT", &cfg, TelegramBot::new("", ""))
+            .with_position_registry(reg.clone());
+        assert!(doge.position_slots_full(), "2 of 2 slots held by other pairs");
+        let bnb = TrendStrategy::new("BNB-USDT", &cfg, TelegramBot::new("", ""))
+            .with_position_registry(reg);
+        assert!(!bnb.position_slots_full(), "a pair's own slot never blocks it");
+    }
+
+    #[test]
+    fn max_positions_zero_means_unlimited() {
+        let cfg = base_test_config(); // max_positions defaults to 0
+        let s = TrendStrategy::new("DOGE-USDT", &cfg, TelegramBot::new("", ""))
+            .with_position_registry(registry_with(&["A", "B", "C", "D"]));
+        assert!(!s.position_slots_full());
+    }
+
+    #[test]
+    fn pending_entry_holds_a_slot_until_cleared() {
+        let mut cfg = base_test_config();
+        cfg.max_positions = 1;
+        let reg = registry_with(&[]);
+        let mut a = TrendStrategy::new("BNB-USDT", &cfg, TelegramBot::new("", ""))
+            .with_position_registry(reg.clone());
+        let b = TrendStrategy::new("XRP-USDT", &cfg, TelegramBot::new("", ""))
+            .with_position_registry(reg.clone());
+        a.pending_entry = Some(OrderSide::Buy); // entry order placed, not yet filled
+        a.sync_position_slot();
+        assert!(b.position_slots_full(), "a pending entry already uses the only slot");
+        a.pending_entry = None;
+        a.sync_position_slot();
+        assert!(!b.position_slots_full(), "slot released once the entry is gone");
+    }
+
+    #[test]
+    fn config_clone_keeps_every_field() {
+        let mut cfg = base_test_config();
+        cfg.max_positions = 3;
+        let s = TrendStrategy::new("BNB-USDT", &cfg, TelegramBot::new("", ""));
+        assert_eq!(s.config.max_positions, 3);
+    }
+
     fn base_test_config() -> crate::config::TrendConfig {
         crate::config::TrendConfig {
             ema_fast: 20, ema_slow: 50, ema_trend: 200, rsi_period: 14,
@@ -1603,6 +1681,7 @@ mod tests {
             perp_mark_source: None, funding_accrual: false,
             regime_gate: false, min_regime_confidence: 0.55,
             enabled_pairs: Vec::new(),
+            max_positions: 0,
         }
     }
 

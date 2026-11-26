@@ -366,6 +366,11 @@ pub struct TrendConfig {
     /// coin-specific, not regime-fixable). Mirrors swing's enabled_pairs.
     #[serde(default)]
     pub enabled_pairs: Vec<String>,
+    /// Maximum concurrent trend positions across ALL pairs, counting an entry
+    /// order still waiting to fill. 0 = unlimited (back-compat). This key sat
+    /// in strategy.yaml for months with no reader (thesis §5.4.1 item 4).
+    #[serde(default)]
+    pub max_positions: usize,
 }
 
 fn default_10k() -> f64 { 10000.0 }

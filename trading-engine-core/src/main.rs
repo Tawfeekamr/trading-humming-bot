@@ -120,6 +120,11 @@ async fn async_main() -> Result<()> {
         };
 
     // Add strategies for each enabled pair
+    // One registry shared by every pair's trend instance: enforces
+    // trend.max_positions across the whole fleet.
+    let trend_position_registry = std::sync::Arc::new(std::sync::Mutex::new(
+        std::collections::HashSet::<String>::new(),
+    ));
     for (symbol, pc) in &pair_configs {
         // Grid strategy per pair
         let grid = trading_engine_core::strategy::grid::GridStrategy::new(
@@ -148,6 +153,7 @@ async fn async_main() -> Result<()> {
             if let Some(p) = &perp_source {
                 trend = trend.with_perp(p.clone());
             }
+            trend = trend.with_position_registry(trend_position_registry.clone());
             engine.add_strategy(Box::new(trend));
         }
     }
