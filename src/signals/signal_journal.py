@@ -38,6 +38,19 @@ class SignalTrade:
     is_audit: int            # 1 = paper trade (audit mode), 0 = live
 
 
+
+# Partial take-profit rows hold one slice's P&L; every other CLOSE_* row holds the
+# CUMULATIVE P&L of the whole trade. Counting both double-counts (Nov 2026 audit).
+_PARTIAL = "('CLOSE_tp1','CLOSE_tp2')"
+_REALISED_ROWS = (
+    "action LIKE 'CLOSE_%' AND ("
+    f"  action NOT IN {_PARTIAL}"
+    f"  OR NOT EXISTS (SELECT 1 FROM signal_trades f WHERE f.symbol = signal_trades.symbol"
+    f"                 AND f.action LIKE 'CLOSE_%' AND f.action NOT IN {_PARTIAL}"
+    "                  AND f.id > signal_trades.id))"
+)
+_FINAL_ROW = f"action LIKE 'CLOSE_%' AND action NOT IN {_PARTIAL}"
+
 class SignalJournal:
     def __init__(self, db_path: Optional[Path] = None, state_suffix: str = ""):
         if db_path is None:
@@ -211,12 +224,16 @@ class SignalJournal:
 
         try:
             with self._conn() as conn:
-                row = conn.execute(
-                    f"SELECT COUNT(*), SUM(realized_pnl), AVG(realized_pnl), "
-                    f"SUM(CASE WHEN realized_pnl > 0 THEN 1 ELSE 0 END) "
-                    f"FROM signal_trades WHERE {where}"
+                # Realised P&L = each completed trade's cumulative total, plus
+                # partial take-profits already banked on still-open trades.
+                # Trades, wins and average are over COMPLETED trades only.
+                total_pnl = conn.execute(
+                    f"SELECT SUM(realized_pnl) FROM signal_trades WHERE ({where}) AND {_REALISED_ROWS}"
+                ).fetchone()[0]
+                total, avg_pnl, wins = conn.execute(
+                    f"SELECT COUNT(*), AVG(realized_pnl), SUM(CASE WHEN realized_pnl > 0 THEN 1 ELSE 0 END) "
+                    f"FROM signal_trades WHERE ({where}) AND {_FINAL_ROW}"
                 ).fetchone()
-                total, total_pnl, avg_pnl, wins = row
                 wins = wins or 0
                 total = total or 0
                 win_rate = (wins / total * 100) if total > 0 else 0
@@ -235,8 +252,10 @@ class SignalJournal:
         try:
             with self._conn() as conn:
                 rows = conn.execute(
-                    f"SELECT channel_name, COUNT(*), SUM(realized_pnl), "
-                    f"SUM(CASE WHEN realized_pnl > 0 THEN 1 ELSE 0 END) "
+                    f"SELECT channel_name, "
+                    f"SUM(CASE WHEN {_FINAL_ROW} THEN 1 ELSE 0 END), "
+                    f"SUM(CASE WHEN {_REALISED_ROWS} THEN realized_pnl ELSE 0 END), "
+                    f"SUM(CASE WHEN {_FINAL_ROW} AND realized_pnl > 0 THEN 1 ELSE 0 END) "
                     f"FROM signal_trades WHERE timestamp >= ? GROUP BY channel_name",
                     (cutoff,),
                 ).fetchall()

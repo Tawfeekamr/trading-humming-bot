@@ -568,12 +568,13 @@ class TelegramCommandHandler:
             conn = sqlite3.connect("data/trades.db")
             totals = [0.0, 0.0, 0.0]
             body = ""
-            for eng in ("Grid", "Trend", "Signal"):
+            for eng, key in (("Grid", "grid"), ("Trend", "trend"), ("Signal", "signal"),
+                             ("Futures", "signal_futures")):
                 per = []
                 for i, (_, cutoff) in enumerate(windows):
                     v = conn.execute(
                         "SELECT COALESCE(SUM(pnl),0) FROM trades WHERE engine=? AND timestamp >= ?",
-                        (eng.lower(), cutoff)).fetchone()[0] or 0.0
+                        (key, cutoff)).fetchone()[0] or 0.0
                     per.append(v)
                     totals[i] += v
                 body += f"{eng:<7}" + "".join(f"{self._fmt_pnl(v):>11}" for v in per) + "\n"

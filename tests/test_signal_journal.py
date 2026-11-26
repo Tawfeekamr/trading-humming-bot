@@ -42,13 +42,15 @@ def test_log_and_query_roundtrip(tmp_path):
     assert len(states) == 1
     assert states[0]["symbol"] == "BTC-USDT"
 
-    summary = j.summary(days=-1)
-    assert summary["total_trades"] >= 1
+    # An OPEN row is not a completed trade; a final CLOSE row is.
+    assert j.summary(days=-1)["total_trades"] == 0
+    j.log_trade(_trade(action="CLOSE_tp3", realized_pnl=5.0))
+    assert j.summary(days=-1)["total_trades"] == 1
 
 
 def test_summary_by_channel(tmp_path):
     j = SignalJournal(db_path=tmp_path / "test.db")
-    j.log_trade(_trade(realized_pnl=50.0))
+    j.log_trade(_trade(action="CLOSE_stop_loss", realized_pnl=50.0))
     by_ch = j.summary_by_channel(days=10000)  # all time (trade ts is 2024)
     assert "TestCh" in by_ch
     assert by_ch["TestCh"]["pnl"] == 50.0
