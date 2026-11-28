@@ -198,7 +198,7 @@ def benchmarks(p: Panel, a: int, b: int) -> dict:
     C = p.ohlc[BTC][3]
     btc = float(C[b - 1] / C[a] - 1.0)
     closes = pd.DataFrame({s: p.ohlc[s][3] for s in p.syms}, index=p.index).iloc[a:b]
-    rets = closes.pct_change()
+    rets = closes.pct_change(fill_method=None)
     mem = p.member.iloc[a:b].shift(1, fill_value=False)
     ew = rets.where(mem).mean(axis=1).fillna(0.0)
     return {"btc_hold": btc, "equal_weight_universe": float((1.0 + ew).prod() - 1.0)}
