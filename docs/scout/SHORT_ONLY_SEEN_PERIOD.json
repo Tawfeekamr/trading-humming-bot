@@ -1,0 +1,355 @@
+{
+  "study": "short_seen",
+  "title": "Short-only breakdown \u2014 SEEN period (CONTAMINATED, information only)",
+  "rules": "docs/scout/PREREGISTRATION_SHORT.md",
+  "side_filter": -1,
+  "commit": "cb66e8c",
+  "data": [
+    "2022-11-01",
+    "2026-09-30"
+  ],
+  "oos": [
+    "2023-07-01",
+    "2026-09-30"
+  ],
+  "universe_size_oos": {
+    "min": 59.0,
+    "mean": 59.99901795735129,
+    "max": 60.0
+  },
+  "symbols_in_panel": 524,
+  "state_share_oos": {
+    "NO_TRADE": 0.0,
+    "RISK_ON": 0.2828633557800225,
+    "RISK_OFF": 0.24270482603815938,
+    "NEUTRAL": 0.4744318181818182
+  },
+  "benchmarks_oos": {
+    "btc_hold": 1.7439057621531826,
+    "equal_weight_universe": -0.7970528203236229
+  },
+  "detectors": {
+    "breakout": {
+      "oos_metrics": {
+        "trades": 293,
+        "expectancy_r": -0.04713285224721456,
+        "total_r": -13.809925708433873,
+        "profit_factor": 0.8364947165098262,
+        "win_rate": 0.5358361774744027,
+        "total_pnl_usd": -1019.8122817591623,
+        "return_on_budget": -0.10198122817591622,
+        "max_dd": 0.12396320014045557,
+        "fold_total_r": {
+          "2023Q3": -1.797046350340225,
+          "2023Q4": -2.206504171701371,
+          "2024Q1": 0.994832840537863,
+          "2024Q2": -9.057403481223977,
+          "2024Q3": 6.7391407125638425,
+          "2024Q4": 2.742404493495879,
+          "2025Q1": -9.781262556953537,
+          "2025Q2": 7.5448716968356795,
+          "2025Q3": -4.790306315145159,
+          "2025Q4": -0.7121883355898893,
+          "2026Q1": -4.884720730097498,
+          "2026Q2": 1.6100778600075492,
+          "2026Q3": -0.21182137082303032
+        },
+        "folds_positive": 0.38461538461538464,
+        "best_coin": "WLDUSDT",
+        "best_coin_r": 5.097804216909932,
+        "ex_best_coin_r": -18.907729925343805,
+        "coins_traded": 145,
+        "exit_reasons": {
+          "stop": 112,
+          "time": 90,
+          "breakeven": 74,
+          "tp3": 17
+        },
+        "sides": {
+          "short": 293
+        },
+        "states": {
+          "NEUTRAL": 199,
+          "RISK_OFF": 94
+        },
+        "avg_hold_h": 40.42320819112628
+      },
+      "null": {
+        "runs": 1000,
+        "mean": -0.0258788678649896,
+        "p95": 0.07001555833555377,
+        "p_value": 0.617
+      },
+      "verdict": {
+        "checks": {
+          "1_trades": {
+            "value": 293,
+            "pass": true
+          },
+          "2_expectancy_r": {
+            "value": -0.04713285224721456,
+            "pass": false
+          },
+          "3_profit_factor": {
+            "value": 0.8364947165098262,
+            "pass": false
+          },
+          "4_null_p": {
+            "value": 0.617,
+            "pass": false
+          },
+          "5_folds_positive": {
+            "value": 0.38461538461538464,
+            "pass": false
+          },
+          "6_max_dd": {
+            "value": 0.12396320014045557,
+            "pass": true
+          },
+          "7_ex_best_coin_r": {
+            "value": -18.907729925343805,
+            "pass": false
+          }
+        },
+        "go": false
+      },
+      "selected_cells": [
+        {
+          "fold": "2023Q3",
+          "cell": {
+            "rvol_min": 1.5,
+            "stop_atr": 2.0
+          },
+          "train_mean_r": -0.06605755199448482,
+          "from_default": false
+        },
+        {
+          "fold": "2023Q4",
+          "cell": {
+            "rvol_min": 2.0,
+            "stop_atr": 2.0
+          },
+          "train_mean_r": 0.11224709405860793,
+          "from_default": false
+        },
+        {
+          "fold": "2024Q1",
+          "cell": {
+            "rvol_min": 2.0,
+            "stop_atr": 1.5
+          },
+          "train_mean_r": -0.15769229256301098,
+          "from_default": false
+        },
+        {
+          "fold": "2024Q2",
+          "cell": {
+            "rvol_min": 1.5,
+            "stop_atr": 1.0
+          },
+          "train_mean_r": -0.20278673180716233,
+          "from_default": false
+        },
+        {
+          "fold": "2024Q3",
+          "cell": {
+            "rvol_min": 1.5,
+            "stop_atr": 2.0
+          },
+          "train_mean_r": 0.09162773438128458,
+          "from_default": false
+        },
+        {
+          "fold": "2024Q4",
+          "cell": {
+            "rvol_min": 2.5,
+            "stop_atr": 1.0
+          },
+          "train_mean_r": 0.33191114149692297,
+          "from_default": false
+        },
+        {
+          "fold": "2025Q1",
+          "cell": {
+            "rvol_min": 2.0,
+            "stop_atr": 1.0
+          },
+          "train_mean_r": 0.447402397525446,
+          "from_default": false
+        },
+        {
+          "fold": "2025Q2",
+          "cell": {
+            "rvol_min": 1.5,
+            "stop_atr": 1.5
+          },
+          "train_mean_r": 0.142756829055248,
+          "from_default": false
+        },
+        {
+          "fold": "2025Q3",
+          "cell": {
+            "rvol_min": 1.5,
+            "stop_atr": 1.5
+          },
+          "train_mean_r": 0.23765419761526205,
+          "from_default": false
+        },
+        {
+          "fold": "2025Q4",
+          "cell": {
+            "rvol_min": 1.5,
+            "stop_atr": 1.5
+          },
+          "train_mean_r": 0.055091307633810406,
+          "from_default": false
+        },
+        {
+          "fold": "2026Q1",
+          "cell": {
+            "rvol_min": 1.5,
+            "stop_atr": 2.0
+          },
+          "train_mean_r": 0.24977506603964564,
+          "from_default": false
+        },
+        {
+          "fold": "2026Q2",
+          "cell": {
+            "rvol_min": 2.0,
+            "stop_atr": 1.0
+          },
+          "train_mean_r": 0.1494679872797447,
+          "from_default": false
+        },
+        {
+          "fold": "2026Q3",
+          "cell": {
+            "rvol_min": 2.0,
+            "stop_atr": 1.0
+          },
+          "train_mean_r": 0.1489733847933597,
+          "from_default": false
+        }
+      ],
+      "default_cell_oos_metrics": {
+        "trades": 211,
+        "expectancy_r": -0.02922426080604008,
+        "total_r": -6.1663190300744635,
+        "profit_factor": 0.9444524347912486,
+        "win_rate": 0.5308056872037915,
+        "total_pnl_usd": -246.28394691896324,
+        "return_on_budget": -0.024628394691896323,
+        "max_dd": 0.05148392328945071,
+        "fold_total_r": {
+          "2023Q3": -0.5044380797533833,
+          "2023Q4": -4.384022989699957,
+          "2024Q1": 0.994832840537863,
+          "2024Q2": -2.6161027487536477,
+          "2024Q3": 7.413069016671461,
+          "2024Q4": -2.486461257837413,
+          "2025Q1": -0.046655074500309146,
+          "2025Q2": -1.8121577442979264,
+          "2025Q3": -2.4614742581866436,
+          "2025Q4": 0.9437091634524076,
+          "2026Q1": 0.5124179422616796,
+          "2026Q2": 1.2558146054374058,
+          "2026Q3": -2.974850445406001
+        },
+        "folds_positive": 0.38461538461538464,
+        "best_coin": "SOLUSDT",
+        "best_coin_r": 3.2741846134415606,
+        "ex_best_coin_r": -9.440503643516024,
+        "coins_traded": 121,
+        "exit_reasons": {
+          "time": 76,
+          "stop": 77,
+          "tp3": 12,
+          "breakeven": 46
+        },
+        "sides": {
+          "short": 211
+        },
+        "states": {
+          "NEUTRAL": 144,
+          "RISK_OFF": 67
+        },
+        "avg_hold_h": 44.28909952606635
+      },
+      "candidates_per_cell": {
+        "(1.5, 1.0)": 1385,
+        "(1.5, 1.5)": 1001,
+        "(1.5, 2.0)": 678,
+        "(2.0, 1.0)": 829,
+        "(2.0, 1.5)": 586,
+        "(2.0, 2.0)": 397,
+        "(2.5, 1.0)": 469,
+        "(2.5, 1.5)": 330,
+        "(2.5, 2.0)": 222
+      },
+      "skips_default_cell": {
+        "already_open": 40,
+        "chased": 254,
+        "capacity": 39,
+        "correlated": 11,
+        "cooldown": 3
+      },
+      "full_period_mean_r_per_cell": {
+        "(1.5, 1.0)": -0.04304201561932137,
+        "(1.5, 1.5)": 0.003796110349638204,
+        "(1.5, 2.0)": 0.024960526248141886,
+        "(2.0, 1.0)": 0.013274350997375537,
+        "(2.0, 1.5)": 0.004074652794382725,
+        "(2.0, 2.0)": 0.02926691668701187,
+        "(2.5, 1.0)": 0.00420214646317313,
+        "(2.5, 1.5)": 0.045194596411691074,
+        "(2.5, 2.0)": -0.0028677111013179304
+      }
+    }
+  },
+  "combined_default_cells_oos": {
+    "trades": 211,
+    "expectancy_r": -0.02922426080604008,
+    "total_r": -6.1663190300744635,
+    "profit_factor": 0.9444524347912486,
+    "win_rate": 0.5308056872037915,
+    "total_pnl_usd": -246.28394691896324,
+    "return_on_budget": -0.024628394691896323,
+    "max_dd": 0.05148392328945071,
+    "fold_total_r": {
+      "2023Q3": -0.5044380797533833,
+      "2023Q4": -4.384022989699957,
+      "2024Q1": 0.994832840537863,
+      "2024Q2": -2.6161027487536477,
+      "2024Q3": 7.413069016671461,
+      "2024Q4": -2.486461257837413,
+      "2025Q1": -0.046655074500309146,
+      "2025Q2": -1.8121577442979264,
+      "2025Q3": -2.4614742581866436,
+      "2025Q4": 0.9437091634524076,
+      "2026Q1": 0.5124179422616796,
+      "2026Q2": 1.2558146054374058,
+      "2026Q3": -2.974850445406001
+    },
+    "folds_positive": 0.38461538461538464,
+    "best_coin": "SOLUSDT",
+    "best_coin_r": 3.2741846134415606,
+    "ex_best_coin_r": -9.440503643516024,
+    "coins_traded": 121,
+    "exit_reasons": {
+      "time": 76,
+      "stop": 77,
+      "tp3": 12,
+      "breakeven": 46
+    },
+    "sides": {
+      "short": 211
+    },
+    "states": {
+      "NEUTRAL": 144,
+      "RISK_OFF": 67
+    },
+    "avg_hold_h": 44.28909952606635
+  },
+  "runtime_s": 29.7
+}

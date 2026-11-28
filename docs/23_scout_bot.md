@@ -1,6 +1,6 @@
 # 23 — Scout Bot: Design & Implementation Plan
 
-**Status:** Phase 0 done (rules fixed in `docs/scout/PREREGISTRATION.md` — that file wins where it differs from this one) · **Phase 1 done: NO-GO for both detectors** (`docs/scout/PHASE1_CONCLUSION.md`) — Phases 2+ not started · **Date:** 2026-11-28
+**Status:** Phase 0 done (rules fixed in `docs/scout/PREREGISTRATION.md` — that file wins where it differs from this one) · **Phase 1 done: NO-GO for both detectors** (`docs/scout/PHASE1_CONCLUSION.md`) · **v2 short-only test: NO-GO** (`docs/scout/SHORT_ONLY_CONCLUSION.md`) — TA-breakout family closed; Phases 2+ not started · **Date:** 2026-11-28
 **One line:** a bot that scans many coins, reads the overall market, writes its own
 trade signals, and sends them through the trade executor we already have.
 

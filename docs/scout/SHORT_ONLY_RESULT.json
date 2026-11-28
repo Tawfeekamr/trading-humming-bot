@@ -1,0 +1,321 @@
+{
+  "study": "short_unseen",
+  "title": "Short-only breakdown test \u2014 PRIMARY (unseen 2021-01 \u2192 2023-06)",
+  "rules": "docs/scout/PREREGISTRATION_SHORT.md",
+  "side_filter": -1,
+  "commit": "cb66e8c",
+  "data": [
+    "2020-05-01",
+    "2023-06-30"
+  ],
+  "oos": [
+    "2021-01-01",
+    "2023-06-30"
+  ],
+  "universe_size_oos": {
+    "min": 32.0,
+    "mean": 59.55621112330772,
+    "max": 60.0
+  },
+  "symbols_in_panel": 179,
+  "state_share_oos": {
+    "NO_TRADE": 0.0,
+    "RISK_ON": 0.25905598243688255,
+    "RISK_OFF": 0.34184046834979875,
+    "NEUTRAL": 0.3991035492133187
+  },
+  "benchmarks_oos": {
+    "btc_hold": 0.049808719627778775,
+    "equal_weight_universe": 0.17233751919863027
+  },
+  "detectors": {
+    "breakout": {
+      "oos_metrics": {
+        "trades": 138,
+        "expectancy_r": 0.1468236510625017,
+        "total_r": 20.261663846625222,
+        "profit_factor": 1.445800586438448,
+        "win_rate": 0.5797101449275363,
+        "total_pnl_usd": 1515.1450006775506,
+        "return_on_budget": 0.15151450006775505,
+        "max_dd": 0.061254755202935635,
+        "fold_total_r": {
+          "2021Q1": -0.6463296541785231,
+          "2021Q2": 8.358809195477487,
+          "2021Q3": -1.2266832224425606,
+          "2021Q4": -3.119498563914787,
+          "2022Q1": 0.14744859833517654,
+          "2022Q2": 7.373019351614342,
+          "2022Q3": 3.4606516598080095,
+          "2022Q4": 6.015228622393628,
+          "2023Q1": -1.9166241279944396,
+          "2023Q2": 1.8156419875269
+        },
+        "folds_positive": 0.6,
+        "best_coin": "AXSUSDT",
+        "best_coin_r": 4.952444047420997,
+        "ex_best_coin_r": 15.309219799204225,
+        "coins_traded": 79,
+        "exit_reasons": {
+          "breakeven": 33,
+          "stop": 52,
+          "tp3": 22,
+          "time": 30,
+          "data_end": 1
+        },
+        "sides": {
+          "short": 138
+        },
+        "states": {
+          "NEUTRAL": 46,
+          "RISK_OFF": 92
+        },
+        "avg_hold_h": 36.369565217391305
+      },
+      "null": {
+        "runs": 1000,
+        "mean": 0.023186958151899563,
+        "p95": 0.17004564820005896,
+        "p_value": 0.083
+      },
+      "verdict": {
+        "checks": {
+          "1_trades": {
+            "value": 138,
+            "pass": false
+          },
+          "2_expectancy_r": {
+            "value": 0.1468236510625017,
+            "pass": true
+          },
+          "3_profit_factor": {
+            "value": 1.445800586438448,
+            "pass": true
+          },
+          "4_null_p": {
+            "value": 0.083,
+            "pass": false
+          },
+          "5_folds_positive": {
+            "value": 0.6,
+            "pass": true
+          },
+          "6_max_dd": {
+            "value": 0.061254755202935635,
+            "pass": true
+          },
+          "7_ex_best_coin_r": {
+            "value": 15.309219799204225,
+            "pass": true
+          }
+        },
+        "go": false
+      },
+      "selected_cells": [
+        {
+          "fold": "2021Q1",
+          "cell": {
+            "rvol_min": 1.5,
+            "stop_atr": 1.0
+          },
+          "train_mean_r": 0.2790881315362164,
+          "from_default": false
+        },
+        {
+          "fold": "2021Q2",
+          "cell": {
+            "rvol_min": 1.5,
+            "stop_atr": 1.0
+          },
+          "train_mean_r": 0.1795746754510895,
+          "from_default": false
+        },
+        {
+          "fold": "2021Q3",
+          "cell": {
+            "rvol_min": 2.0,
+            "stop_atr": 1.5
+          },
+          "train_mean_r": null,
+          "from_default": true
+        },
+        {
+          "fold": "2021Q4",
+          "cell": {
+            "rvol_min": 2.0,
+            "stop_atr": 1.5
+          },
+          "train_mean_r": null,
+          "from_default": true
+        },
+        {
+          "fold": "2022Q1",
+          "cell": {
+            "rvol_min": 2.0,
+            "stop_atr": 1.5
+          },
+          "train_mean_r": null,
+          "from_default": true
+        },
+        {
+          "fold": "2022Q2",
+          "cell": {
+            "rvol_min": 1.5,
+            "stop_atr": 1.5
+          },
+          "train_mean_r": 0.1294831854650635,
+          "from_default": false
+        },
+        {
+          "fold": "2022Q3",
+          "cell": {
+            "rvol_min": 1.5,
+            "stop_atr": 1.5
+          },
+          "train_mean_r": 0.2868607889438812,
+          "from_default": false
+        },
+        {
+          "fold": "2022Q4",
+          "cell": {
+            "rvol_min": 2.0,
+            "stop_atr": 1.0
+          },
+          "train_mean_r": 0.249403981253154,
+          "from_default": false
+        },
+        {
+          "fold": "2023Q1",
+          "cell": {
+            "rvol_min": 2.0,
+            "stop_atr": 1.0
+          },
+          "train_mean_r": 0.19726217333314472,
+          "from_default": false
+        },
+        {
+          "fold": "2023Q2",
+          "cell": {
+            "rvol_min": 2.0,
+            "stop_atr": 1.5
+          },
+          "train_mean_r": 0.31498960846490953,
+          "from_default": false
+        }
+      ],
+      "default_cell_oos_metrics": {
+        "trades": 87,
+        "expectancy_r": 0.09982793557196987,
+        "total_r": 8.685030394761375,
+        "profit_factor": 1.3057365593128882,
+        "win_rate": 0.5402298850574713,
+        "total_pnl_usd": 706.8094131740006,
+        "return_on_budget": 0.07068094131740006,
+        "max_dd": 0.059814871171849915,
+        "fold_total_r": {
+          "2021Q1": -2.284228411101272,
+          "2021Q2": -3.0706371353090938,
+          "2021Q3": -1.2266832224425606,
+          "2021Q4": -3.119498563914787,
+          "2022Q1": 0.14744859833517654,
+          "2022Q2": 3.369817440900184,
+          "2022Q3": 3.603481446819546,
+          "2022Q4": 7.550232919912224,
+          "2023Q1": 1.8994553340350597,
+          "2023Q2": 1.8156419875269
+        },
+        "folds_positive": 0.6,
+        "best_coin": "GALAUSDT",
+        "best_coin_r": 3.4044040538636984,
+        "ex_best_coin_r": 5.280626340897676,
+        "coins_traded": 58,
+        "exit_reasons": {
+          "time": 28,
+          "stop": 36,
+          "breakeven": 12,
+          "tp3": 10,
+          "data_end": 1
+        },
+        "sides": {
+          "short": 87
+        },
+        "states": {
+          "NEUTRAL": 32,
+          "RISK_OFF": 55
+        },
+        "avg_hold_h": 42.758620689655174
+      },
+      "candidates_per_cell": {
+        "(1.5, 1.0)": 794,
+        "(1.5, 1.5)": 550,
+        "(1.5, 2.0)": 338,
+        "(2.0, 1.0)": 427,
+        "(2.0, 1.5)": 274,
+        "(2.0, 2.0)": 168,
+        "(2.5, 1.0)": 249,
+        "(2.5, 1.5)": 163,
+        "(2.5, 2.0)": 101
+      },
+      "skips_default_cell": {
+        "chased": 148,
+        "capacity": 18,
+        "correlated": 4,
+        "already_open": 8
+      },
+      "full_period_mean_r_per_cell": {
+        "(1.5, 1.0)": 0.046897076443692835,
+        "(1.5, 1.5)": 0.04677192434824868,
+        "(1.5, 2.0)": 0.03184062443281296,
+        "(2.0, 1.0)": 0.10580693421809398,
+        "(2.0, 1.5)": 0.15175196413351622,
+        "(2.0, 2.0)": 0.25267218989857865,
+        "(2.5, 1.0)": 0.08278697274537014,
+        "(2.5, 1.5)": 0.0471752670149944,
+        "(2.5, 2.0)": 0.12506377446353562
+      }
+    }
+  },
+  "combined_default_cells_oos": {
+    "trades": 87,
+    "expectancy_r": 0.09982793557196987,
+    "total_r": 8.685030394761375,
+    "profit_factor": 1.3057365593128882,
+    "win_rate": 0.5402298850574713,
+    "total_pnl_usd": 706.8094131740006,
+    "return_on_budget": 0.07068094131740006,
+    "max_dd": 0.059814871171849915,
+    "fold_total_r": {
+      "2021Q1": -2.284228411101272,
+      "2021Q2": -3.0706371353090938,
+      "2021Q3": -1.2266832224425606,
+      "2021Q4": -3.119498563914787,
+      "2022Q1": 0.14744859833517654,
+      "2022Q2": 3.369817440900184,
+      "2022Q3": 3.603481446819546,
+      "2022Q4": 7.550232919912224,
+      "2023Q1": 1.8994553340350597,
+      "2023Q2": 1.8156419875269
+    },
+    "folds_positive": 0.6,
+    "best_coin": "GALAUSDT",
+    "best_coin_r": 3.4044040538636984,
+    "ex_best_coin_r": 5.280626340897676,
+    "coins_traded": 58,
+    "exit_reasons": {
+      "time": 28,
+      "stop": 36,
+      "breakeven": 12,
+      "tp3": 10,
+      "data_end": 1
+    },
+    "sides": {
+      "short": 87
+    },
+    "states": {
+      "NEUTRAL": 32,
+      "RISK_OFF": 55
+    },
+    "avg_hold_h": 42.758620689655174
+  },
+  "runtime_s": 9.8
+}
