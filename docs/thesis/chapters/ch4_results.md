@@ -208,3 +208,23 @@ Of twelve repositories identified, seven could be cloned and examined; the other
 The finding is scoped to what was examined. Among seven open-source repositories, none published artefacts sufficient to verify a single headline number, and none published seed-level results. This does not show that the underlying analyses omit the diagnostics. It shows something more actionable: independent verification of the published claims is impossible from what is published. This dissertation's own evidence chain (Section 3.9 and Appendix B) is designed to answer that problem.
 
 The survey has clear limits. The sample is small, at seven repositories. It covers only open-source work, which is the field's more transparent end, so the results probably understate the problem. Only ten checks were implemented. Four of the seven codebases could not be executed at all, because of unpinned dependencies, missing data or undocumented entry points, which is itself a reproducibility finding. No claim is made about any individual repository's conclusions; only aggregate counts are reported.
+
+## A Supplementary Test of Simple Signals on Sixty Coins
+
+The main study covers two assets and one learning method. To test whether simple trading signals do better across a wider set of assets, a separate rule-based signal scanner was built and evaluated in November 2026, after the main evaluation was frozen. It shares no code with the PPO environment.
+
+Each day the scanner covered the 60 most-traded Binance USDT perpetual futures. The list was rebuilt from data available up to the previous day and included coins that were later delisted, so the results are not limited to survivors. Costs were 5 basis points in fees and 8 in slippage on every fill, plus funding payments. Five tests covered three signal families: trend breakouts and pullbacks, short-only breakdowns, and contrarian signals based on the funding rate (the periodic payment between long and short holders, which is extreme when one side is crowded), with and without rising open interest. For each test, the rules, test period and pass criteria were fixed in writing before it was run. Each used walk-forward testing with quarterly windows and was compared with 1,000 sets of random entries using the same exits, a direct check against data snooping (White, 2000; Harvey and Liu, 2015). Results are in R: the profit or loss divided by the amount risked at the stop. Appendix E gives the full design.
+
+Table 4.9: Pre-registered tests of rule-based signals (out-of-sample, after costs)
+
+| Signal | Test period | Trades | Mean R per trade | Random entries, mean R | p | Result |
+|---|---|---:|---:|---:|---:|---|
+| Breakout, long and short | Jul 2023 – Sep 2026 | 632 | −0.09 | −0.10 | 0.40 | Fail |
+| Pullback in trend | Jul 2023 – Sep 2026 | 2,730 | −0.13 | −0.15 | 0.08 | Fail |
+| Breakdown, short only | Jan 2021 – Jun 2023 | 138 | +0.15 | +0.02 | 0.08 | Fail |
+| Funding-rate fade | Jan 2021 – Sep 2026 | 1,597 | −0.20 | −0.19 | 0.67 | Fail |
+| Funding fade with rising open interest | Jul 2022 – Sep 2026 | 275 | −0.18 | −0.21 | 0.33 | Fail |
+
+No test passed. The four losing signals did no better than random entries. Three of them were also checked with costs removed, and they still lost, so the failure is a lack of information about direction rather than a cost problem. The one profitable test, short-only breakdowns, was run on an earlier period that had not been examined, because the idea came from the first result. It fell short of the 150-trade minimum, could not be told apart from random shorts, and made 84% of its profit in the 2022 crash.
+
+This does not show that the PPO reward is well specified. It does show that simple signals carried little edge after costs in this market and period, which makes an agent that learned to stay out less surprising.

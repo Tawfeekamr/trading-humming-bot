@@ -62,7 +62,7 @@ Within that scope, the contributions are three.
 
 ## Limitations
 
-1. Asset coverage. The corrected evaluation covers ETHUSDT and BNBUSDT only. The live regime pipeline also serves XRP-USDT and DOGE-USDT, which were never evaluated under the corrected protocol, and nothing here transfers to them.
+1. Asset coverage. The corrected evaluation covers ETHUSDT and BNBUSDT only. The live regime pipeline also serves XRP-USDT and DOGE-USDT, which were never evaluated under the corrected protocol, and nothing here transfers to them. Section 4.8 widens coverage to sixty coins, but only for simple rule-based signals, not for the RL agent.
 
 2. Backtest only. All results come from historical-replay backtests, and no live or paper-trading performance is claimed. A paper-trading gate for shadow routing was merged into the codebase but never run: no routing sidecar was deployed, no shipped container could execute the router, and no shadow routing log was ever produced.
 
@@ -126,5 +126,6 @@ The recommendations fall into two groups: what to do with this system, and what 
 2. **Score a do-nothing policy under the training reward.** If doing nothing scores as well as the trained agent, the reward is rewarding inactivity.
 3. **Report each reward term separately**, so that a penalty that dominates the reward is easy to see.
 4. **Use several random seeds and state the smallest effect the test can detect.** A non-significant result from a small test says little about whether two methods are equal.
+5. **Fix the rules before testing, and compare with random entries.** Writing down the rules and pass criteria in advance, and comparing results with random entries that use the same exits, stopped five plausible signals from reaching paper trading (Section 4.8).
 
 Each of these checks is cheap. Together they would have caught the main problem in this study before any performance claim was made.

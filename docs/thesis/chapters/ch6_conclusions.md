@@ -12,6 +12,8 @@ Under the corrected evaluation protocol, the answer to the research question is 
 
 4. Classification accuracy does not imply gating value. With out-of-sample accuracy of 0.85–0.87 for ETH and BNB (subject to the caveat in Section 3.3), DANGER warnings are false 38–47% of the time. The mean forward return on DANGER bars (−0.79% on ETH, −0.68% on BNB) is too small to pay for the upside given up, and the gate cost 59.1 percentage points (ETH) and 16.0 points (BNB) against buy-and-hold over the same window (Section 4.5).
 
+A supplementary test after the evaluation freeze found the same pattern beyond the two assets. None of five pre-registered rule-based signals, tested on the sixty most-traded Binance perpetual futures, beat random entries using the same exits (Section 4.8).
+
 ## Answer to the Research Question
 
 The research question asked whether a PPO agent could learn a routing policy that beats a calibrated supervised baseline on risk-adjusted return and maximum drawdown.

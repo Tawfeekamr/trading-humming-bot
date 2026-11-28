@@ -12,6 +12,8 @@ Bailey, D.H. and López de Prado, M. (2014) 'The Deflated Sharpe Ratio', *Journa
 
 Bailey, D.H., Borwein, J.M., López de Prado, M. and Zhu, Q.J. (2017) 'The Probability of Backtest Overfitting', *Journal of Computational Finance*, 20(4), pp. 39–69. doi:10.21314/JCF.2016.322.
 
+Binance (2026) *Binance Public Data*. Available at: https://data.binance.vision (Accessed: 28 November 2026).
+
 Breiman, L. (2001) 'Random Forests', *Machine Learning*, 45(1), pp. 5–32.
 
 Brinson, G.P., Hood, L.R. and Beebower, G.L. (1986) 'Determinants of Portfolio Performance', *Financial Analysts Journal*, 42(4), pp. 39–44.

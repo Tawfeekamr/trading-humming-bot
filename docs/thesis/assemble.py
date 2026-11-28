@@ -432,6 +432,11 @@ if _d.exists():
                    lambda m: f"![{m.group(2)}]({FIGURES / m.group(1)}){{width=5.6in}}", _body)
     add(_body)
 
+add(back_heading("Appendix E: Supplementary Signal Tests"))
+_e = CLEAN_DIR / "appendix_e_signal_tests.md"
+if _e.exists():
+    add(demote_headings_to_bold(clean(re.sub(r"\A\s*# [^\n]*\n", "", _e.read_text(encoding="utf-8")))))
+
 md = "\n".join(parts)
 BUILD.mkdir(exist_ok=True)
 (BUILD / "dissertation.md").write_text(md, encoding="utf-8")
