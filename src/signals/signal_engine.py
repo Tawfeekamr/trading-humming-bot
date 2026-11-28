@@ -673,6 +673,12 @@ class SignalEngine:
             signal_confidence=signal.confidence.value, raw_message=signal.raw_message,
             channel_name=channel_name, side=side)
         self._risk.record_trade_opened()
+        # Journal the open (spot already logs OPEN_LONG). Before this, a futures
+        # position existed only in signal_positions_futures.json until it closed.
+        # P&L readers and the Rust backfill read CLOSE_* rows only, so this row
+        # never counts as a trade or adds P&L.
+        self._log_audit_trade(signal, channel_name, f"OPEN_{side.upper()}", entry,
+                              "futures_entry", quantity=qty)
         self._notify(f"[FUTURES {self._leverage}x] Opened {side.upper()} {sym} "
                      f"~${usdt_notional:.0f} (orderId {ack.get('orderId','?') if isinstance(ack, dict) else '?'})")
 
@@ -1100,7 +1106,7 @@ class SignalEngine:
         )
 
     def _log_audit_trade(self, signal: ParsedSignal, channel_name: str,
-                         action: str, price: float, reason: str):
+                         action: str, price: float, reason: str, quantity: float = 0):
         ts = datetime.now(timezone.utc).isoformat()
         self._journal.log_trade(SignalTrade(
             timestamp=ts,
@@ -1109,7 +1115,7 @@ class SignalEngine:
             action=action,
             entry_price=signal.entry_high or signal.entry_low or 0,
             current_price=price,
-            quantity=0,
+            quantity=quantity,
             realized_pnl=0,
             exit_reason=reason,
             signal_confidence=signal.confidence.value,

@@ -323,3 +323,38 @@ def test_futures_entry_past_tp1_is_skipped(monkeypatch, tmp_path):
     eng._execute_entry(_short(), "chan", eng._futures_connector)
     assert not any(c[0] == "open" for c in conn.calls)
     assert any("chases the move" in m for m in sent)
+
+
+def test_futures_open_is_journaled_with_side_and_quantity(monkeypatch, tmp_path):
+    eng, conn, sent = _futures_engine(monkeypatch, tmp_path)
+    logged = []
+    eng._log_audit_trade = lambda *a, **k: logged.append((a, k))
+    eng._execute_entry(_short(), "chan", eng._futures_connector)
+    opens = [(a, k) for a, k in logged if a[2] == "OPEN_SHORT"]
+    assert len(opens) == 1, logged
+    a, k = opens[0]
+    assert a[3] == 3000.0 and a[4] == "futures_entry"
+    assert k["quantity"] == 600.0 / 3000.0          # notional / entry
+
+
+def test_futures_open_row_is_not_counted_as_pnl(monkeypatch, tmp_path):
+    # The real journal: an OPEN row must not count as a completed trade or add
+    # P&L, and the channel stats count it as an executed signal.
+    import sqlite3
+    from pathlib import Path
+    from src.signals.signal_journal import SignalJournal
+    eng, conn, sent = _futures_engine(monkeypatch, tmp_path)
+    j = SignalJournal(Path(tmp_path / "j.db"))
+    eng._journal = j
+    del eng._log_audit_trade                     # use the real method
+    monkeypatch.setattr(se_mod, "_CAPTURE_POOL", type("P", (), {"submit": lambda *a, **k: None})())
+    eng._execute_entry(_short(), "chan", eng._futures_connector)
+    rows = sqlite3.connect(str(tmp_path / "j.db")).execute(
+        "select action, quantity, realized_pnl from signal_trades").fetchall()
+    assert rows == [("OPEN_SHORT", 0.2, 0.0)]
+    s = j.summary(days=-1)
+    assert s["total_trades"] == 0 and s["total_pnl"] == 0
+    # channel_stats lists channels that have raw messages; add one so "chan" appears.
+    j.log_raw_message(1, "chan", 1, "sig", "OPEN_SHORT", "ETH-USDT", "", 8, "")
+    chan = next(c for c in j.channel_stats() if c["channel"] == "chan")
+    assert chan["trades_approved"] == 1 and chan["trades_pnl"] == 0

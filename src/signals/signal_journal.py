@@ -289,7 +289,7 @@ class SignalJournal:
                 trade_rows = conn.execute(
                     "SELECT channel_name, COUNT(*), "
                     "SUM(CASE WHEN action = 'rejected' OR action LIKE 'blocked%' THEN 1 ELSE 0 END), "
-                    "SUM(CASE WHEN action = 'OPEN_LONG' OR action = 'audit_entry' OR action = 'live_entry' THEN 1 ELSE 0 END), "
+                    "SUM(CASE WHEN action IN ('OPEN_LONG', 'OPEN_SHORT', 'audit_entry', 'live_entry') THEN 1 ELSE 0 END), "
                     "SUM(realized_pnl) "
                     "FROM signal_trades GROUP BY channel_name"
                 ).fetchall()
