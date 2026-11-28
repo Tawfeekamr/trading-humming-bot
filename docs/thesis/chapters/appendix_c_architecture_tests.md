@@ -74,3 +74,30 @@ When the fills arrived, the first opened the position and the next 26 were read 
 
 *Recording the loss.* Restarting the engine resets the simulated account, so the position was valued at the market price before the fix was deployed: a mid price of $0.94065, less 8 basis points of slippage and the 5 basis-point fee. The loss of $3,032.92, including $68.66 in fees, was recorded as one trade. A live sell was not used, because on the unfixed engine it would have freed the cash and repeated the same burst. A separate $76.01 trend loss from 26 November was removed from the log, because it recorded the sale of XRP that the account no longer held after the 26 November reset.
 
+**C.6 Order-path hardening on 28 November 2026**
+
+After the incident in C.5, every step an order passes through was reviewed, from a strategy's decision to the fill. This work concerns the live paper-trading system after the evaluation was frozen, and it does not affect any reported result.
+
+*What the review found.*
+
+1. **An exposure limit that was never applied.** The configuration capped any one coin at 80% of equity, and the risk module contained a position guard to enforce it (C.1), but the engine never called the guard. That limit alone would have stopped the XRP incident.
+2. **No engine-wide limit on how many orders a strategy could send.** The only checks before an order reached the paper exchange were a suspect-price check and the circuit breaker.
+3. **Saved orders outlived the balances they depended on.** Open paper orders were saved to disk and restored on restart, but balances were reset. The server held 152 such orders: 141 signal orders for coins the engine never priced, a doubled grid ladder, and an old Ethereum sell tagged with a strategy position that now belonged to a different strategy.
+4. **Fills from orders no strategy had placed were delivered to every strategy trading that coin.** A signal buy could therefore have reduced a trend position.
+5. **Trend exits were limit orders, but the profit was recorded when the exit was decided.** If the limit missed, the trade log showed a closed trade while the coins stayed in the account.
+6. **The signal engine's cash check let orders through when it could not confirm free capital.**
+7. **Orders with no quantity, a negative quantity, or a missing limit price were accepted.**
+
+*Changes.* Every new order now passes, before it reaches the exchange:
+
+- a basic validity check;
+- a price check, which refuses a limit more than 1% through the market or more than 15% from it;
+- a rate limit of 20 new orders per coin per second, and at most 16 open orders per strategy per coin;
+- the 80% exposure and cash checks, counting both coins held and buy orders still waiting to fill.
+
+Saved paper orders are discarded when balances are reset, and stale order records are removed at start-up. Fills from orders that no strategy placed are recorded but no longer passed to strategies, and the trend engine ignores fills that do not close its open position. Trend exits are now market orders, which always fill and pay the realistic taker fee and slippage. The signal engine's cash check now refuses when it cannot confirm free capital, and signal trades in coins the engine does not price are simulated rather than sent to it. Finally, an hourly check compares the account with what the strategies believe they hold. It sends an alert if one coin exceeds half of equity, if the account holds coins no strategy owns (the C.5 failure) or lacks coins a strategy believes it holds, or if free capital stays at zero for an hour.
+
+*Testing and deployment.* New tests reproduce each failure; for example, a burst of 144 orders is now stopped at 20. The full test suites passed, and the changes were deployed on 28 November 2026 through the normal tested pipeline. After the restart, the engine discarded the 152 stale orders and the live order book was empty.
+
+*Relevance.* Finding 1 repeats a pattern seen earlier in this project: a safety setting that was configured but had no effect (compare Section 5.4.1, item 4). Two lessons for deployment follow. A configured safety limit should have a test proving it can block an order. And the live account should be reconciled regularly against what the strategies believe they hold, because the trade log alone did not reveal the C.5 failure.
+
