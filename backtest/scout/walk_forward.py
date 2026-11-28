@@ -1,6 +1,7 @@
 """Scout walk-forward + random-entry null + GO verdict (pre-registration §9–§12).
 
-    python3 -m backtest.scout.walk_forward            # full run → docs/scout/WALK_FORWARD_RESULT.{md,json}
+    python3 -m backtest.scout.walk_forward [null_runs] [study]
+    studies: phase1 (default, v1 pre-registration) | short_unseen | short_seen (v2)
 """
 from __future__ import annotations
 
@@ -11,6 +12,7 @@ import math
 import subprocess
 import sys
 import time
+from functools import partial
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -18,6 +20,8 @@ import numpy as np
 import pandas as pd
 
 from src.scout import market_state as ms
+from src.scout.data import CACHE_ROOT, EARLY_CACHE_ROOT, load_bars
+from src.scout.universe import load_daily_all
 from src.scout.config import BreakoutParams, CommonParams, CostParams, PortfolioParams, PullbackParams
 from src.scout.setups import detect_breakout, detect_pullback
 
@@ -53,14 +57,31 @@ GRIDS = {
     },
 }
 
+STUDIES = {
+    # v1 — docs/scout/PREREGISTRATION.md
+    "phase1": dict(data=(DATA_START, DATA_END), oos_start=OOS_START, n_folds=N_FOLDS, side=None,
+                   detectors=("breakout", "pullback"), cache=CACHE_ROOT, out="WALK_FORWARD_RESULT",
+                   title="Walk-forward result (Phase 1)", rules="docs/scout/PREREGISTRATION.md"),
+    # v2 — docs/scout/PREREGISTRATION_SHORT.md (primary: unseen period)
+    "short_unseen": dict(data=("2020-05-01", "2023-06-30"), oos_start="2021-01-01", n_folds=10, side=-1,
+                         detectors=("breakout",), cache=EARLY_CACHE_ROOT, out="SHORT_ONLY_RESULT",
+                         title="Short-only breakdown test — PRIMARY (unseen 2021-01 → 2023-06)",
+                         rules="docs/scout/PREREGISTRATION_SHORT.md"),
+    # v2 — information only: the period v1 already looked at (contaminated)
+    "short_seen": dict(data=(DATA_START, DATA_END), oos_start=OOS_START, n_folds=N_FOLDS, side=-1,
+                       detectors=("breakout",), cache=CACHE_ROOT, out="SHORT_ONLY_SEEN_PERIOD",
+                       title="Short-only breakdown — SEEN period (CONTAMINATED, information only)",
+                       rules="docs/scout/PREREGISTRATION_SHORT.md"),
+}
+
 GO_THRESHOLDS = {"trades": 150, "expectancy_r": 0.10, "profit_factor": 1.25,
                  "null_p": 0.05, "folds_positive": 0.60, "max_dd": 0.15, "ex_best_coin_r": 0.0}
 
 
-def folds(index: pd.DatetimeIndex) -> list[dict]:
+def folds(index: pd.DatetimeIndex, oos_start: str = OOS_START, n_folds: int = N_FOLDS) -> list[dict]:
     out = []
-    start = pd.Timestamp(OOS_START, tz="UTC")
-    for k in range(N_FOLDS):
+    start = pd.Timestamp(oos_start, tz="UTC")
+    for k in range(n_folds):
         ts = start + pd.DateOffset(months=3 * k)
         te = ts + pd.DateOffset(months=3)
         tr = ts - pd.DateOffset(months=TRAIN_MONTHS)
@@ -211,21 +232,28 @@ def git_commit() -> str:
         return "unknown"
 
 
-def run(null_runs: int = NULL_RUNS) -> dict:
+def run(null_runs: int = NULL_RUNS, study: str = "phase1") -> dict:
     t0 = time.time()
+    st = STUDIES[study]
     pp, costs, common = PortfolioParams(), CostParams(), CommonParams()
-    logger.info("building panel …")
-    p = build_panel(DATA_START, DATA_END)
-    fd = folds(p.index)
+    loader = partial(load_bars, cache_root=st["cache"])
+    logger.info("building panel (%s) …", study)
+    p = build_panel(*st["data"], daily=load_daily_all(st["cache"]), bars_loader=loader)
+    fd = folds(p.index, st["oos_start"], st["n_folds"])
     oos = (fd[0]["test"][0], fd[-1]["test"][1])
-    result = {"commit": git_commit(), "data": [DATA_START, DATA_END], "oos": [OOS_START, DATA_END],
+    result = {"study": study, "title": st["title"], "rules": st["rules"], "side_filter": st["side"],
+              "commit": git_commit(), "data": list(st["data"]), "oos": [st["oos_start"], st["data"][1]],
+              "universe_size_oos": p.member.iloc[oos[0]:oos[1]].sum(axis=1).describe()[["min", "mean", "max"]].to_dict(),
               "symbols_in_panel": len(p.syms),
               "state_share_oos": {ms.NAMES[k]: float(np.mean(p.state[oos[0]:oos[1]] == k)) for k in ms.NAMES},
               "benchmarks_oos": benchmarks(p, *oos), "detectors": {}}
     default_cands = []
-    for name, g in GRIDS.items():
+    for name in st["detectors"]:
+        g = GRIDS[name]
         logger.info("%s: finding setups for %d cells …", name, len(g["cells"]))
-        cands = find_setups(p, g["fn"], g["cells"])
+        cands = find_setups(p, g["fn"], g["cells"], bars_loader=loader)
+        if st["side"] is not None:   # side filter applied BEFORE portfolio rules
+            cands = {k: (c[c["side"] == st["side"]] if not c.empty else c) for k, c in cands.items()}
         cell_trades, cell_skips = {}, {}
         for key, c in cands.items():
             cell_trades[key], cell_skips[key] = run_portfolio(c, p, pp, costs)
@@ -271,14 +299,18 @@ def _fmt(v):
     return str(v)
 
 
-def write_report(res: dict, out_dir: Path = OUT_DIR) -> None:
+def write_report(res: dict, out_dir: Path = OUT_DIR, stem: str = "WALK_FORWARD_RESULT") -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "WALK_FORWARD_RESULT.json").write_text(json.dumps(res, indent=2, default=str))
-    L = ["# Scout Bot — Walk-forward result (Phase 1)", "",
-         f"Rules: `docs/scout/PREREGISTRATION.md`. Commit `{res['commit']}`. "
+    (out_dir / f"{stem}.json").write_text(json.dumps(res, indent=2, default=str))
+    L = [f"# Scout Bot — {res.get('title', 'Walk-forward result (Phase 1)')}", "",
+         f"Rules: `{res.get('rules', 'docs/scout/PREREGISTRATION.md')}`. Commit `{res['commit']}`. "
          f"OOS {res['oos'][0]} → {res['oos'][1]}, {res['symbols_in_panel']} symbols. "
          f"Runtime {res['runtime_s']}s.", "",
          "Market state share of OOS hours: " + ", ".join(f"{k} {v:.0%}" for k, v in res["state_share_oos"].items()), ""]
+    if "universe_size_oos" in res:
+        u = res["universe_size_oos"]
+        L += [f"Universe size per hour (OOS): min {u['min']:.0f}, mean {u['mean']:.1f}, max {u['max']:.0f}. "
+              f"Side filter: {'short only' if res.get('side_filter') == -1 else 'long + short'}.", ""]
     for name, d in res["detectors"].items():
         v = d["verdict"]
         L += [f"## Detector {name}: **{'GO' if v['go'] else 'NO-GO'}**", "",
@@ -311,14 +343,15 @@ def write_report(res: dict, out_dir: Path = OUT_DIR) -> None:
           f"- BTC buy-and-hold over OOS: {b['btc_hold']:.1%}; equal-weight universe: {b['equal_weight_universe']:.1%}.",
           f"- Combined A+B (default cells): {cm.get('trades', 0)} trades, mean "
           f"{_fmt(cm.get('expectancy_r', float('nan')))}R, return on budget {cm.get('return_on_budget', 0):.1%}.", ""]
-    (out_dir / "WALK_FORWARD_RESULT.md").write_text("\n".join(L))
+    (out_dir / f"{stem}.md").write_text("\n".join(L))
 
 
 def main(argv) -> int:  # pragma: no cover - CLI
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     runs = int(argv[1]) if len(argv) > 1 else NULL_RUNS
-    res = run(runs)
-    write_report(res)
+    study = argv[2] if len(argv) > 2 else "phase1"
+    res = run(runs, study)
+    write_report(res, stem=STUDIES[study]["out"])
     print(json.dumps({k: v["verdict"]["go"] for k, v in res["detectors"].items()}))
     return 0
 

@@ -190,3 +190,18 @@ def test_max_drawdown():
         def __init__(self, legs):
             self.legs = legs
     assert max_drawdown([T([(0, 100.0), (1, -300.0), (2, 50.0)])], 10_000) == pytest.approx(0.03)
+
+
+def test_studies_match_preregistrations():
+    from backtest.scout.walk_forward import STUDIES
+    p1, su, ss = STUDIES["phase1"], STUDIES["short_unseen"], STUDIES["short_seen"]
+    assert p1["side"] is None and p1["detectors"] == ("breakout", "pullback")
+    assert su["side"] == -1 and su["detectors"] == ("breakout",)
+    # primary v2 period must end before v1's first training window starts (unseen data)
+    assert pd.Timestamp(su["data"][1]) < pd.Timestamp("2023-01-01") + pd.DateOffset(months=6)
+    assert su["oos_start"] == "2021-01-01" and su["n_folds"] == 10
+    idx = pd.date_range(su["data"][0], su["data"][1] + " 23:00", freq="h", tz="UTC")
+    fd = folds(idx, su["oos_start"], su["n_folds"])
+    assert fd[0]["name"] == "2021Q1" and fd[-1]["name"] == "2023Q2" and fd[-1]["test"][1] == len(idx)
+    assert idx[fd[0]["train"][0]] == pd.Timestamp("2020-07-01", tz="UTC")
+    assert ss["data"] == p1["data"] and ss["side"] == -1

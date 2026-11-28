@@ -9,11 +9,12 @@ Symbol filtering (USDT perp, no stablecoin/index) happens at download time
 """
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Mapping
 
 import pandas as pd
 
-from .data import cached_symbols, is_tradeable_symbol, load_bars
+from .data import CACHE_ROOT, cached_symbols, is_tradeable_symbol, load_bars
 
 TOP_N = 60
 MIN_AVG_QUOTE_VOL = 20e6
@@ -43,11 +44,11 @@ def build_daily_universe(daily: Mapping[str, pd.DataFrame], top_n: int = TOP_N,
     return (rank <= top_n).fillna(False)
 
 
-def load_daily_all() -> dict[str, pd.DataFrame]:
-    return {s: load_bars(s, "1d") for s in cached_symbols("1d")}
+def load_daily_all(cache_root: Path = CACHE_ROOT) -> dict[str, pd.DataFrame]:
+    return {s: load_bars(s, "1d", cache_root) for s in cached_symbols("1d", cache_root)}
 
 
-def ever_in_universe(start: str, end: str) -> set[str]:
-    u = build_daily_universe(load_daily_all())
+def ever_in_universe(start: str, end: str, cache_root: Path = CACHE_ROOT) -> set[str]:
+    u = build_daily_universe(load_daily_all(cache_root))
     window = u.loc[start:end]
     return set(window.columns[window.any(axis=0)])

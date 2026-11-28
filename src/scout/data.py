@@ -10,6 +10,8 @@ Columns: open_time (UTC, tz-aware), open, high, low, close, volume, quote_volume
 CLI:
     python3 -m src.scout.data daily            # 1d bars for every USDT perp
     python3 -m src.scout.data hourly           # 1h bars for symbols that ever made the universe
+    python3 -m src.scout.data daily-early      # v2: 1d 2019-09 → 2023-06 (separate cache)
+    python3 -m src.scout.data hourly-early     # v2: 1h 2020-05 → 2023-06
 """
 from __future__ import annotations
 
@@ -32,6 +34,7 @@ S3_LIST = "https://s3-ap-northeast-1.amazonaws.com/data.binance.vision"
 DL_BASE = "https://data.binance.vision"
 KLINE_PREFIX = "data/futures/um/monthly/klines/"
 CACHE_ROOT = Path("backtest/data_cache/scout")
+EARLY_CACHE_ROOT = Path("backtest/data_cache/scout_early")   # v2 pre-registration: 2019-09 → 2023-06
 
 # Not real trend instruments: stablecoins, fiat, index contracts.
 STABLE_BASES = {"USDC", "BUSD", "TUSD", "FDUSD", "USDP", "DAI", "EUR", "GBP",
@@ -142,11 +145,11 @@ def fetch_symbol(sym: str, interval: str, start_month: str, end_month: str,
 
 
 def fetch_many(symbols: Iterable[str], interval: str, start_month: str, end_month: str,
-               workers: int = 12) -> dict[str, Optional[Path]]:
+               workers: int = 12, cache_root: Path = CACHE_ROOT) -> dict[str, Optional[Path]]:
     symbols = list(symbols)
     done: dict[str, Optional[Path]] = {}
     with ThreadPoolExecutor(workers) as ex:
-        futs = {ex.submit(fetch_symbol, s, interval, start_month, end_month): s for s in symbols}
+        futs = {ex.submit(fetch_symbol, s, interval, start_month, end_month, cache_root): s for s in symbols}
         for i, f in enumerate(as_completed(futs), 1):
             s = futs[f]
             try:
@@ -181,6 +184,14 @@ def main(argv: list[str]) -> int:  # pragma: no cover - CLI
         syms = sorted(ever_in_universe("2023-01-01", "2026-09-30") | {"BTCUSDT"})
         logger.info("%d symbols ever in universe → fetching 1h", len(syms))
         fetch_many(syms, "1h", "2022-11", "2026-09")
+    elif mode == "daily-early":
+        syms = list_symbols()
+        fetch_many(syms, "1d", "2019-09", "2023-06", cache_root=EARLY_CACHE_ROOT)
+    elif mode == "hourly-early":
+        from .universe import ever_in_universe
+        syms = sorted(ever_in_universe("2020-07-01", "2023-06-30", EARLY_CACHE_ROOT) | {"BTCUSDT"})
+        logger.info("%d symbols ever in early universe → fetching 1h", len(syms))
+        fetch_many(syms, "1h", "2020-05", "2023-06", cache_root=EARLY_CACHE_ROOT)
     else:
         print(__doc__)
         return 2
