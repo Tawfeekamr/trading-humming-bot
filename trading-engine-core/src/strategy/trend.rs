@@ -138,6 +138,10 @@ struct TrendNoTradeCounters {
     positions: u64,
 }
 
+/// How long an entry order may rest unfilled before trend cancels it and
+/// may re-evaluate. Paper fills are held 5 s after any fill on the symbol.
+const PENDING_ENTRY_TIMEOUT_MS: i64 = 60_000;
+
 pub struct TrendStrategy {
     pair: String,
     config: TrendConfig,
@@ -160,6 +164,19 @@ pub struct TrendStrategy {
     /// struct carries no reduce_only, so this is the only signal available.
     /// `pub` so tests can inject an entry intent before calling on_fill directly.
     pub pending_entry: Option<OrderSide>,
+    /// Client id of the outstanding entry order ("trend_<pair>_entry_<n>"). Entry
+    /// fills are recognised by this tag, so an exit fill can never be mistaken
+    /// for an entry (or vice versa) while an entry is waiting.
+    pending_entry_cid: Option<String>,
+    /// When the outstanding entry was placed (ms) — drives the stale-entry timeout.
+    pending_entry_since_ms: i64,
+    /// Notional of the outstanding entry, counted in deployed_capital so the
+    /// capital manager sees money committed to a resting order.
+    pending_entry_notional: f64,
+    /// Monotonic counter for entry client ids.
+    entry_seq: u64,
+    /// Client ids to cancel on the next engine cycle (stale entries).
+    cancel_queue: Vec<String>,
     /// Snapshot captured when the current entry intent was emitted.
     entry_attribution: Option<crate::strategy::trade_journal::RegimeAttribution>,
     /// Quantity already deducted optimistically by reactive exit handling.
@@ -220,6 +237,11 @@ impl TrendStrategy {
             atr: Atr::new(14),
             position: None,
             pending_entry: None,
+            pending_entry_cid: None,
+            pending_entry_since_ms: 0,
+            pending_entry_notional: 0.0,
+            entry_seq: 0,
+            cancel_queue: Vec::new(),
             entry_attribution: None,
             pending_exit_qty: 0.0,
             position_initial_risk: 0.0,
@@ -248,6 +270,20 @@ impl TrendStrategy {
     ) -> Self {
         self.position_registry = Some(registry);
         self
+    }
+
+    /// Forget the outstanding entry (filled, cancelled or superseded).
+    fn clear_pending_entry(&mut self) {
+        self.pending_entry = None;
+        self.pending_entry_cid = None;
+        self.pending_entry_since_ms = 0;
+        self.pending_entry_notional = 0.0;
+    }
+
+    /// True when `cid` (possibly owner-tagged, e.g. "owner:2#trend_XRP-USDT_entry_3")
+    /// is one of this instance's entry orders.
+    fn is_entry_cid(&self, cid: &str) -> bool {
+        cid.contains(&format!("trend_{}_entry_", self.pair))
     }
 
     /// A pair holds a slot while it has a position or an entry order pending.
@@ -613,7 +649,13 @@ impl Strategy for TrendStrategy {
     fn trading_pair(&self) -> &str { &self.pair }
 
     fn realized_pnl(&self) -> f64 { self.realized_pnl }
-    fn deployed_capital(&self) -> f64 { self.position.as_ref().map_or(0.0, |p| p.remaining_qty * p.entry_price) }
+    fn deployed_capital(&self) -> f64 {
+        self.position.as_ref().map_or(0.0, |p| p.remaining_qty * p.entry_price) + self.pending_entry_notional
+    }
+
+    fn pending_cancels(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.cancel_queue)
+    }
 
     /// C1: suppress NEW entries while open-position management (trailing,
     /// breakeven, TP ladder, funding) keeps running. Sets `entries_suppressed`
@@ -705,6 +747,10 @@ impl Strategy for TrendStrategy {
         // plain `set_paused(true)` suppresses new entries but lets the full
         // management path (funding, breakeven, trailing, TP ladder) run below.
         if self.force_close_pending {
+            if let Some(cid) = self.pending_entry_cid.clone() {
+                self.cancel_queue.push(cid);
+                self.clear_pending_entry();
+            }
             if let Some(pos) = self.position.take() {
                 let side = pos.side;
                 let entry = pos.entry_price;
@@ -992,6 +1038,24 @@ impl Strategy for TrendStrategy {
             )
             && ctx.regime_confidence >= self.config.min_regime_confidence;
 
+        // An entry order is already waiting for its fill. Paper mode holds fills
+        // for PAPER_FILL_COOLDOWN_MS (5 s) after any fill on the symbol, so right
+        // after an exit the entry rests for several ticks. Without this gate every
+        // tick placed another entry — 2026-11-27: 144 XRP buys in 5 s, 27 filled,
+        // the whole paper book ended up in XRP. Stale entries are cancelled.
+        if self.position.is_none() && self.pending_entry.is_some() {
+            if ctx.timestamp - self.pending_entry_since_ms > PENDING_ENTRY_TIMEOUT_MS {
+                if let Some(cid) = self.pending_entry_cid.clone() {
+                    warn!("[{}] Entry order {} unfilled after {}s — cancelling", self.pair, cid,
+                        PENDING_ENTRY_TIMEOUT_MS / 1000);
+                    self.cancel_queue.push(cid);
+                }
+                self.clear_pending_entry();
+            }
+            self.sync_position_slot();
+            return Ok(orders);
+        }
+
         if self.position.is_none() {
             if ctx.replay {
                 self.no_trade.replay += 1;
@@ -1067,11 +1131,16 @@ impl Strategy for TrendStrategy {
                     // Record entry intent: the Fill struct carries no reduce_only,
                     // so on_fill can't otherwise tell this opening fill from a
                     // closing one. Consumed by on_fill when the entry fills.
+                    self.entry_seq += 1;
+                    let cid = format!("trend_{}_entry_{}", self.pair, self.entry_seq);
                     self.pending_entry = Some(side);
+                    self.pending_entry_cid = Some(cid.clone());
+                    self.pending_entry_since_ms = ctx.timestamp;
+                    self.pending_entry_notional = quantity * current_price;
                     orders.push(OrderRequest {
                         symbol: self.pair.clone(), side, reduce_only: false,
                         order_type: OrderTypeReq::Limit, price: Some(current_price),
-                        quantity, time_in_force: Some(TimeInForceReq::Gtc), client_order_id: None,
+                        quantity, time_in_force: Some(TimeInForceReq::Gtc), client_order_id: Some(cid),
                     });
                 } else {
                     self.no_trade.capital += 1;
@@ -1089,7 +1158,33 @@ impl Strategy for TrendStrategy {
         // closing one when the position is already flat. Reactive exit paths
         // book PnL and remaining quantity at detection time; pending_exit_qty
         // prevents their matching fills from deducting the same quantity again.
-        if let Some(side) = self.pending_entry.take() {
+        // Classify the fill. Tagged entry orders are recognised by client id;
+        // untagged fills (legacy / direct test calls with no client id) fall back
+        // to the pending_entry intent. Exit orders carry an owner tag but no
+        // entry id, so they can never open a position.
+        let tagged_entry = fill.client_order_id.as_deref().map_or(false, |c| self.is_entry_cid(c));
+        let legacy_entry = fill.client_order_id.is_none() && self.pending_entry.is_some();
+        if tagged_entry && self.position.is_some() {
+            // A second fill for an entry (late fill after a cancel race, or a
+            // partial fill). Merge it into the position rather than letting it
+            // reduce the position and orphan the inventory.
+            if let Some(pos) = self.position.as_mut() {
+                let total = pos.remaining_qty + fill.quantity;
+                if total > 0.0 {
+                    pos.entry_price = (pos.entry_price * pos.remaining_qty + fill.price * fill.quantity) / total;
+                }
+                pos.quantity += fill.quantity;
+                pos.remaining_qty = total;
+                warn!("[{}] Extra entry fill {:.4} @ {:.4} merged into open position (now {:.4})",
+                    self.pair, fill.quantity, fill.price, total);
+            }
+            self.clear_pending_entry();
+            self.save_position();
+            return Ok(Vec::new());
+        }
+        if tagged_entry || legacy_entry {
+            let side = self.pending_entry.unwrap_or(fill.side);
+            self.clear_pending_entry();
             let stop_loss = self.calculate_stop_loss(fill.price, side);
             let tp_levels = TrendPosition::calculate_tp_levels(
                 fill.price,
@@ -2187,5 +2282,98 @@ mod tests {
         assert_eq!(value["regime_feature_contract_hash"], "features-v1");
         assert_eq!(value["router_engine"], "trend");
         assert_eq!(value["ml_age_ms"], 25);
+    }
+
+    // ── 2026-11-27 XRP incident: one entry at a time ──
+
+    fn entry_fill(cid: Option<&str>, side: OrderSide, price: f64, qty: f64) -> Fill {
+        Fill {
+            fill_id: "f".into(), order_id: "paper_1".into(),
+            client_order_id: cid.map(|c| c.to_string()),
+            symbol: "TESTPAIR-USDT".into(), side, price, quantity: qty, fee: 0.0,
+            timestamp: 1_700_000_001_000,
+        }
+    }
+
+    fn run_fill(s: &mut TrendStrategy, f: Fill) {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(s.on_fill(&f)).unwrap();
+    }
+
+    fn entries(orders: &[OrderRequest]) -> Vec<&OrderRequest> {
+        orders.iter().filter(|o| !o.reduce_only).collect()
+    }
+
+    #[test]
+    fn only_one_entry_order_while_the_first_is_waiting_for_its_fill() {
+        let last = 100.0 * 1.005_f64.powi(259);
+        let mut s = uptrend_strategy();
+        let mut placed = 0;
+        // 144 ticks over ~5 s (the paper fill cooldown window) — the incident shape.
+        for k in 0..144 {
+            let mut ctx = tick_at(last);
+            ctx.timestamp += k * 35;
+            placed += entries(&run_tick(&mut s, ctx)).len();
+        }
+        assert_eq!(placed, 1, "exactly one entry may be outstanding; got {placed}");
+        assert!(s.pending_entry.is_some());
+        assert!(s.deployed_capital() > 0.0, "a resting entry must count toward deployed capital");
+    }
+
+    #[test]
+    fn entry_order_carries_its_own_client_id() {
+        let last = 100.0 * 1.005_f64.powi(259);
+        let mut s = uptrend_strategy();
+        let orders = run_tick(&mut s, tick_at(last));
+        let cid = entries(&orders)[0].client_order_id.clone().expect("entry must be tagged");
+        assert!(cid.starts_with("trend_TESTPAIR-USDT_entry_"), "got {cid}");
+    }
+
+    #[test]
+    fn stale_entry_is_cancelled_after_timeout_then_a_new_one_may_be_placed() {
+        let last = 100.0 * 1.005_f64.powi(259);
+        let mut s = uptrend_strategy();
+        let first = entries(&run_tick(&mut s, tick_at(last)))[0].client_order_id.clone().unwrap();
+        let mut late = tick_at(last);
+        late.timestamp += PENDING_ENTRY_TIMEOUT_MS + 1;
+        assert!(entries(&run_tick(&mut s, late)).is_empty(), "the timeout tick only cancels");
+        assert_eq!(s.pending_cancels(), vec![first.clone()]);
+        assert!(s.pending_entry.is_none() && s.deployed_capital() == 0.0);
+        let mut next = tick_at(last);
+        next.timestamp += PENDING_ENTRY_TIMEOUT_MS + 100;
+        let again = run_tick(&mut s, next);
+        let second = entries(&again)[0].client_order_id.clone().unwrap();
+        assert_ne!(first, second, "a fresh entry gets a fresh id");
+    }
+
+    #[test]
+    fn exit_fill_never_opens_a_position_while_an_entry_waits() {
+        let last = 100.0 * 1.005_f64.powi(259);
+        let mut s = uptrend_strategy();
+        let cid = entries(&run_tick(&mut s, tick_at(last)))[0].client_order_id.clone().unwrap();
+        // A late reduce-only exit fill from the previous position (owner tag, no entry id).
+        run_fill(&mut s, entry_fill(Some("owner:2#"), OrderSide::Sell, last, 10.0));
+        assert!(s.position.is_none(), "exit fill must not be taken as the entry");
+        assert!(s.pending_entry.is_some(), "the entry is still waiting");
+        // The real entry fill opens the position.
+        run_fill(&mut s, entry_fill(Some(&format!("owner:2#{cid}")), OrderSide::Buy, last, 5.0));
+        let pos = s.position.as_ref().expect("entry fill opens the position");
+        assert_eq!(pos.remaining_qty, 5.0);
+        assert!(s.pending_entry.is_none() && s.pending_entry_notional == 0.0);
+    }
+
+    #[test]
+    fn extra_entry_fill_is_merged_not_treated_as_an_exit() {
+        let last = 100.0 * 1.005_f64.powi(259);
+        let mut s = uptrend_strategy();
+        let cid = entries(&run_tick(&mut s, tick_at(last)))[0].client_order_id.clone().unwrap();
+        let tag = format!("owner:2#{cid}");
+        run_fill(&mut s, entry_fill(Some(&tag), OrderSide::Buy, 100.0, 5.0));
+        // Before the fix this second fill reduced the position to zero and
+        // orphaned the inventory (the XRP incident).
+        run_fill(&mut s, entry_fill(Some(&tag), OrderSide::Buy, 110.0, 5.0));
+        let pos = s.position.as_ref().expect("position must survive");
+        assert_eq!(pos.remaining_qty, 10.0);
+        assert!((pos.entry_price - 105.0).abs() < 1e-9, "weighted average entry, got {}", pos.entry_price);
     }
 }
