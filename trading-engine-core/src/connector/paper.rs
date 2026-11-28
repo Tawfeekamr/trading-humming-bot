@@ -25,6 +25,25 @@ struct PaperState {
     next_order_id: u64,
 }
 
+/// Reject malformed orders before they enter the book: a zero, negative or
+/// non-finite quantity, or a limit/stop order without a usable price. Before
+/// this the paper book accepted anything and problems only surfaced at fill time.
+pub fn validate_order(req: &OrderRequest) -> Result<()> {
+    if !req.quantity.is_finite() || req.quantity <= 0.0 {
+        return Err(anyhow!("invalid quantity {} for {}", req.quantity, req.symbol));
+    }
+    let price_ok = |p: Option<f64>| matches!(p, Some(x) if x.is_finite() && x > 0.0);
+    match req.order_type {
+        OrderTypeReq::Limit | OrderTypeReq::LimitMaker if !price_ok(req.price) => {
+            Err(anyhow!("limit order for {} needs a positive price, got {:?}", req.symbol, req.price))
+        }
+        OrderTypeReq::StopMarket { stop_price } if !(stop_price.is_finite() && stop_price > 0.0) => {
+            Err(anyhow!("stop order for {} needs a positive stop price, got {}", req.symbol, stop_price))
+        }
+        _ => Ok(()),
+    }
+}
+
 /// Split a trading symbol into (base, quote), borrowing from the input.
 /// Handles "BTC-USDT" and "BTCUSDT" forms.
 fn split_pair(symbol: &str) -> (&str, &str) {
@@ -98,6 +117,7 @@ impl PaperTradeEngine {
     }
 
     pub fn place_order(&mut self, req: &OrderRequest) -> Result<OrderResponse> {
+        validate_order(req)?;
         let id = format!("paper_{}", self.next_order_id);
         self.next_order_id += 1;
 
@@ -420,7 +440,19 @@ impl PaperTradeConnector {
         if let Ok(content) = std::fs::read_to_string(&path) {
             if let Ok(state) = serde_json::from_str::<PaperState>(&content) {
                 if let Ok(mut engine) = self.engine.lock() {
-                    engine.open_orders = state.open_orders;
+                    // Paper balances are re-seeded on every start, so orders saved
+                    // by the previous run refer to cash and coins that no longer
+                    // exist (2026-11-28: 152 ghost orders — stale signal market
+                    // orders, a duplicated grid ladder, an ETH sell tagged with a
+                    // strategy index that now belongs to another strategy). Keep
+                    // the id counter so new ids stay unique; drop the orders.
+                    if !state.open_orders.is_empty() {
+                        tracing::warn!(
+                            "Paper book re-seeded: discarding {} open orders saved by the previous run",
+                            state.open_orders.len()
+                        );
+                    }
+                    engine.open_orders = Vec::new();
                     engine.next_order_id = state.next_order_id.max(1);
                 }
             }
@@ -1089,7 +1121,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn connector_persists_open_orders_across_restart() {
+    async fn connector_discards_stale_orders_on_restart_but_keeps_ids_unique() {
         let path = std::env::temp_dir().join(format!(
             "paper_orders_{}.json",
             chrono::Utc::now().timestamp_nanos_opt().unwrap()
@@ -1109,12 +1141,40 @@ mod tests {
         }
 
         let restarted = PaperTradeConnector::new(HashMap::new()).with_state_path(path.clone());
-        let orders = restarted.get_open_orders("BTCUSDT").await.unwrap();
-
-        assert_eq!(orders.len(), 1);
-        assert_eq!(orders[0].order_id, "paper_1");
-        assert_eq!(orders[0].quantity, 0.25);
+        // Balances are re-seeded on start, so the previous run's orders are gone…
+        assert!(restarted.get_open_orders("BTCUSDT").await.unwrap().is_empty());
+        // …but the id counter carries on, so a new order can't reuse "paper_1".
+        let resp = restarted.place_order(&OrderRequest {
+            symbol: "BTCUSDT".to_string(), side: OrderSide::Buy, order_type: OrderTypeReq::Limit,
+            price: Some(50_000.0), quantity: 0.1, time_in_force: None,
+            client_order_id: None, reduce_only: false,
+        }).await.unwrap();
+        assert_eq!(resp.order_id, "paper_2");
 
         let _ = std::fs::remove_file(path);
+    }
+
+    fn req(qty: f64, ot: OrderTypeReq, price: Option<f64>) -> OrderRequest {
+        OrderRequest { symbol: "BTCUSDT".into(), side: OrderSide::Buy, order_type: ot, price,
+            quantity: qty, time_in_force: None, client_order_id: None, reduce_only: false }
+    }
+
+    #[test]
+    fn validate_order_rejects_bad_quantity_and_missing_limit_price() {
+        assert!(validate_order(&req(1.0, OrderTypeReq::Limit, Some(10.0))).is_ok());
+        assert!(validate_order(&req(1.0, OrderTypeReq::Market, None)).is_ok());
+        for q in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert!(validate_order(&req(q, OrderTypeReq::Market, None)).is_err(), "qty {q}");
+        }
+        assert!(validate_order(&req(1.0, OrderTypeReq::Limit, None)).is_err());
+        assert!(validate_order(&req(1.0, OrderTypeReq::LimitMaker, Some(0.0))).is_err());
+        assert!(validate_order(&req(1.0, OrderTypeReq::StopMarket { stop_price: f64::NAN }, None)).is_err());
+    }
+
+    #[test]
+    fn paper_book_refuses_invalid_order() {
+        let mut e = PaperTradeEngine::new(HashMap::new());
+        assert!(e.place_order(&req(0.0, OrderTypeReq::Market, None)).is_err());
+        assert!(e.open_orders.is_empty());
     }
 }

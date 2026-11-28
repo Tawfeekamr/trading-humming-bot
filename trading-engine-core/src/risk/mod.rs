@@ -1,4 +1,5 @@
 pub mod position_guard;
+pub mod pre_trade;
 pub mod circuit_breaker;
 
 pub use position_guard::PositionGuard;

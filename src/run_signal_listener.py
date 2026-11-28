@@ -32,6 +32,26 @@ def load_config():
 _PRICE_SUSPECT_BLOCK = "order blocked: price suspect"
 _ORDER_RETRY_DELAY_S = 3.0
 
+_ENGINE_PAIRS = None
+
+
+def _engine_streams(symbol: str) -> bool:
+    """True if the Rust engine streams prices for `symbol` (an enabled entry in
+    config `pairs`). The paper book only fills orders for streamed symbols, so a
+    signal order for any other coin used to rest in the engine forever (141 such
+    ghost orders across 29 coins found 2026-11-28) while the Python position was
+    tracked at Gate.io prices anyway."""
+    global _ENGINE_PAIRS
+    if _ENGINE_PAIRS is None:
+        try:
+            pairs = load_config().get("pairs") or []
+            _ENGINE_PAIRS = {p["symbol"].replace("-", "").upper()
+                             for p in pairs if p.get("enabled", True)}
+        except Exception as e:
+            logger.warning(f"Could not read engine pairs from config: {e}")
+            return True   # unknown: fall back to sending the order (old behaviour)
+    return symbol.replace("-", "").upper() in _ENGINE_PAIRS
+
 
 def _signal_order(side, symbol, amount, price=None):
     """Place a signal order via the Rust engine API after checking CapitalManager.
@@ -46,7 +66,10 @@ def _signal_order(side, symbol, amount, price=None):
 
     rust_url = os.environ.get("RUST_ENGINE_URL", "http://localhost:3030")
 
-    # CapitalManager check for BUY orders
+    # CapitalManager check for BUY orders. Fails CLOSED: a buy is refused when
+    # free capital is zero, the notional can't be valued, or the check itself
+    # errors. It used to pass in all three cases, so buys went out even with
+    # the book full (free capital $0 during the 2026-11-27 XRP incident).
     if side == "BUY":
         try:
             cap_url = f"{rust_url}/api/v1/capital"
@@ -57,13 +80,23 @@ def _signal_order(side, symbol, amount, price=None):
             est_price = float(price) if price else float(_get_price(symbol) or 0.0)
             req_notional = float(amount) * est_price
 
-            if req_notional > 0 and free_cap > 0 and req_notional > free_cap:
+            if req_notional <= 0 or req_notional > free_cap:
                 logger.warning(
-                    f"Signal BUY rejected by CapitalManager: {symbol} notional ${req_notional:.2f} > free capital ${free_cap:.2f}"
+                    f"Signal BUY rejected by CapitalManager: {symbol} notional ${req_notional:.2f}, "
+                    f"free capital ${free_cap:.2f}"
                 )
                 return None
         except Exception as cap_err:
-            logger.warning(f"CapitalManager pre-check warning for {symbol}: {cap_err}")
+            logger.warning(f"Signal BUY rejected: capital check failed for {symbol}: {cap_err}")
+            return None
+
+    # Coins the engine doesn't stream can never fill in its paper book. Simulate
+    # them here (the Python position manager already tracks them at Gate.io
+    # prices) instead of leaving a ghost order in the engine.
+    if not _engine_streams(symbol):
+        oid = f"sim_{symbol.replace('-', '_')}_{int(time.time() * 1000)}"
+        logger.info(f"Signal {side} simulated (engine does not stream {symbol}): qty={amount} -> {oid}")
+        return oid
 
     url = rust_url + "/api/v1/order"
     attempts = []

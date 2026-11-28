@@ -21,3 +21,8 @@ except ImportError:
 
 if not _RL_STACK_AVAILABLE:
     collect_ignore_glob = ["test_rl_*"]
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers", "real_streams: use the real engine-pairs lookup in signal-order tests")

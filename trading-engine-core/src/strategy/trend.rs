@@ -657,6 +657,13 @@ impl Strategy for TrendStrategy {
         std::mem::take(&mut self.cancel_queue)
     }
 
+    fn tracked_base_qty(&self) -> f64 {
+        // Spot longs only; a paper spot short holds no coins.
+        self.position.as_ref()
+            .filter(|p| p.side == OrderSide::Buy)
+            .map_or(0.0, |p| p.remaining_qty)
+    }
+
     /// C1: suppress NEW entries while open-position management (trailing,
     /// breakeven, TP ladder, funding) keeps running. Sets `entries_suppressed`
     /// ONLY — does NOT set `force_close_pending`, so an open position is NOT
@@ -1217,6 +1224,16 @@ impl Strategy for TrendStrategy {
         // A fill may exceed the quantity already booked by a reactive exit
         // (for example, an external/manual reduce order); only that excess
         // reconciles against the position here.
+        // An exit fill must be on the closing side of the open position. Anything
+        // else (no position, or a same-side fill) is not ours to reconcile.
+        match &self.position {
+            Some(pos) if fill.side == close_side(pos.side) => {}
+            _ => {
+                warn!("[{}] Ignoring {:?} fill {:.4} @ {:.4} (cid {:?}): not an exit of the open position",
+                    self.pair, fill.side, fill.quantity, fill.price, fill.client_order_id);
+                return Ok(Vec::new());
+            }
+        }
         let booked = self.pending_exit_qty.min(fill.quantity);
         self.pending_exit_qty -= booked;
         let unbooked = fill.quantity - booked;
@@ -1345,22 +1362,17 @@ fn tp_hit(side: OrderSide, price: f64, tp: f64) -> bool {
     match side { OrderSide::Buy => price >= tp, OrderSide::Sell => price <= tp }
 }
 
-/// Order type + price for a reduce-only exit. Longs (or shorts with no perp
-/// attached) push a Limit at the current price — `current_price` is the spot
-/// mid for longs, so the paper fill gate (`spot <= limit`) is satisfied and the
-/// fill is correct. But an open SHORT with a perp source attached is marked at
-/// the perp price, so a Limit-at-perp exit would be gated against the spot mid
-/// and misfire when perp and spot diverge (perp<spot → never fills; perp>spot →
-/// fills spuriously at a price the spot book never reached). For that case we
-/// push Market instead — it always fills (`paper.rs (_, None) => true`) at the
-/// spot mark with taker slippage, the honest model for an aggressive short
-/// cover, and keeps the paper balance consistent with the strategy's bookkeeping.
-fn exit_order_req(perp_attached: bool, side: OrderSide, current_price: f64) -> (OrderTypeReq, Option<f64>) {
-    if perp_attached && side == OrderSide::Sell {
-        (OrderTypeReq::Market, None)
-    } else {
-        (OrderTypeReq::Limit, Some(current_price))
-    }
+/// Order type + price for a reduce-only exit: always Market.
+///
+/// Exits used to be a Limit at the current price for longs. Exit P&L is booked
+/// when the exit is decided, so a limit that missed (price ticked away, or the
+/// paper 5 s fill cooldown held it) left the coins in the book while the journal
+/// showed the trade closed — booked profit that never happened plus orphaned
+/// inventory. A Market exit always fills (taker fee + slippage), which is the
+/// honest model and keeps the book consistent with the strategy's bookkeeping.
+/// (Shorts with a perp source were already Market for the perp/spot reason.)
+fn exit_order_req(_perp_attached: bool, _side: OrderSide, _current_price: f64) -> (OrderTypeReq, Option<f64>) {
+    (OrderTypeReq::Market, None)
 }
 
 /// Hold time in minutes from two millisecond timestamps. 0 if either is unset.

@@ -565,6 +565,7 @@ impl Strategy for GridStrategy {
 
     fn realized_pnl(&self) -> f64 { self.total_pnl }
     fn deployed_capital(&self) -> f64 { self.inventory_cost }
+    fn tracked_base_qty(&self) -> f64 { self.inventory_qty.max(0.0) }
 
     async fn on_tick(&mut self, ctx: &TickContext) -> Result<Vec<OrderRequest>> {
         // Track bar availability for diagnostics (before any early return)

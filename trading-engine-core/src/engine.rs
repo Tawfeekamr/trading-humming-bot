@@ -12,6 +12,7 @@ use crate::connector::types::*;
 use crate::connector::price_verify::PriceVerifier;
 use crate::price_filter::{FilterDecision, VerifyResult, validated_mid};
 use crate::risk::RiskManager;
+use crate::risk::pre_trade::{self, OrderRateLimiter, PreTradeLimits};
 use crate::capital::CapitalManager;
 use crate::notifications::TelegramBot;
 use crate::strategy::{Strategy, TickContext, MarketRegime};
@@ -120,6 +121,15 @@ pub struct Engine {
     /// (e.g. swing's resting TP1 / hard stop) via `pending_cancels`.
     placed_orders: HashMap<String, (String, String)>,
     api_commands: Option<mpsc::Receiver<EngineCommand>>,
+    /// Pre-trade limits and the per-symbol order-rate window (XRP incident hardening).
+    pre_trade_limits: PreTradeLimits,
+    order_rate: OrderRateLimiter,
+    /// Hourly book reconciliation: when it last ran, when free capital first hit
+    /// zero, and when each alert key last fired (6 h dedupe).
+    boot_at: Instant,
+    last_reconcile: Option<Instant>,
+    free_zero_since: Option<Instant>,
+    alert_last_sent: HashMap<String, Instant>,
 }
 
 impl Engine {
@@ -164,6 +174,12 @@ impl Engine {
             invariant_first_pass_logged: false,
             placed_orders: HashMap::new(),
             api_commands: None,
+            pre_trade_limits: PreTradeLimits::default(),
+            order_rate: OrderRateLimiter::default(),
+            boot_at: Instant::now(),
+            last_reconcile: None,
+            free_zero_since: None,
+            alert_last_sent: HashMap::new(),
         };
         // Init signal engine after self.config is set
         engine.signal = engine.config.signal.as_ref().filter(|s| s.enabled).map(|sc| {
@@ -267,6 +283,7 @@ impl Engine {
         // Restore placed-orders map so strategies can cancel their own resting
         // orders across restarts (swing TP1 / hard stop placed before shutdown).
         self.load_placed_orders().await;
+        self.prune_placed_orders().await;
         info!("Placed orders loaded from file");
 
         // Restore circuit-breaker state (peak equity, daily baseline, halt) across restarts.
@@ -584,6 +601,9 @@ impl Engine {
             }
             self.risk.check_trading_allowed()?;
         }
+        if let Err(reason) = self.pre_trade_check(&req, None).await {
+            anyhow::bail!("order blocked: {}", reason);
+        }
 
         let resp = self.connector.place_order(&req).await?;
         info!("API order placed through Engine: {} {} {} @ {}",
@@ -824,6 +844,7 @@ impl Engine {
             *deployed.entry(s.name().to_string()).or_insert(0.0) += s.deployed_capital();
         }
         self.capital.set_deployed(deployed);
+        self.maybe_reconcile(&balances, equity).await;
         let was_halted = self.risk.circuit_breaker.is_halted_raw();
         // Peak-equity invariant (Task 6): the breaker's peak can never
         // legitimately exceed initial capital + realized + unrealised PnL by
@@ -919,6 +940,7 @@ impl Engine {
     }
 
     async fn submit_orders(&mut self, orders: Vec<OrderRequest>) -> Result<()> {
+        let mut placed_any = false;
         for req in orders {
             // Reduce-only orders (exits) bypass the halt check so a circuit
             // breaker trip can't trap open positions.
@@ -938,6 +960,11 @@ impl Engine {
                     continue;
                 }
             }
+            let owner = req.client_order_id.as_deref().and_then(Self::owner_of_cid);
+            if let Err(reason) = self.pre_trade_check(&req, owner).await {
+                warn!("Order vetoed (pre-trade): {} {:?} {} — {}", req.symbol, req.side, req.quantity, reason);
+                continue;
+            }
 
             match self.connector.place_order(&req).await {
                 Ok(resp) => {
@@ -949,13 +976,165 @@ impl Engine {
                             cid.clone(),
                             (resp.symbol.clone(), resp.order_id.clone()),
                         );
-                        self.save_placed_orders().await;
+                        placed_any = true;
                     }
                 }
                 Err(e) => error!("Order failed: {}", e),
             }
         }
+        // One write per batch (was one per order: 144 writes in the XRP burst).
+        if placed_any {
+            self.save_placed_orders().await;
+        }
         Ok(())
+    }
+
+    /// Owner strategy index from an engine-tagged client id ("owner:2#…").
+    fn owner_of_cid(cid: &str) -> Option<usize> {
+        cid.strip_prefix("owner:")?.split('#').next()?.parse().ok()
+    }
+
+    /// Mid price for a symbol in either form ("XRP-USDT" / "XRPUSDT").
+    fn mid_for(&self, symbol: &str) -> Option<f64> {
+        let want = pre_trade::norm_symbol(symbol);
+        self.order_books.iter()
+            .find(|(k, _)| pre_trade::norm_symbol(k) == want)
+            .and_then(|(_, ob)| ob.mid_price())
+    }
+
+    /// Checks every order must pass before it reaches the exchange (added after
+    /// the 2026-11-27 XRP incident). Exits (reduce-only) only get the basic
+    /// validation, so a protective sell is never blocked by an entry limit.
+    async fn pre_trade_check(&mut self, req: &OrderRequest, owner: Option<usize>) -> std::result::Result<(), String> {
+        crate::connector::paper::validate_order(req).map_err(|e| e.to_string())?;
+        if req.reduce_only {
+            return Ok(());
+        }
+        let lim = self.pre_trade_limits;
+        let mid = self.mid_for(&req.symbol);
+        pre_trade::check_price_band(req, mid, &lim)?;
+
+        // Per-strategy open-order cap on this symbol (counts only orders still
+        // resting in the book).
+        let open = self.connector.get_open_orders(&req.symbol).await.unwrap_or_default();
+        if let Some(idx) = owner {
+            let prefix = format!("owner:{}#", idx);
+            let open_ids: HashSet<&str> = open.iter().map(|o| o.order_id.as_str()).collect();
+            let sym = pre_trade::norm_symbol(&req.symbol);
+            let mine = self.placed_orders.iter()
+                .filter(|(cid, (s, oid))| cid.starts_with(&prefix)
+                    && pre_trade::norm_symbol(s) == sym && open_ids.contains(oid.as_str()))
+                .count();
+            if mine >= lim.max_open_per_owner_symbol {
+                return Err(format!("strategy {} already has {} open orders on {}", idx, mine, req.symbol));
+            }
+        }
+
+        // Rolling per-symbol rate limit.
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        if !self.order_rate.allow(&req.symbol, now_ms, lim.max_orders_per_sec) {
+            return Err(format!("more than {} new orders in 1 s on {}", lim.max_orders_per_sec, req.symbol));
+        }
+
+        // Exposure cap (risk.max_base_exposure_pct) and cash check, counting coins
+        // already held AND buy orders still resting — the XRP burst was invisible
+        // to cash-only checks because none of its orders had filled yet.
+        if req.side == crate::models::order::OrderSide::Buy {
+            let Some(px) = req.price.filter(|p| *p > 0.0).or(mid) else { return Ok(()) };
+            let balances = self.connector.get_balances().await.unwrap_or_default();
+            let base = pre_trade::base_asset(&req.symbol);
+            let held = balances.get(&base).copied().unwrap_or(0.0);
+            let resting_buy_qty: f64 = open.iter()
+                .filter(|o| o.side == crate::models::order::OrderSide::Buy)
+                .map(|o| o.quantity)
+                .sum();
+            let resting_buy_usdt = resting_buy_qty * px;
+            let usdt = balances.get("USDT").copied().unwrap_or(0.0) - resting_buy_usdt;
+            let equity = self.capital.snapshot().total_equity;
+            let order_usdt = req.quantity * px;
+            if !self.risk.position_guard.can_place_order(held + resting_buy_qty, px, usdt, order_usdt, equity) {
+                return Err(format!(
+                    "exposure/cash limit: buy ${:.0} of {} with {:.4} held + {:.4} resting, ${:.0} free cash, equity ${:.0}",
+                    order_usdt, base, held, resting_buy_qty, usdt, equity));
+            }
+        }
+        Ok(())
+    }
+
+    /// Drop placed-order entries whose order is no longer in the book (filled,
+    /// cancelled, rejected at fill time, or discarded when the paper book was
+    /// re-seeded), so stale ids can't be cancelled or counted.
+    async fn prune_placed_orders(&mut self) {
+        let mut live: HashSet<String> = HashSet::new();
+        let symbols: HashSet<String> = self.placed_orders.values().map(|(s, _)| s.clone()).collect();
+        for s in symbols {
+            for o in self.connector.get_open_orders(&s).await.unwrap_or_default() {
+                live.insert(o.order_id);
+            }
+        }
+        let before = self.placed_orders.len();
+        self.placed_orders.retain(|_, (_, oid)| live.contains(oid));
+        if self.placed_orders.len() != before {
+            info!("Placed orders: pruned {} entries no longer in the book", before - self.placed_orders.len());
+            self.save_placed_orders().await;
+        }
+    }
+
+    /// Hourly reconciliation of the book against what strategies think they hold.
+    /// Sends a Telegram alert per finding, at most once per 6 h per finding.
+    async fn maybe_reconcile(&mut self, balances: &HashMap<String, f64>, equity: f64) {
+        let free = self.capital.snapshot().free_capital;
+        if free <= 0.0 {
+            self.free_zero_since.get_or_insert_with(Instant::now);
+        } else {
+            self.free_zero_since = None;
+        }
+        let due = match self.last_reconcile {
+            None => self.boot_at.elapsed() >= Duration::from_secs(600),
+            Some(t) => t.elapsed() >= Duration::from_secs(3600),
+        };
+        if !due {
+            return;
+        }
+        self.last_reconcile = Some(Instant::now());
+
+        let mut mids: HashMap<String, f64> = HashMap::new();
+        for (pair, ob) in &self.order_books {
+            if let Some(m) = ob.mid_price() {
+                mids.insert(pre_trade::base_asset(pair), m);
+            }
+        }
+        let mut tracked: HashMap<String, f64> = HashMap::new();
+        for s in &self.strategies {
+            *tracked.entry(pre_trade::base_asset(s.trading_pair())).or_insert(0.0) += s.tracked_base_qty();
+        }
+        if let Some(sig) = &self.signal {
+            // The Rust mirror only reloads inside manage_positions, which returns
+            // early while the Python listener owns positions — reload explicitly
+            // so open spot-signal holdings count and don't read as "untracked".
+            let mut mgr = sig.position_mgr().await;
+            mgr.reload_state();
+            for p in mgr.get_open_positions() {
+                *tracked.entry(pre_trade::base_asset(&p.symbol)).or_insert(0.0) += p.amount - p.amount_closed;
+            }
+        }
+        let zero_mins = self.free_zero_since.map(|t| (t.elapsed().as_secs() / 60) as i64);
+        let findings = pre_trade::reconcile(balances, &mids, &tracked, equity, zero_mins, 0.5);
+        if findings.is_empty() {
+            info!("Reconciliation OK: book matches strategy holdings");
+            return;
+        }
+        for f in findings {
+            warn!("RECONCILIATION: {}", f.message);
+            let fresh = self.alert_last_sent.get(&f.key)
+                .map_or(true, |t| t.elapsed() >= Duration::from_secs(6 * 3600));
+            if fresh {
+                self.alert_last_sent.insert(f.key.clone(), Instant::now());
+                let tg = self.telegram.clone_for_signal();
+                let msg = format!("⚠️ Book check: {}", f.message);
+                tokio::spawn(async move { let _ = tg.send(&msg).await; });
+            }
+        }
     }
 
     /// Cancel resting orders strategies asked to cancel. Each entry is
@@ -1163,17 +1342,11 @@ impl Engine {
                     }
                 }
                 None => {
-                    let fill_norm = fill.symbol.replace("-", "");
-                    for (i, strategy) in self.strategies.iter_mut().enumerate() {
-                        let strategy_norm = strategy.trading_pair().replace("-", "");
-                        if strategy_norm == fill_norm {
-                            match strategy.on_fill(fill).await {
-                                Ok(orders) => all_orders.extend(Self::tag_owner(i, orders)),
-                                Err(e) => warn!("Strategy {} fill error: {}", strategy.name(), e),
-                            }
-                            for cid in strategy.pending_cancels() { all_cancels.push((i, cid)); }
-                        }
-                    }
+                    // No owner tag: an API / signal order, not a strategy's. It used
+                    // to be routed to every strategy on the symbol, so a signal BUY
+                    // fill could shrink a trend position. Book it, route it nowhere.
+                    info!("Untagged fill (API/signal order {:?}) on {} — not routed to strategies",
+                        fill.client_order_id, fill.symbol);
                 }
             }
         }
@@ -1385,6 +1558,12 @@ mod tests {
             invariant_first_pass_logged: false,
             placed_orders: HashMap::new(),
             api_commands: None,
+            pre_trade_limits: PreTradeLimits::default(),
+            order_rate: OrderRateLimiter::default(),
+            boot_at: Instant::now(),
+            last_reconcile: None,
+            free_zero_since: None,
+            alert_last_sent: HashMap::new(),
         }
     }
     fn test_book(symbol: &str, mid: f64) -> OrderBook {
@@ -1800,7 +1979,10 @@ mod tests {
             Ok(vec![CancelResult { order_id: "cancel-all-1".into(), symbol: symbol.into() }])
         }
 
-        async fn get_balances(&self) -> Result<HashMap<String, f64>> { Ok(HashMap::new()) }
+        async fn get_balances(&self) -> Result<HashMap<String, f64>> {
+            // Funded, so API buys in these tests pass the pre-trade cash check.
+            Ok(HashMap::from([("USDT".to_string(), 100_000.0)]))
+        }
         async fn get_open_orders(&self, _symbol: &str) -> Result<Vec<OpenOrder>> { Ok(vec![]) }
         async fn get_order_book(&self, _symbol: &str, _limit: u16) -> Result<OrderBook> {
             Ok(OrderBook { symbol: String::new(), bids: vec![], asks: vec![], timestamp: 0 })
@@ -1934,5 +2116,43 @@ mod tests {
         assert!(!loaded.flat);
 
         let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn test_api_buy_is_blocked_by_pre_trade_cash_check_when_unfunded() {
+        let routing = RoutingCache::new("/tmp/test_engine_api_unfunded.json", 0);
+        let mut engine = minimal_engine(vec![], routing);
+        engine.connector = Arc::new(crate::connector::paper::PaperTradeConnector::new(HashMap::new()));
+        let req = OrderRequest {
+            symbol: "BTCUSDT".into(), side: OrderSide::Buy, order_type: OrderTypeReq::Market,
+            price: Some(50_000.0), quantity: 1.0, time_in_force: None,
+            client_order_id: Some("api-unfunded".into()), reduce_only: false,
+        };
+        let err = engine.place_api_order(req).await.unwrap_err().to_string();
+        assert!(err.contains("exposure/cash limit"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn test_strategy_order_burst_is_stopped() {
+        let routing = RoutingCache::new("/tmp/test_engine_burst.json", 0);
+        let mut engine = minimal_engine(vec![], routing);
+        let paper = Arc::new(crate::connector::paper::PaperTradeConnector::new(
+            HashMap::from([("USDT".to_string(), 1_000_000.0)])));
+        engine.connector = paper.clone();
+        let mk = |i: usize| OrderRequest {
+            symbol: "XRPUSDT".into(), side: OrderSide::Buy, order_type: OrderTypeReq::Limit,
+            price: Some(0.97), quantity: 100.0, time_in_force: None,
+            client_order_id: Some(format!("owner:0#trend_XRP-USDT_entry_{i}")), reduce_only: false,
+        };
+        engine.submit_orders((0..144).map(mk).collect()).await.unwrap();
+        let open = paper.get_open_orders("XRPUSDT").await.unwrap().len();
+        assert!(open <= 20, "rate limit / open-order cap must stop the 144-order burst, got {open}");
+    }
+
+    #[test]
+    fn owner_of_cid_parses_engine_tags() {
+        assert_eq!(Engine::owner_of_cid("owner:2#trend_XRP-USDT_entry_3"), Some(2));
+        assert_eq!(Engine::owner_of_cid("owner:0#"), Some(0));
+        assert_eq!(Engine::owner_of_cid("sig_ENA_USDT_1"), None);
     }
 }

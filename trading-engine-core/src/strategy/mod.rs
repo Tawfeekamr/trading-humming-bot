@@ -94,6 +94,10 @@ pub trait Strategy: Send {
     /// Real capital currently deployed in this strategy's open positions (cost
     /// basis). Used by the CapitalManager for per-strategy visibility. Default 0.
     fn deployed_capital(&self) -> f64 { 0.0 }
+    /// Base-asset quantity this strategy believes it holds in the book (long
+    /// inventory). Used by the hourly reconciliation to spot orphaned or
+    /// phantom inventory. Default 0 for strategies that hold nothing.
+    fn tracked_base_qty(&self) -> f64 { 0.0 }
 }
 
 #[cfg(test)]

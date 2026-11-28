@@ -25,7 +25,16 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+import src.run_signal_listener as rsl  # noqa: E402
 from src.run_signal_listener import _signal_order  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _engine_streams_everything(monkeypatch, request):
+    """The HTTP-bridge tests below exercise the engine call, so treat every
+    symbol as streamed unless a test opts out with the `real_streams` marker."""
+    if "real_streams" not in request.keywords:
+        monkeypatch.setattr(rsl, "_engine_streams", lambda symbol: True)
 
 
 class _FakeResp:
@@ -48,6 +57,9 @@ class TestSignalOrderSerialization:
         captured = {}
 
         def fake_urlopen(req, timeout=None):
+            url = req if isinstance(req, str) else req.full_url
+            if "/api/v1/capital" in url:
+                return _FakeResp({"free_capital": 1_000_000.0, "total_equity": 1_000_000.0})
             captured["url"] = req.full_url
             captured["body"] = json.loads(req.data)
             return _FakeResp({"orderId": "oid-123"})
@@ -89,7 +101,8 @@ class TestSignalOrderRetry:
         calls = {"n": 0, "sleeps": []}
 
         def fake_urlopen(req, timeout=None):
-            if "/api/v1/capital" in req.full_url:
+            url = req if isinstance(req, str) else req.full_url
+            if "/api/v1/capital" in url:
                 return _FakeResp({"free_capital": 1_000_000.0, "total_equity": 1_000_000.0})
             i = min(calls["n"], len(outcomes) - 1)
             outcome = outcomes[i]
@@ -137,3 +150,62 @@ class TestSignalOrderRetry:
         assert oid is None
         assert calls["n"] == 1
         assert calls["sleeps"] == []
+
+
+class TestSignalOrderHardening:
+    """2026-11-28 order-flow hardening: fail-closed capital check, and no ghost
+    engine orders for coins the engine does not stream."""
+
+    def _wallet(self, monkeypatch, free=None, error=None):
+        calls = {"orders": 0}
+
+        def fake_urlopen(req, timeout=None):
+            url = req if isinstance(req, str) else req.full_url
+            if "/api/v1/capital" in url:
+                if error:
+                    raise error
+                return _FakeResp({"free_capital": free})
+            calls["orders"] += 1
+            return _FakeResp({"orderId": "oid-1"})
+
+        monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+        return calls
+
+    def test_buy_refused_when_free_capital_is_zero(self, monkeypatch):
+        calls = self._wallet(monkeypatch, free=0.0)
+        assert _signal_order("BUY", "XRP-USDT", Decimal("10"), Decimal("1")) is None
+        assert calls["orders"] == 0
+
+    def test_buy_refused_when_capital_check_errors(self, monkeypatch):
+        calls = self._wallet(monkeypatch, error=urllib.error.URLError("engine down"))
+        assert _signal_order("BUY", "XRP-USDT", Decimal("10"), Decimal("1")) is None
+        assert calls["orders"] == 0
+
+    def test_buy_refused_when_notional_exceeds_free_capital(self, monkeypatch):
+        calls = self._wallet(monkeypatch, free=5.0)
+        assert _signal_order("BUY", "XRP-USDT", Decimal("10"), Decimal("1")) is None
+        assert calls["orders"] == 0
+
+    def test_buy_within_free_capital_is_sent(self, monkeypatch):
+        calls = self._wallet(monkeypatch, free=1_000.0)
+        assert _signal_order("BUY", "XRP-USDT", Decimal("10"), Decimal("1")) == "oid-1"
+        assert calls["orders"] == 1
+
+    @pytest.mark.real_streams
+    def test_unstreamed_coin_is_simulated_not_sent(self, monkeypatch):
+        monkeypatch.setattr(rsl, "_ENGINE_PAIRS", {"XRPUSDT", "BNBUSDT"})
+        calls = self._wallet(monkeypatch, free=1_000_000.0)
+        oid = _signal_order("BUY", "ENA-USDT", Decimal("100"), Decimal("0.1"))
+        assert oid.startswith("sim_ENA_USDT_") and calls["orders"] == 0
+        sell = _signal_order("SELL", "ENA-USDT", Decimal("100"), Decimal("0.1"))
+        assert sell.startswith("sim_ENA_USDT_") and calls["orders"] == 0
+
+    @pytest.mark.real_streams
+    def test_engine_streams_reads_enabled_pairs_from_config(self, monkeypatch):
+        monkeypatch.setattr(rsl, "_ENGINE_PAIRS", None)
+        monkeypatch.setattr(rsl, "load_config", lambda: {"pairs": [
+            {"symbol": "XRP-USDT", "enabled": True}, {"symbol": "BTC-USDT", "enabled": False}]})
+        assert rsl._engine_streams("XRPUSDT") and rsl._engine_streams("XRP-USDT")
+        assert not rsl._engine_streams("BTC-USDT")
+        assert not rsl._engine_streams("ENA-USDT")
+
