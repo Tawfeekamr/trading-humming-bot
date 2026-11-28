@@ -224,36 +224,27 @@ reused unchanged. Small refactor: split `_process_message` into `parse` + `_act_
 
 ## 6. Code layout
 
+Built in Phase 1 (pure code shared by backtest and live):
+
 ```
 src/scout/
-  __init__.py
-  config.py          # pydantic model for `scout:` block, extra="forbid" (strict)
-  data.py            # klines/tickers/funding fetch + on-disk cache (Gate.io, Binance)
-  universe.py        # 3.1
-  market_state.py    # 3.2
-  features.py        # 3.3 (pure)
-  setups/
-    base.py          # Setup dataclass, Detector protocol
-    breakout.py      # 3.4 A (pure)
-    pullback.py      # 3.4 B (pure)
-  ranker.py          # 3.5 (score, correlation groups, capacity)
-  emitter.py         # 3.6 + price sanity
-  guard.py           # kill switch
-  journal.py         # scout_journal.db
-  runner.py          # bar-close scheduler, wires everything, owns the SignalEngine instance
+  config.py          # strict dataclasses — unknown key raises (no pydantic dependency)
+  data.py            # data.binance.vision archive download + parquet cache (incl. delisted)
+  indicators.py      # Wilder ATR/RSI/ADX, EMA, Donchian(prev), RVOL
+  features.py        # 3.3 per-coin hourly frame; 4h values only after the 4h bar closes
+  universe.py        # 3.1 daily top-60 by 30d volume, uses data to D-1
+  market_state.py    # 3.2 RISK_ON / RISK_OFF / NEUTRAL / NO_TRADE
+  setups.py          # 3.4 A breakout + B pullback, vectorised, pure
 backtest/scout/
-  replay.py          # walks history bar by bar, calls the SAME universe/features/setups/ranker
-  fills.py           # fee + slippage + intrabar stop/target order (stop first if both hit)
-  baselines.py       # random-entry null, BTC hold, equal-weight universe
-  report.py          # walk-forward report (markdown + json)
-tests/scout/
-  test_features_parity.py   # Python vs Rust indicators on fixed bars
-  test_setups.py            # hand-built bar fixtures → expected setup / no setup
-  test_ranker.py            # correlation cap, capacity, cooldown
-  test_emitter.py           # ParsedSignal mapping, price-sanity reject
-  test_no_lookahead.py      # features at bar t unchanged when bars > t are altered
-  test_config_strict.py     # unknown key → startup error
+  panel.py           # cross-sectional rank, breadth, state; runs detectors per grid cell
+  sim.py             # one trade: live futures ladder, stop-first, fees/slippage/funding
+  portfolio.py       # 3.5 rules: zone, capacity, one-per-coin, cooldown, correlation, daily loss
+  walk_forward.py    # 13 folds, cell selection, random-entry null, GO verdict, report
+tests/scout/         # 54 tests: indicators, no-lookahead, setups, sim, portfolio, pipeline
 ```
+
+Phase 2–3 (only if a detector passes): `emitter.py` (3.6 + price sanity), `guard.py`
+(kill switch), `journal.py`, `runner.py`. Rust indicator parity test moves to Phase 2.
 
 Changes to existing code (small):
 - `src/signals/signal_engine.py`: split `_process_message`; add `submit_signal`; optional `max_hold_hours`.
