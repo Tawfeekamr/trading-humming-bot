@@ -20,10 +20,13 @@ import numpy as np
 import pandas as pd
 
 from src.scout import market_state as ms
-from src.scout.data import CACHE_ROOT, EARLY_CACHE_ROOT, load_bars
+from src.scout.data import (CACHE_ROOT, EARLY_CACHE_ROOT, FULL_CACHE_ROOT, fetch_metrics_day,
+                             load_bars, load_funding)
+from src.scout.funding import oi_change_24h
 from src.scout.universe import load_daily_all
-from src.scout.config import BreakoutParams, CommonParams, CostParams, PortfolioParams, PullbackParams
-from src.scout.setups import detect_breakout, detect_pullback
+from src.scout.config import (BreakoutParams, CommonParams, CostParams, FundingParams, PortfolioParams,
+                              PullbackParams)
+from src.scout.setups import detect_breakout, detect_funding_fade, detect_pullback, oi_filter
 
 from .panel import BTC, Panel, build_panel, find_setups
 from .portfolio import Trade, run_portfolio
@@ -55,7 +58,17 @@ GRIDS = {
                   for rk, ms_ in itertools.product((0.6, 0.7, 0.8), (0.75, 1.0, 1.5))},
         "axes": ("rank_min", "min_stop_atr"),
     },
+    # v3 — docs/scout/PREREGISTRATION_FUNDING.md
+    "funding": {
+        "fn": detect_funding_fade,
+        "default": (0.0005, 1.5),
+        "cells": {(fm, sa): FundingParams(f_min=fm, min_stop_atr=sa)
+                  for fm, sa in itertools.product((0.0003, 0.0005, 0.0008), (1.0, 1.5, 2.0))},
+        "axes": ("f_min", "min_stop_atr"),
+    },
 }
+GRIDS["funding_oi"] = dict(GRIDS["funding"])   # D = C candidates filtered by OI build-up
+OI_MIN_CHG = 0.10
 
 STUDIES = {
     # v1 — docs/scout/PREREGISTRATION.md
@@ -73,6 +86,17 @@ STUDIES = {
                        title="Short-only breakdown — SEEN period (CONTAMINATED, information only)",
                        rules="docs/scout/PREREGISTRATION_SHORT.md"),
 }
+
+_V3 = dict(side=None, cache=FULL_CACHE_ROOT, direction_gate=False, null_alpha=0.025, funding=True,
+           rules="docs/scout/PREREGISTRATION_FUNDING.md")
+STUDIES["funding_C"] = dict(_V3, data=("2020-05-01", "2026-09-30"), oos_start="2021-01-01", n_folds=23,
+                            detectors=("funding",), out="FUNDING_RESULT_C",
+                            title="Funding fade (detector C) — 2021-01 → 2026-09",
+                            halves=(("2021-01-01", "2023-06-30"), ("2023-07-01", "2026-09-30")))
+STUDIES["funding_D"] = dict(_V3, data=("2021-11-01", "2026-09-30"), oos_start="2022-07-01", n_folds=17,
+                            detectors=("funding_oi",), out="FUNDING_RESULT_D",
+                            title="Funding fade + OI build-up (detector D) — 2022-07 → 2026-09",
+                            halves=(("2022-07-01", "2024-06-30"), ("2024-07-01", "2026-09-30")))
 
 GO_THRESHOLDS = {"trades": 150, "expectancy_r": 0.10, "profit_factor": 1.25,
                  "null_p": 0.05, "folds_positive": 0.60, "max_dd": 0.15, "ex_best_coin_r": 0.0}
@@ -148,7 +172,8 @@ def metrics(trades: list[Trade], fold_defs, budget: float) -> dict:
 
 
 def random_entry_null(p: Panel, real: list[Trade], fold_defs, costs: CostParams,
-                      pp: PortfolioParams, common: CommonParams, runs: int, seed: int) -> np.ndarray:
+                      pp: PortfolioParams, common: CommonParams, runs: int, seed: int,
+                      direction_gate: bool = True) -> np.ndarray:
     """Mean R of `runs` random-entry replicas of the real OOS trade list."""
     rng = np.random.default_rng(seed)
     fold_of = []
@@ -164,7 +189,9 @@ def random_entry_null(p: Panel, real: list[Trade], fold_defs, costs: CostParams,
         a, b = f["test"]
         hours = np.arange(max(a - 1, 0), min(b - 1, p.n - 1))   # signal bar t, entry t+1 in window
         for side in (1, -1):
-            ok = ms.allows(p.state[hours], side) & (p.state[hours] != ms.NO_TRADE)
+            ok = p.state[hours] != ms.NO_TRADE
+            if direction_gate:
+                ok = ok & ms.allows(p.state[hours], side)
             eligible[(k, side)] = hours[np.asarray(ok, dtype=bool)]
     out = np.full(runs, np.nan)
     for run in range(runs):
@@ -200,8 +227,10 @@ def random_entry_null(p: Panel, real: list[Trade], fold_defs, costs: CostParams,
     return out
 
 
-def verdict(m: dict, null_p: float) -> dict:
-    g = GO_THRESHOLDS
+def verdict(m: dict, null_p: float, alpha: float | None = None, halves: dict | None = None) -> dict:
+    g = dict(GO_THRESHOLDS)
+    if alpha is not None:
+        g["null_p"] = alpha
     checks = {
         "1_trades": (m.get("trades", 0), m.get("trades", 0) >= g["trades"]),
         "2_expectancy_r": (m.get("expectancy_r"), (m.get("expectancy_r") or -1) > g["expectancy_r"]),
@@ -211,8 +240,42 @@ def verdict(m: dict, null_p: float) -> dict:
         "6_max_dd": (m.get("max_dd"), m.get("max_dd", 1) <= g["max_dd"]),
         "7_ex_best_coin_r": (m.get("ex_best_coin_r"), (m.get("ex_best_coin_r") or -1) > g["ex_best_coin_r"]),
     }
+    if halves is not None:   # v3 criterion 8: expectancy > 0 in each half
+        vals = list(halves.values())
+        checks["8_both_halves_positive"] = (halves, bool(vals) and all(
+            v is not None and not math.isnan(v) and v > 0 for v in vals))
     return {"checks": {k: {"value": v, "pass": bool(ok)} for k, (v, ok) in checks.items()},
             "go": all(ok for _, ok in checks.values())}
+
+
+def apply_oi_filter(p: Panel, cands: dict, cache, start_idx: int) -> tuple[dict, dict]:
+    """v3 §5: fetch OI only for coin-days where a C candidate fires; keep oi_chg24 >= 10%."""
+    from concurrent.futures import ThreadPoolExecutor
+    allc = pd.concat([c for c in cands.values() if not c.empty]) if any(
+        not c.empty for c in cands.values()) else pd.DataFrame(columns=["sym", "t"])
+    allc = allc[allc["t"] >= start_idx]
+    keys = sorted(set(zip(allc["sym"], allc["t"].astype(int))))
+    closes = {k: p.index[k[1]] + pd.Timedelta(hours=1) for k in keys}
+    days = sorted({(s, (closes[(s, t)] - pd.Timedelta(days=d)).strftime("%Y-%m-%d"))
+                   for s, t in keys for d in (0, 1, 2)})
+    logger.info("OI: %d candidates → %d coin-day files", len(keys), len(days))
+    with ThreadPoolExecutor(12) as ex:
+        frames = dict(zip(days, ex.map(lambda sd: fetch_metrics_day(sd[0], sd[1], cache), days)))
+    vals = {}
+    for s, t in keys:
+        bc = closes[(s, t)]
+        parts = [frames.get((s, (bc - pd.Timedelta(days=d)).strftime("%Y-%m-%d"))) for d in (2, 1, 0)]
+        parts = [x for x in parts if x is not None]
+        vals[(s, t)] = oi_change_24h(pd.concat(parts).sort_values("time"), bc) if parts else float("nan")
+    oi = pd.Series(vals, dtype=float)
+    if len(oi):
+        oi.index = pd.MultiIndex.from_tuples(oi.index)
+    info = {"candidates": len(keys), "files": len(days),
+            "missing_files": int(sum(v is None for v in frames.values())),
+            "oi_known": int(oi.notna().sum()), "oi_ge_10pct": int((oi >= OI_MIN_CHG).sum())}
+    out = {k: (oi_filter(c[c["t"] >= start_idx], oi, OI_MIN_CHG) if not c.empty else c)
+           for k, c in cands.items()}
+    return out, info
 
 
 def benchmarks(p: Panel, a: int, b: int) -> dict:
@@ -238,10 +301,12 @@ def run(null_runs: int = NULL_RUNS, study: str = "phase1") -> dict:
     pp, costs, common = PortfolioParams(), CostParams(), CommonParams()
     loader = partial(load_bars, cache_root=st["cache"])
     logger.info("building panel (%s) …", study)
-    p = build_panel(*st["data"], daily=load_daily_all(st["cache"]), bars_loader=loader)
+    floader = partial(load_funding, cache_root=st["cache"]) if st.get("funding") else None
+    p = build_panel(*st["data"], daily=load_daily_all(st["cache"]), bars_loader=loader, funding_loader=floader)
     fd = folds(p.index, st["oos_start"], st["n_folds"])
     oos = (fd[0]["test"][0], fd[-1]["test"][1])
     result = {"study": study, "title": st["title"], "rules": st["rules"], "side_filter": st["side"],
+              "null_alpha": st.get("null_alpha"), "direction_gate": st.get("direction_gate", True),
               "commit": git_commit(), "data": list(st["data"]), "oos": [st["oos_start"], st["data"][1]],
               "universe_size_oos": p.member.iloc[oos[0]:oos[1]].sum(axis=1).describe()[["min", "mean", "max"]].to_dict(),
               "symbols_in_panel": len(p.syms),
@@ -252,6 +317,9 @@ def run(null_runs: int = NULL_RUNS, study: str = "phase1") -> dict:
         g = GRIDS[name]
         logger.info("%s: finding setups for %d cells …", name, len(g["cells"]))
         cands = find_setups(p, g["fn"], g["cells"], bars_loader=loader)
+        oi_info = None
+        if name == "funding_oi":
+            cands, oi_info = apply_oi_filter(p, cands, st["cache"], fd[0]["train"][0])
         if st["side"] is not None:   # side filter applied BEFORE portfolio rules
             cands = {k: (c[c["side"] == st["side"]] if not c.empty else c) for k, c in cands.items()}
         cell_trades, cell_skips = {}, {}
@@ -268,16 +336,25 @@ def run(null_runs: int = NULL_RUNS, study: str = "phase1") -> dict:
         m = metrics(stitched, fd, pp.budget)
         logger.info("%s: %d OOS trades, mean R %.3f — running null …", name, m.get("trades", 0),
                     m.get("expectancy_r", float("nan")))
-        null = random_entry_null(p, stitched, fd, costs, pp, common, null_runs, SEED) if stitched \
+        null = random_entry_null(p, stitched, fd, costs, pp, common, null_runs, SEED,
+                                 direction_gate=st.get("direction_gate", True)) if stitched \
             else np.array([np.nan])
         valid = null[~np.isnan(null)]
         null_p = float(np.mean(valid >= m["expectancy_r"])) if stitched and len(valid) else 1.0
         default_oos = in_window(cell_trades[g["default"]], oos)
+        halves = None
+        if st.get("halves"):
+            halves = {}
+            for a, b in st["halves"]:
+                w = (int(p.index.searchsorted(pd.Timestamp(a, tz="UTC"))),
+                     int(p.index.searchsorted(pd.Timestamp(b, tz="UTC") + pd.Timedelta(days=1))))
+                halves[f"{a}→{b}"] = mean_r(in_window(stitched, w))
         result["detectors"][name] = {
             "oos_metrics": m,
             "null": {"runs": int(len(valid)), "mean": float(np.mean(valid)) if len(valid) else None,
                      "p95": float(np.percentile(valid, 95)) if len(valid) else None, "p_value": null_p},
-            "verdict": verdict(m, null_p),
+            "verdict": verdict(m, null_p, st.get("null_alpha"), halves),
+            "oi": oi_info,
             "selected_cells": chosen,
             "default_cell_oos_metrics": metrics(default_oos, fd, pp.budget),
             "candidates_per_cell": {str(k): int(len(v)) for k, v in cands.items()},
@@ -315,11 +392,15 @@ def write_report(res: dict, out_dir: Path = OUT_DIR, stem: str = "WALK_FORWARD_R
         v = d["verdict"]
         L += [f"## Detector {name}: **{'GO' if v['go'] else 'NO-GO'}**", "",
               "| # | Criterion | Value | Threshold | Pass |", "|---|---|---|---|---|"]
+        alpha = res.get("null_alpha") or 0.05
         th = {"1_trades": "≥ 150", "2_expectancy_r": "> 0.10R", "3_profit_factor": "≥ 1.25",
-              "4_null_p": "≤ 0.05", "5_folds_positive": "≥ 60%", "6_max_dd": "≤ 15%", "7_ex_best_coin_r": "> 0"}
+              "4_null_p": f"≤ {alpha}", "5_folds_positive": "≥ 60%", "6_max_dd": "≤ 15%", "7_ex_best_coin_r": "> 0",
+              "8_both_halves_positive": "> 0R in each half"}
         for k, c in v["checks"].items():
             L.append(f"| {k[0]} | {k[2:]} | {_fmt(c['value'])} | {th[k]} | {'✅' if c['pass'] else '❌'} |")
         m = d["oos_metrics"]
+        if d.get("oi"):
+            L += ["", f"OI fetch: {d['oi']}"]
         L += ["", f"OOS: {m.get('trades', 0)} trades, total {_fmt(m.get('total_r', 0.0))}R, "
                   f"win rate {_fmt(m.get('win_rate', 0.0))}, P&L ${m.get('total_pnl_usd', 0):,.0f} "
                   f"on $10k ({m.get('return_on_budget', 0):.1%}).",

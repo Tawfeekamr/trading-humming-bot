@@ -68,3 +68,33 @@ def test_pipeline_runs_end_to_end():
         fd_all = [{"name": "all", "train": (0, 0), "test": (0, p.n)}]
         null = random_entry_null(p, trades[:10], fd_all, CostParams(), PortfolioParams(), CommonParams(), 5, 1)
         assert len(null) == 5
+
+
+def test_pipeline_with_funding():
+    from src.scout.config import FundingParams
+    from src.scout.setups import detect_funding_fade
+    syms = {"BTCUSDT": make_hourly(0, 0.0002), "AAAUSDT": make_hourly(1, 0.0006),
+            "BBBUSDT": make_hourly(2, -0.0004), "CCCUSDT": make_hourly(3, 0.0)}
+    hourly = {s: df.drop(columns="quote_volume") for s, df in syms.items()}
+    daily = {s: df.resample("1D").agg({"close": "last", "quote_volume": "sum"}) * [1, 1e3]
+             for s, df in syms.items()}
+    rng = np.random.default_rng(7)
+
+    def floader(sym):
+        t = pd.date_range("2023-01-01", "2023-11-26", freq="8h", tz="UTC")
+        return pd.DataFrame({"time": t, "f8": rng.normal(0, 0.0008, len(t))})
+
+    p = build_panel("2023-08-01", "2023-11-26", syms=list(syms), daily=daily,
+                    bars_loader=lambda s, i: hourly[s], funding_loader=floader)
+    assert p.is_print.values.sum() > 0 and p.f_rank.stack().between(0, 1).all()
+    c = find_setups(p, detect_funding_fade, {"l": FundingParams(f_min=0.0003, min_stop_atr=1.0)},
+                    bars_loader=lambda s, i: hourly[s])["l"]
+    assert not c.empty
+    for row in c.itertuples():
+        assert p.is_print.iloc[row.t][row.sym] and p.state[row.t] != ms.NO_TRADE
+    trades, _ = run_portfolio(c, p)
+    if trades:
+        fd_all = [{"name": "all", "train": (0, 0), "test": (0, p.n)}]
+        null = random_entry_null(p, trades[:5], fd_all, CostParams(), PortfolioParams(), CommonParams(), 3, 1,
+                                 direction_gate=False)
+        assert len(null) == 3

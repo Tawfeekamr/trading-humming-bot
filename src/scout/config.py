@@ -38,6 +38,15 @@ class PullbackParams:
 
 
 @dataclass(frozen=True)
+class FundingParams:
+    f_min: float = 0.0005          # |f8| threshold (0.05% per 8h)
+    rank_hi: float = 0.90          # short needs f_rank >= this; long needs <= 1 - this
+    stop_buffer_atr: float = 0.1
+    min_stop_atr: float = 1.5
+    zone_atr: float = 0.25
+
+
+@dataclass(frozen=True)
 class CommonParams:
     min_stop_pct: float = 0.005
     max_stop_pct: float = 0.10

@@ -114,7 +114,9 @@ def run_portfolio(cands: pd.DataFrame, panel, pp: PortfolioParams = PortfolioPar
             if per_unit <= 0 or (row.side > 0 and entry <= row.stop) or (row.side < 0 and entry >= row.stop):
                 skips["bad_stop"] += 1
                 continue
-            risk_usd = pp.budget * pp.risk_pct * float(ms.size_mult(row.state))
+            mult = getattr(row, "size_mult", None)
+            mult = float(ms.size_mult(row.state)) if mult is None or mult != mult else float(mult)
+            risk_usd = pp.budget * pp.risk_pct * mult
             qty = min(risk_usd / per_unit, pp.max_notional / entry)
             res = simulate_trade(O, H, L, C, i, int(row.side), float(row.stop),
                                  (row.tp1, row.tp2, row.tp3), qty, costs, pp.max_hold_bars)

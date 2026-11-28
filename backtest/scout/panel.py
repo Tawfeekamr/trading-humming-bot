@@ -41,6 +41,9 @@ class Panel:
     btc_up: np.ndarray | None = None
     state: np.ndarray | None = None
     universe_daily: pd.DataFrame | None = None
+    f8: pd.DataFrame | None = None           # v3: funding (8h basis) as known at row close
+    f_rank: pd.DataFrame | None = None       # v3: cross-sectional funding rank in universe
+    is_print: pd.DataFrame | None = None     # v3: funding print happened in this bar
 
     @property
     def n(self) -> int:
@@ -73,7 +76,8 @@ def btc_up_hourly(btc_daily: pd.DataFrame, index: pd.DatetimeIndex) -> np.ndarra
 
 
 def build_panel(start: str, end: str, syms: Iterable[str] | None = None,
-                daily: dict | None = None, bars_loader: Callable = load_bars) -> Panel:
+                daily: dict | None = None, bars_loader: Callable = load_bars,
+                funding_loader: Callable | None = None) -> Panel:
     daily = daily if daily is not None else load_daily_all()
     U = build_daily_universe(daily)
     index = pd.date_range(pd.Timestamp(start, tz="UTC"), pd.Timestamp(end, tz="UTC") + pd.Timedelta(hours=23), freq="h")
@@ -116,7 +120,25 @@ def build_panel(start: str, end: str, syms: Iterable[str] | None = None,
     p.med_natr = natr.median(axis=1, skipna=True).to_numpy(dtype=float)
     p.btc_up = btc_up_hourly(daily[BTC], index)
     p.state = ms.classify(p.breadth, p.btc_up, p.med_natr)
+    if funding_loader is not None:
+        add_funding(p, funding_loader)
     return p
+
+
+def add_funding(p: Panel, funding_loader: Callable) -> None:
+    """v3 §3: f8, is_print and f_rank (rank among that hour's universe)."""
+    from src.scout.funding import funding_hourly
+    f8s, prints = {}, {}
+    for s in p.syms:
+        try:
+            pr = funding_loader(s)
+        except FileNotFoundError:
+            pr = pd.DataFrame(columns=["time", "f8"])
+        f8, isp = funding_hourly(pr, p.index)
+        f8s[s], prints[s] = f8.astype(np.float32), isp
+    p.f8 = pd.DataFrame(f8s, index=p.index)
+    p.is_print = pd.DataFrame(prints, index=p.index)
+    p.f_rank = pct_rank_rows(p.f8.where(p.member)).astype(np.float32)
 
 
 def find_setups(p: Panel, detector_fn: Callable, param_sets: dict,
@@ -130,6 +152,10 @@ def find_setups(p: Panel, detector_fn: Callable, param_sets: dict,
         f = hourly_features(bars).reindex(p.index)
         f["rank"] = p.rank[s].to_numpy(dtype=float)
         f["state"] = p.state
+        if p.f8 is not None:
+            f["f8"] = p.f8[s].to_numpy(dtype=float)
+            f["f_rank"] = p.f_rank[s].to_numpy(dtype=float)
+            f["is_print"] = p.is_print[s].to_numpy()
         f = f[p.member[s].to_numpy()]
         if f.empty:
             continue
