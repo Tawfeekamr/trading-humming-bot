@@ -49,6 +49,8 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/v1/promotion_report", get(handlers::get_promotion_report))
         .route("/api/v1/trades", get(handlers::get_trades))
         .route("/api/v1/positions", get(handlers::get_positions))
+        .route("/api/v1/book_check", get(handlers::book_check))
+        .route("/api/v1/vetoes", get(handlers::recent_vetoes))
         .layer(CorsLayer::permissive())
         .with_state(state)
 }

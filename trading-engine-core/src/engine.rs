@@ -130,7 +130,12 @@ pub struct Engine {
     last_reconcile: Option<Instant>,
     free_zero_since: Option<Instant>,
     alert_last_sent: HashMap<String, Instant>,
+    /// Last orders blocked before reaching the exchange (newest last), for /vetoes.
+    vetoes: std::collections::VecDeque<serde_json::Value>,
 }
+
+/// How many blocked orders /vetoes remembers.
+const VETO_HISTORY: usize = 50;
 
 impl Engine {
     pub fn new(
@@ -180,6 +185,7 @@ impl Engine {
             last_reconcile: None,
             free_zero_since: None,
             alert_last_sent: HashMap::new(),
+            vetoes: std::collections::VecDeque::new(),
         };
         // Init signal engine after self.config is set
         engine.signal = engine.config.signal.as_ref().filter(|s| s.enabled).map(|sc| {
@@ -591,17 +597,29 @@ impl Engine {
                 let result = self.cancel_all_api_orders(&symbol).await.map_err(|e| e.to_string());
                 let _ = respond_to.send(result);
             }
+            EngineCommand::BookCheck { respond_to } => {
+                let _ = respond_to.send(Ok(self.book_check_now().await));
+            }
+            EngineCommand::RecentVetoes { respond_to } => {
+                let list: Vec<serde_json::Value> = self.vetoes.iter().rev().cloned().collect();
+                let _ = respond_to.send(Ok(serde_json::json!({ "count": list.len(), "vetoes": list })));
+            }
         }
     }
 
     async fn place_api_order(&mut self, req: OrderRequest) -> Result<OrderResponse> {
         if !req.reduce_only {
             if self.is_price_suspect(&req.symbol) {
+                self.record_veto(&req, None, "price suspect");
                 anyhow::bail!("order blocked: price suspect");
             }
-            self.risk.check_trading_allowed()?;
+            if let Err(e) = self.risk.check_trading_allowed() {
+                self.record_veto(&req, None, &format!("trading halted: {}", e));
+                return Err(e);
+            }
         }
         if let Err(reason) = self.pre_trade_check(&req, None).await {
+            self.record_veto(&req, None, &reason);
             anyhow::bail!("order blocked: {}", reason);
         }
 
@@ -953,16 +971,21 @@ impl Engine {
                         "Order vetoed (price suspect): {} — holding until price verified",
                         pair_key
                     );
+                    let owner = req.client_order_id.as_deref().and_then(Self::owner_of_cid);
+                    self.record_veto(&req, owner, "price suspect");
                     continue;
                 }
                 if let Err(e) = self.risk.check_trading_allowed() {
                     warn!("Order vetoed by risk manager (halted): {}", e);
+                    let owner = req.client_order_id.as_deref().and_then(Self::owner_of_cid);
+                    self.record_veto(&req, owner, &format!("trading halted: {}", e));
                     continue;
                 }
             }
             let owner = req.client_order_id.as_deref().and_then(Self::owner_of_cid);
             if let Err(reason) = self.pre_trade_check(&req, owner).await {
                 warn!("Order vetoed (pre-trade): {} {:?} {} — {}", req.symbol, req.side, req.quantity, reason);
+                self.record_veto(&req, owner, &reason);
                 continue;
             }
 
@@ -1097,7 +1120,29 @@ impl Engine {
             return;
         }
         self.last_reconcile = Some(Instant::now());
+        let (findings, _) = self.reconcile_findings(balances, equity).await;
+        if findings.is_empty() {
+            info!("Reconciliation OK: book matches strategy holdings");
+            return;
+        }
+        for f in findings {
+            warn!("RECONCILIATION: {}", f.message);
+            let fresh = self.alert_last_sent.get(&f.key)
+                .map_or(true, |t| t.elapsed() >= Duration::from_secs(6 * 3600));
+            if fresh {
+                self.alert_last_sent.insert(f.key.clone(), Instant::now());
+                let tg = self.telegram.clone_for_signal();
+                let msg = format!("⚠️ Book check: {}", f.message);
+                tokio::spawn(async move { let _ = tg.send(&msg).await; });
+            }
+        }
+    }
 
+    /// Reconciliation findings plus a per-asset table (held vs strategy-owned).
+    /// Shared by the hourly check and the on-demand /book_check.
+    async fn reconcile_findings(&mut self, balances: &HashMap<String, f64>, equity: f64)
+        -> (Vec<pre_trade::Finding>, Vec<serde_json::Value>)
+    {
         let mut mids: HashMap<String, f64> = HashMap::new();
         for (pair, ob) in &self.order_books {
             if let Some(m) = ob.mid_price() {
@@ -1120,20 +1165,53 @@ impl Engine {
         }
         let zero_mins = self.free_zero_since.map(|t| (t.elapsed().as_secs() / 60) as i64);
         let findings = pre_trade::reconcile(balances, &mids, &tracked, equity, zero_mins, 0.5);
-        if findings.is_empty() {
-            info!("Reconciliation OK: book matches strategy holdings");
-            return;
-        }
-        for f in findings {
-            warn!("RECONCILIATION: {}", f.message);
-            let fresh = self.alert_last_sent.get(&f.key)
-                .map_or(true, |t| t.elapsed() >= Duration::from_secs(6 * 3600));
-            if fresh {
-                self.alert_last_sent.insert(f.key.clone(), Instant::now());
-                let tg = self.telegram.clone_for_signal();
-                let msg = format!("⚠️ Book check: {}", f.message);
-                tokio::spawn(async move { let _ = tg.send(&msg).await; });
-            }
+        let mut bases: Vec<&String> = mids.keys().collect();
+        bases.sort();
+        let assets = bases.into_iter().map(|b| {
+            let held = balances.get(b).copied().unwrap_or(0.0);
+            serde_json::json!({
+                "asset": b, "held": held, "owned_by_strategies": tracked.get(b).copied().unwrap_or(0.0),
+                "value_usdt": held * mids[b],
+            })
+        }).collect();
+        (findings, assets)
+    }
+
+    /// On-demand reconciliation for GET /api/v1/book_check (Telegram /book_check).
+    async fn book_check_now(&mut self) -> serde_json::Value {
+        let balances = self.connector.get_balances().await.unwrap_or_default();
+        let equity = Self::portfolio_equity_mtm(&balances, &self.order_books);
+        let (findings, assets) = self.reconcile_findings(&balances, equity).await;
+        let snap = self.capital.snapshot();
+        serde_json::json!({
+            "ok": findings.is_empty(),
+            "findings": findings.iter().map(|f| f.message.clone()).collect::<Vec<_>>(),
+            "equity": equity,
+            "usdt": balances.get("USDT").copied().unwrap_or(0.0),
+            "free_capital": snap.free_capital,
+            "assets": assets,
+            "checked_at_ms": chrono::Utc::now().timestamp_millis(),
+            "last_hourly_check_mins_ago": self.last_reconcile.map(|t| t.elapsed().as_secs() / 60),
+        })
+    }
+
+    /// Remember a blocked order for /vetoes (bounded history).
+    fn record_veto(&mut self, req: &OrderRequest, owner: Option<usize>, reason: &str) {
+        let source = match owner.and_then(|i| self.strategies.get(i)) {
+            Some(s) => format!("{} {}", s.name(), s.trading_pair()),
+            None => "api/signal".to_string(),
+        };
+        self.vetoes.push_back(serde_json::json!({
+            "ts_ms": chrono::Utc::now().timestamp_millis(),
+            "source": source,
+            "symbol": req.symbol,
+            "side": format!("{:?}", req.side),
+            "quantity": req.quantity,
+            "price": req.price,
+            "reason": reason,
+        }));
+        while self.vetoes.len() > VETO_HISTORY {
+            self.vetoes.pop_front();
         }
     }
 
@@ -1564,6 +1642,7 @@ mod tests {
             last_reconcile: None,
             free_zero_since: None,
             alert_last_sent: HashMap::new(),
+            vetoes: std::collections::VecDeque::new(),
         }
     }
     fn test_book(symbol: &str, mid: f64) -> OrderBook {
@@ -2154,5 +2233,66 @@ mod tests {
         assert_eq!(Engine::owner_of_cid("owner:2#trend_XRP-USDT_entry_3"), Some(2));
         assert_eq!(Engine::owner_of_cid("owner:0#"), Some(0));
         assert_eq!(Engine::owner_of_cid("sig_ENA_USDT_1"), None);
+    }
+
+    async fn ask(engine: &mut Engine, book: bool) -> serde_json::Value {
+        let (respond_to, response) = tokio::sync::oneshot::channel();
+        let cmd = if book { EngineCommand::BookCheck { respond_to } } else { EngineCommand::RecentVetoes { respond_to } };
+        engine.handle_api_command(cmd).await;
+        response.await.unwrap().unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_vetoes_command_lists_blocked_orders_newest_first() {
+        let routing = RoutingCache::new("/tmp/test_engine_vetoes.json", 0);
+        let mut engine = minimal_engine(vec![], routing);
+        engine.connector = Arc::new(crate::connector::paper::PaperTradeConnector::new(
+            HashMap::from([("USDT".to_string(), 1_000_000.0)])));
+        let mk = |i: usize| OrderRequest {
+            symbol: "XRPUSDT".into(), side: OrderSide::Buy, order_type: OrderTypeReq::Limit,
+            price: Some(0.97), quantity: 100.0, time_in_force: None,
+            client_order_id: Some(format!("owner:0#e{i}")), reduce_only: false,
+        };
+        engine.submit_orders((0..30).map(mk).collect()).await.unwrap();
+        let v = ask(&mut engine, false).await;
+        let n = v["count"].as_u64().unwrap();
+        assert!(n >= 10, "burst overflow must be recorded as vetoes, got {n}");
+        let first = &v["vetoes"][0];
+        assert_eq!(first["symbol"], "XRPUSDT");
+        assert!(first["reason"].as_str().unwrap().contains("orders"), "{first}");
+        assert!(first["ts_ms"].as_i64().unwrap() > 0);
+    }
+
+    #[tokio::test]
+    async fn test_veto_history_is_bounded() {
+        let routing = RoutingCache::new("/tmp/test_engine_veto_cap.json", 0);
+        let mut engine = minimal_engine(vec![], routing);
+        let req = OrderRequest {
+            symbol: "XRPUSDT".into(), side: OrderSide::Buy, order_type: OrderTypeReq::Market,
+            price: None, quantity: 1.0, time_in_force: None, client_order_id: None, reduce_only: false,
+        };
+        for _ in 0..(VETO_HISTORY + 25) { engine.record_veto(&req, None, "test"); }
+        assert_eq!(engine.vetoes.len(), VETO_HISTORY);
+        assert_eq!(ask(&mut engine, false).await["vetoes"][0]["source"], "api/signal");
+    }
+
+    #[tokio::test]
+    async fn test_book_check_ok_on_clean_book_and_flags_orphan() {
+        let routing = RoutingCache::new("/tmp/test_engine_bookcheck.json", 0);
+        let mut engine = minimal_engine(vec![], routing);
+        engine.order_books.insert("XRP-USDT".into(), OrderBook {
+            symbol: "XRP-USDT".into(), bids: vec![(0.94, 1.0)], asks: vec![(0.94, 1.0)], timestamp: 0 });
+        engine.connector = Arc::new(crate::connector::paper::PaperTradeConnector::new(
+            HashMap::from([("USDT".to_string(), 100_000.0)])));
+        let clean = ask(&mut engine, true).await;
+        assert_eq!(clean["ok"], true, "{clean}");
+        // the 27 Nov state: all cash spent on XRP no strategy owns
+        engine.connector = Arc::new(crate::connector::paper::PaperTradeConnector::new(
+            HashMap::from([("USDT".to_string(), 0.0), ("XRP".to_string(), 103_455.0)])));
+        let bad = ask(&mut engine, true).await;
+        assert_eq!(bad["ok"], false);
+        let msgs = bad["findings"].to_string();
+        assert!(msgs.contains("untracked") && msgs.contains("of equity"), "{msgs}");
+        assert_eq!(bad["assets"][0]["asset"], "XRP");
     }
 }

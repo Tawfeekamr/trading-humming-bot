@@ -170,6 +170,7 @@ class TelegramCommandHandler:
             "<b>System:</b> /status /price /logs /errors /readiness /ml_status\n"
             "<b>Overview:</b> /bots /pnl_all /trades /help\n"
             "<b>Capital:</b> /capital\n"
+            "<b>Safety:</b> /book_check /vetoes\n"
             "<b>Grid:</b> /grid_status\n"
             "<b>Trend:</b> /trend_status /trend_pnl /trend_history\n"
             "<b>Signal:</b> /signal_status /signal_pnl /signal_history "
@@ -294,6 +295,9 @@ class TelegramCommandHandler:
             "futures_status": self._cmd_futures_status,
             "futures_pnl": self._cmd_futures_pnl,
             "capital": self._cmd_capital,
+            # Safety checks (order-path hardening, 2026-11-28)
+            "book_check": self._cmd_book_check,
+            "vetoes": self._cmd_vetoes,
             # Signal engine control
             "signal_channels": self._cmd_signal_channels,
             "signal_history": self._cmd_signal_history,
@@ -1495,6 +1499,8 @@ class TelegramCommandHandler:
             "/errors — Recent errors and crashes\n"
             "/readiness — Production readiness score (0-100)\n"
             "/ml_status — ML cache/model/shadow readiness\n"
+            "/book_check — Check the account matches what strategies hold\n"
+            "/vetoes — Recent orders blocked by the safety checks\n"
             "•••\n"
             "<b>Grid:</b>\n"
             "/grid_status — Grid state, pending orders, uptime\n"
@@ -1843,6 +1849,67 @@ class TelegramCommandHandler:
                 lines.append("Deployed capital:")
                 for name, amt in sc.items():
                     lines.append(f"  {name}: ${float(amt):,.2f}")
+            update.message.reply_text("\n".join(lines), parse_mode="HTML")
+        except Exception as e:
+            update.message.reply_text(f"⚠️ Error: {e}")
+
+    def _rust_get(self, path: str, timeout: int = 8) -> dict:
+        import urllib.request
+        url = os.environ.get("RUST_ENGINE_URL", "http://localhost:3030") + path
+        with urllib.request.urlopen(urllib.request.Request(url), timeout=timeout) as resp:
+            return json.loads(resp.read().decode())
+
+    def _cmd_book_check(self, update, context):
+        """Run the engine's book reconciliation now: does the account hold what
+        the strategies think they hold, and is any one coin too large?"""
+        try:
+            logger.info("Telegram /book_check received")
+            d = self._rust_get("/api/v1/book_check")
+            ok = bool(d.get("ok"))
+            lines = [f"{'✅' if ok else '⚠️'} <b>Book check: {'OK' if ok else 'PROBLEMS FOUND'}</b>", "•••"]
+            for msg in d.get("findings") or []:
+                lines.append(f"• {msg}")
+            if not ok:
+                lines.append("•••")
+            lines.append(f"Equity: ${float(d.get('equity') or 0):,.2f} | "
+                         f"USDT: ${float(d.get('usdt') or 0):,.2f} | "
+                         f"Free: ${float(d.get('free_capital') or 0):,.2f}")
+            held = [a for a in d.get("assets") or []
+                    if float(a.get("held") or 0) or float(a.get("owned_by_strategies") or 0)]
+            if held:
+                lines.append("Coins (held / owned by strategies):")
+                for a in held:
+                    lines.append(f"  {a['asset']}: {float(a['held']):,.4f} / "
+                                 f"{float(a['owned_by_strategies']):,.4f} "
+                                 f"(${float(a.get('value_usdt') or 0):,.2f})")
+            else:
+                lines.append("No coins held — book is all cash.")
+            mins = d.get("last_hourly_check_mins_ago")
+            if mins is not None:
+                lines.append(f"Last automatic check: {mins} min ago")
+            update.message.reply_text("\n".join(lines), parse_mode="HTML")
+        except Exception as e:
+            update.message.reply_text(f"⚠️ Error: {e}")
+
+    def _cmd_vetoes(self, update, context):
+        """Most recent orders the engine blocked before they reached the exchange."""
+        try:
+            logger.info("Telegram /vetoes received")
+            d = self._rust_get("/api/v1/vetoes")
+            items = (d.get("vetoes") or [])[:10]
+            if not items:
+                update.message.reply_text("✅ <b>No blocked orders</b> since the engine started.",
+                                          parse_mode="HTML")
+                return
+            lines = [f"🛑 <b>Blocked orders</b> (latest {len(items)} of {d.get('count', len(items))})", "•••"]
+            for v in items:
+                when = datetime.fromtimestamp(int(v.get("ts_ms") or 0) / 1000, tz=timezone.utc).strftime("%m-%d %H:%M:%S")
+                price = v.get("price")
+                px = f" @ {float(price):g}" if price else ""
+                reason = html.escape(str(v.get("reason", "")))[:160]
+                lines.append(f"{when} UTC · {html.escape(str(v.get('source', '')))}\n"
+                             f"  {v.get('side', '')} {float(v.get('quantity') or 0):g} {v.get('symbol', '')}{px}\n"
+                             f"  ↳ {reason}")
             update.message.reply_text("\n".join(lines), parse_mode="HTML")
         except Exception as e:
             update.message.reply_text(f"⚠️ Error: {e}")

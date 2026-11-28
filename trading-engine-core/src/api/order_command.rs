@@ -19,6 +19,14 @@ pub enum EngineCommand {
         symbol: String,
         respond_to: oneshot::Sender<EngineCommandResult<Vec<CancelResult>>>,
     },
+    /// Read-only: reconcile the book against strategy holdings now.
+    BookCheck {
+        respond_to: oneshot::Sender<EngineCommandResult<serde_json::Value>>,
+    },
+    /// Read-only: the most recent orders blocked before reaching the exchange.
+    RecentVetoes {
+        respond_to: oneshot::Sender<EngineCommandResult<serde_json::Value>>,
+    },
 }
 
 #[derive(Clone)]
@@ -52,6 +60,24 @@ impl EngineCommandBus {
         response
             .await
             .map_err(|_| "engine dropped cancel response".to_string())?
+    }
+
+    pub async fn book_check(&self) -> EngineCommandResult<serde_json::Value> {
+        let (respond_to, response) = oneshot::channel();
+        self.tx
+            .send(EngineCommand::BookCheck { respond_to })
+            .await
+            .map_err(|_| "engine command queue closed".to_string())?;
+        response.await.map_err(|_| "engine dropped book-check response".to_string())?
+    }
+
+    pub async fn recent_vetoes(&self) -> EngineCommandResult<serde_json::Value> {
+        let (respond_to, response) = oneshot::channel();
+        self.tx
+            .send(EngineCommand::RecentVetoes { respond_to })
+            .await
+            .map_err(|_| "engine command queue closed".to_string())?;
+        response.await.map_err(|_| "engine dropped vetoes response".to_string())?
     }
 
     pub async fn cancel_all_orders(&self, symbol: String) -> EngineCommandResult<Vec<CancelResult>> {

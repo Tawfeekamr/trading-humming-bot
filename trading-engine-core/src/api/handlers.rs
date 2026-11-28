@@ -69,6 +69,22 @@ pub async fn place_order(
     }
 }
 
+// ── Read-only safety checks (Telegram /book_check, /vetoes) ─────────
+
+pub async fn book_check(State(state): State<AppState>) -> impl IntoResponse {
+    match state.order_commands.book_check().await {
+        Ok(v) => Ok(Json(v)),
+        Err(e) => Err((axum::http::StatusCode::BAD_GATEWAY, Json(serde_json::json!({ "error": e })))),
+    }
+}
+
+pub async fn recent_vetoes(State(state): State<AppState>) -> impl IntoResponse {
+    match state.order_commands.recent_vetoes().await {
+        Ok(v) => Ok(Json(v)),
+        Err(e) => Err((axum::http::StatusCode::BAD_GATEWAY, Json(serde_json::json!({ "error": e })))),
+    }
+}
+
 // ── Order cancellation ───────────────────────────────────────────────
 
 pub async fn cancel_order(

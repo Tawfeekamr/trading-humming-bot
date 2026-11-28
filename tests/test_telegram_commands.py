@@ -661,3 +661,62 @@ class TestTradesPagination:
         monkeypatch.chdir(tmp_path)
         out = self._run(tmp_path, "/trades")
         assert "No trades yet" in out, out
+
+
+# ── Safety commands (order-path hardening, 2026-11-28) ─────────────────────
+
+class TestSafetyCommands:
+    def _run(self, tmp_path, monkeypatch, cmd, payload):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("urllib.request.urlopen", _mock_urlopen(payload))
+        u = _mock_update()
+        getattr(_handler(tmp_path), cmd)(u, None)
+        return _replied(u)
+
+    def test_book_check_ok(self, tmp_path, monkeypatch):
+        text = self._run(tmp_path, monkeypatch, "_cmd_book_check", {
+            "ok": True, "findings": [], "equity": 100000, "usdt": 100000, "free_capital": 80000,
+            "assets": [{"asset": "XRP", "held": 0, "owned_by_strategies": 0, "value_usdt": 0}],
+            "last_hourly_check_mins_ago": 12})
+        assert "Book check: OK" in text and "all cash" in text and "12 min ago" in text
+
+    def test_book_check_problems_listed(self, tmp_path, monkeypatch):
+        text = self._run(tmp_path, monkeypatch, "_cmd_book_check", {
+            "ok": False,
+            "findings": ["XRP is 100% of equity ($97250 of $97250); limit 50%",
+                         "XRP: book holds 103455.0000 but strategies own 0.0000 — $97248 untracked (orphaned position?)"],
+            "equity": 97250, "usdt": 0, "free_capital": 0,
+            "assets": [{"asset": "XRP", "held": 103455, "owned_by_strategies": 0, "value_usdt": 97248}]})
+        assert "PROBLEMS FOUND" in text and "untracked" in text and "XRP: 103,455.0000 / 0.0000" in text
+
+    def test_vetoes_empty(self, tmp_path, monkeypatch):
+        text = self._run(tmp_path, monkeypatch, "_cmd_vetoes", {"count": 0, "vetoes": []})
+        assert "No blocked orders" in text
+
+    def test_vetoes_listed_and_escaped(self, tmp_path, monkeypatch):
+        text = self._run(tmp_path, monkeypatch, "_cmd_vetoes", {"count": 2, "vetoes": [
+            {"ts_ms": 1795860000000, "source": "trend XRP-USDT", "symbol": "XRPUSDT", "side": "Buy",
+             "quantity": 3890.88, "price": 0.96855, "reason": "more than 20 new orders in 1 s on XRPUSDT"},
+            {"ts_ms": 1795859990000, "source": "api/signal", "symbol": "ENAUSDT", "side": "Buy",
+             "quantity": 100, "price": None, "reason": "exposure/cash limit: buy <$50>"}]})
+        assert "Blocked orders" in text and "trend XRP-USDT" in text and "20 new orders" in text
+        assert "&lt;$50&gt;" in text and "<$50>" not in text
+
+    def test_api_error_is_reported(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        def boom(*a, **k):
+            raise OSError("down")
+        monkeypatch.setattr("urllib.request.urlopen", boom)
+        for cmd in ("_cmd_book_check", "_cmd_vetoes"):
+            u = _mock_update()
+            getattr(_handler(tmp_path), cmd)(u, None)
+            assert "Error" in _replied(u)
+
+    def test_commands_registered_and_advertised(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        h = _handler(tmp_path)
+        assert "book_check" in h._commands and "vetoes" in h._commands
+        assert "/book_check" in h._startup_message() and "/vetoes" in h._startup_message()
+        u = _mock_update()
+        h._cmd_help(u, None)
+        assert "/book_check" in _replied(u) and "/vetoes" in _replied(u)
