@@ -107,6 +107,8 @@ Seven problems were fixed on 26 November 2026, after the evaluation was frozen: 
 5. **Monthly retraining had never succeeded.** Every scheduled run from June 2026 failed; from July onwards the workflow called a module that had been removed. It now retrains each model, scores the new and the current model on the most recent 30 days that the new model has not seen, and replaces the live model only if the new one is at least as accurate.
 6. **Drift alerts could never fire**, because the drift report was never evaluated. The pusher now checks drift every hour and sends an alert when a pair's drift status changes. A latent defect that could send a second full-inventory sell during a forced exit was also fixed.
 
+A further defect appeared on 27 November. While one trend entry waited for a delayed paper fill, the engine placed 143 more; 27 filled and moved the whole paper account into XRP. It was fixed on 28 November and the $3,033 loss recorded (Appendix C.5).
+
 Two points remain. Routing is global while the regime signal is per pair, so if routing were made live, one asset's policy would gate all pairs in the same way. And because every push to the main branch is deployed automatically, a configuration change is an automated path by which routing could reach live mode. Routing is therefore kept in shadow mode and must not be enabled on this codebase.
 
 ## Recommendations for Deployment

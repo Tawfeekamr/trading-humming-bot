@@ -53,3 +53,24 @@ Server: AWS EC2 t3.small (2 vCPU, 2 GB memory, 20 GB disk), Tokyo region, Amazon
 | Deployment pipeline (last 200 runs) | 168 passed, 23 failed (deployment blocked), 9 cancelled |
 | Other pipelines | Replay backtest (Python and Rust), test coverage, monthly model retraining with a 30-day hold-out check (repaired 26 November 2026; first run 1 December 2026) |
 | Commits | 1,069 (May 459, June 324, July 144, August 113, September 7, October 13, November 9) |
+
+**C.5 Duplicate trend entries on 27 November 2026**
+
+This defect occurred in the live paper-trading system after the evaluation was frozen. It does not affect any reported result.
+
+*What happened.* At 14:02 UTC on 27 November 2026, the trend engine closed an XRP position at its trailing stop. In the next five seconds it placed 144 identical buy orders for XRP. The first 27 filled and spent the whole simulated cash balance of about $100,000, buying 103,455 XRP at $0.96855. The remaining 117 were refused by the cash check added on 26 November (Section 5.4.1, item 1).
+
+*Why.* Three things combined:
+
+1. The trend engine checked only whether it held a position before entering. It did not check whether an entry order was already waiting to fill.
+2. The paper exchange deliberately delays fills on a coin for five seconds after any fill on that coin, to stop instant entry-and-exit loops. The entry placed just after the exit therefore waited, and every price update in those five seconds placed another one.
+3. The capital check counted cash already spent and open positions, but not orders still waiting to fill, so each new order was granted in full.
+
+When the fills arrived, the first opened the position and the next 26 were read as exits. The engine therefore recorded itself as flat while the account held the XRP. No engine would have sold it, every strategy was left without cash, and the loss did not appear in the trade log.
+
+*How it was found.* A routine check on 28 November showed a cash balance of zero and an account held almost entirely in one coin. The trade log alone did not show the problem. Capital actually deployed did, which is the measure Section 5.5 recommends reporting.
+
+*Fix.* The trend engine now allows one waiting entry at a time and cancels it if it is still unfilled after 60 seconds. Each entry order carries its own identifier, so fills are matched to entries by that identifier and an exit fill can no longer open or close the wrong position. A waiting entry now counts towards the trend engine's capital budget. Five new tests replay the incident: without the fix the main test places 144 entries, and with it, one. The fix was deployed on 28 November 2026 through the normal tested pipeline.
+
+*Recording the loss.* Restarting the engine resets the simulated account, so the position was valued at the market price before the fix was deployed: a mid price of $0.94065, less 8 basis points of slippage and the 5 basis-point fee. The loss of $3,032.92, including $68.66 in fees, was recorded as one trade. A live sell was not used, because on the unfixed engine it would have freed the cash and repeated the same burst. A separate $76.01 trend loss from 26 November was removed from the log, because it recorded the sale of XRP that the account no longer held after the 26 November reset.
+
